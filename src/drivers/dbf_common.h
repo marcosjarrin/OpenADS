@@ -69,4 +69,19 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
 bool record_is_deleted(const std::uint8_t* record_buf,
                        std::size_t record_size) noexcept;
 
+std::vector<std::uint8_t> make_empty_record(std::uint16_t record_length);
+
+util::Result<void> encode_field_string (const DbfField& f,
+                                        std::uint8_t* rec, std::size_t rec_size,
+                                        const std::string& value);
+util::Result<void> encode_field_double (const DbfField& f,
+                                        std::uint8_t* rec, std::size_t rec_size,
+                                        double value);
+util::Result<void> encode_field_logical(const DbfField& f,
+                                        std::uint8_t* rec, std::size_t rec_size,
+                                        bool value);
+
+void set_record_deleted(std::uint8_t* rec, std::size_t rec_size,
+                        bool deleted) noexcept;
+
 } // namespace openads::drivers

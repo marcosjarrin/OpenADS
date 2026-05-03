@@ -170,4 +170,62 @@ bool record_is_deleted(const std::uint8_t* record_buf,
     return record_buf[0] == '*';
 }
 
+std::vector<std::uint8_t> make_empty_record(std::uint16_t record_length) {
+    return std::vector<std::uint8_t>(record_length, ' ');
+}
+
+util::Result<void> encode_field_string(const DbfField& f,
+                                       std::uint8_t* rec, std::size_t rec_size,
+                                       const std::string& value) {
+    if (static_cast<std::size_t>(f.record_offset) +
+        static_cast<std::size_t>(f.length) > rec_size) {
+        return util::Error{5000, 0, "field range past record buffer", ""};
+    }
+    std::uint8_t* dst = rec + f.record_offset;
+    std::size_t n = std::min<std::size_t>(value.size(), f.length);
+    std::memcpy(dst, value.data(), n);
+    for (std::size_t i = n; i < f.length; ++i) dst[i] = ' ';
+    return {};
+}
+
+util::Result<void> encode_field_double(const DbfField& f,
+                                       std::uint8_t* rec, std::size_t rec_size,
+                                       double value) {
+    if (static_cast<std::size_t>(f.record_offset) +
+        static_cast<std::size_t>(f.length) > rec_size) {
+        return util::Error{5000, 0, "field range past record buffer", ""};
+    }
+    char tmp[64];
+    int written = std::snprintf(tmp, sizeof(tmp), "%*.*f",
+                                static_cast<int>(f.length),
+                                static_cast<int>(f.decimals),
+                                value);
+    if (written < 0) {
+        return util::Error{5000, 0, "snprintf failed encoding numeric", ""};
+    }
+    std::size_t n = static_cast<std::size_t>(written);
+    if (n > f.length) n = f.length;
+    std::uint8_t* dst = rec + f.record_offset;
+    std::memcpy(dst, tmp, n);
+    for (std::size_t i = n; i < f.length; ++i) dst[i] = ' ';
+    return {};
+}
+
+util::Result<void> encode_field_logical(const DbfField& f,
+                                        std::uint8_t* rec, std::size_t rec_size,
+                                        bool value) {
+    if (static_cast<std::size_t>(f.record_offset) +
+        static_cast<std::size_t>(f.length) > rec_size) {
+        return util::Error{5000, 0, "field range past record buffer", ""};
+    }
+    rec[f.record_offset] = value ? 'T' : 'F';
+    return {};
+}
+
+void set_record_deleted(std::uint8_t* rec, std::size_t rec_size,
+                        bool deleted) noexcept {
+    if (rec_size == 0) return;
+    rec[0] = deleted ? '*' : ' ';
+}
+
 } // namespace openads::drivers

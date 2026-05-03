@@ -10,8 +10,10 @@ add_library(openads_core STATIC
     session/connection.cpp
     engine/table.cpp
     engine/cursor.cpp
+    engine/lock_mgr.cpp
     drivers/dbf_common.cpp
     drivers/cdx/cdx_driver.cpp
+    drivers/ntx/ntx_driver.cpp
 )
 
 if(WIN32)

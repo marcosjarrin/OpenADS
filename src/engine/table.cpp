@@ -18,7 +18,7 @@ util::Result<Table> Table::open(const std::string& path, TableType type) {
             return util::Error{5004, 0,
                                "table type not yet supported in M1", path};
     }
-    if (auto r = drv->open(path); !r) return r.error();
+    if (auto r = drv->open(path, drivers::DriverOpenMode::ReadOnly); !r) return r.error();
     return Table{std::move(drv)};
 }
 

@@ -12,11 +12,16 @@ add_executable(openads_unit_tests
     unit/dbf_header_test.cpp
     unit/dbf_field_test.cpp
     unit/dbf_record_test.cpp
+    unit/dbf_write_test.cpp
+    unit/ntx_driver_test.cpp
+    unit/lock_mgr_test.cpp
     unit/engine_table_test.cpp
+    unit/engine_table_write_test.cpp
     unit/engine_cursor_test.cpp
     unit/session_handle_registry_test.cpp
     unit/session_connection_test.cpp
     unit/abi_smoke_test.cpp
+    unit/abi_write_smoke_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
