@@ -288,4 +288,120 @@ UNSIGNED32 AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
     return openads::AE_SUCCESS;
 }
 
+UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->append_record();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->flush();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->mark_deleted();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->recall_deleted();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    Table* t = get_table(hTable);
+    if (!t || pbDeleted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbDeleted = t->is_deleted() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        UNSIGNED8* pucValue, UNSIGNED32 ulLen) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto name = openads::abi::to_internal(pucField, 0);
+    auto idx  = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    std::string val(reinterpret_cast<const char*>(pucValue), ulLen);
+    auto r = t->set_field(static_cast<std::uint16_t>(idx), val);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
+                         UNSIGNED16 bValue) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto name = openads::abi::to_internal(pucField, 0);
+    auto idx  = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    auto r = t->set_field(static_cast<std::uint16_t>(idx), bValue != 0);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        double dValue) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto name = openads::abi::to_internal(pucField, 0);
+    auto idx  = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    auto r = t->set_field(static_cast<std::uint16_t>(idx), dValue);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->lock_record_excl(ulRecord);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->unlock_record(ulRecord);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->lock_table_excl();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->unlock_table();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->flush();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 } // extern "C"

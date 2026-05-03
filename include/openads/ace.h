@@ -68,6 +68,26 @@ UNSIGNED32 AdsGetLastError  (UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
 UNSIGNED32 AdsGetVersion    (UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
                               UNSIGNED32* pulLetter, UNSIGNED32* pulDesc);
 
+UNSIGNED32 AdsAppendRecord  (ADSHANDLE hTable);
+UNSIGNED32 AdsWriteRecord   (ADSHANDLE hTable);
+UNSIGNED32 AdsDeleteRecord  (ADSHANDLE hTable);
+UNSIGNED32 AdsRecallRecord  (ADSHANDLE hTable);
+UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted);
+
+UNSIGNED32 AdsSetString     (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucValue, UNSIGNED32 ulLen);
+UNSIGNED32 AdsSetLogical    (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED16 bValue);
+UNSIGNED32 AdsSetDouble     (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              double dValue);
+
+UNSIGNED32 AdsLockRecord    (ADSHANDLE hTable, UNSIGNED32 ulRecord);
+UNSIGNED32 AdsUnlockRecord  (ADSHANDLE hTable, UNSIGNED32 ulRecord);
+UNSIGNED32 AdsLockTable     (ADSHANDLE hTable);
+UNSIGNED32 AdsUnlockTable   (ADSHANDLE hTable);
+
+UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable);
+
 #define ADS_FIELD_TYPE_CHAR       1
 #define ADS_FIELD_TYPE_NUMERIC    2
 #define ADS_FIELD_TYPE_LOGICAL    3
