@@ -116,6 +116,19 @@ private:
     util::Result<void> load_record_(std::uint32_t recno);
     util::Result<void> writeback_record_();
 
+    // Sync the active index with the current record's key. Called
+    // after every record mutation (set_field / append_record). For
+    // appends `prev_key` is empty so erase is skipped; for modifies
+    // it carries the index key as it was just before the write so
+    // the old entry can be removed before the new one is inserted.
+    util::Result<void> sync_active_index_(const std::string& prev_key);
+
+    // Compute the index key bytes for the current `record_buf_`
+    // given an index expression. Currently supports bare field names
+    // only (e.g., "NAME"); compound expressions land later.
+    std::string compute_index_key_(const std::string& expr,
+                                   std::uint16_t       key_len) const;
+
     bool key_in_top_scope_   (const std::string& key) const;
     bool key_in_bottom_scope_(const std::string& key) const;
 

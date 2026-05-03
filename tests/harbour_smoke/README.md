@@ -16,7 +16,34 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
-## M8.7 (partial) — Write path: dbAppend + FIELD-> := value
+## M8.8 — Active index auto-sync on dbAppend / FIELD-> := value
+
+The active CDX is now updated on every record mutation, so dbSeek
+finds appended rows after reopen:
+
+```
+Walk in NAME order: ALPHA, BETA, DELTA, GAMMA   (DELTA visible!)
+Reopen & dbSeek 'DELTA': Found=T RecNo=4 NAME=[DELTA] AGE=99
+                                       ACTIVE=F BORN=20260101
+```
+
+Implementation:
+
+- `Table::compute_index_key_(expr, key_len)` evaluates the active
+  index's key expression against the current `record_buf_`. Bare
+  field-name expressions (`NAME`) are supported now; compound
+  expressions (`UPPER(NAME)`, concatenations, ...) land later.
+- `Table::sync_active_index_(prev_key)` is called after every
+  `set_field` overload writes back. It computes the new key, erases
+  the prior `(recno, prev_key)` entry if it differs, and inserts
+  `(recno, new_key)`. For dbAppend the previous record is empty so
+  the prior key is all-spaces; the helper inserts the real key on
+  the first set_field call that touches the indexed column.
+- `Table::flush()` now flushes both the driver and the active
+  index, so AdsWriteRecord on a row whose key changed persists the
+  CDX update before the call returns.
+
+## M8.7 — Write path: dbAppend + FIELD-> := value
 
 The smoke now exercises `dbAppend()` plus per-field assignment, then
 closes and reopens to verify durability:
@@ -46,15 +73,11 @@ disk. ABI-side fixes:
   `YYYYMMDD` ASCII and writes it through `Table::set_field`. The
   `julian_to_ymd` helper is the inverse of M8.5's `to_julian`.
 
-### Known gap (lands as M8.8)
+### Known gap (closed by M8.8 below)
 
-After dbAppend, the active CDX is **not** updated with the new key.
-That means dbSeek for the appended row's key fails, and the index
-walk (`dbGoTop` + `dbSkip`) only visits the original three records.
-Real ACE auto-syncs the active index on every record mutation. M8.8
-will wire `Table::set_field` / `Table::append_record` into the
-active `Order` so an `insert(recno, key)` runs after the record
-write, mirroring SAP's behavior.
+After dbAppend at the M8.7 layer, the active CDX was not updated.
+M8.8 wires `Table::set_field` / `Table::flush()` into the active
+`Order` so an `insert(recno, key)` runs after every record write.
 
 ## M8.6 — Index seek through OpenADS' CDX
 

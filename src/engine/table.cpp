@@ -67,6 +67,43 @@ util::Result<void> Table::load_record_(std::uint32_t recno) {
     return {};
 }
 
+std::string Table::compute_index_key_(const std::string& expr,
+                                      std::uint16_t       key_len) const {
+    // Bare field-name expression: use the column's bytes verbatim,
+    // padded with spaces to key_len. Compound expressions (UPPER(),
+    // STR(), concatenation, ...) land in a future milestone.
+    auto idx = field_index(expr);
+    if (idx < 0) return std::string(key_len, ' ');
+    const auto& f = driver_->fields().at(static_cast<std::size_t>(idx));
+    if (record_buf_.size() < f.record_offset + f.length) {
+        return std::string(key_len, ' ');
+    }
+    std::string key(reinterpret_cast<const char*>(
+                        record_buf_.data() + f.record_offset),
+                    f.length);
+    if (key.size() < key_len) key.append(key_len - key.size(), ' ');
+    if (key.size() > key_len) key.resize(key_len);
+    return key;
+}
+
+util::Result<void> Table::sync_active_index_(const std::string& prev_key) {
+    if (!order_ || !order_->index()) return {};
+    auto* idx = order_->index();
+    std::string new_key = compute_index_key_(idx->expression(),
+                                             idx->key_length());
+    if (!prev_key.empty() && prev_key != new_key) {
+        // Best-effort erase: index may be the just-inserted one for
+        // an APPEND; ignore not-found.
+        (void)idx->erase(recno_, prev_key);
+    }
+    if (!new_key.empty() && new_key != prev_key) {
+        if (auto e = idx->insert(recno_, new_key); !e) {
+            return e.error();
+        }
+    }
+    return {};
+}
+
 util::Result<void> Table::writeback_record_() {
     if (state_ != State::Positioned) {
         return util::Error{5000, 0, "no record positioned", ""};
@@ -261,6 +298,12 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     }
     const auto& f = driver_->fields().at(idx);
 
+    std::string prev_key;
+    if (order_ && order_->index()) {
+        prev_key = compute_index_key_(order_->index()->expression(),
+                                      order_->index()->key_length());
+    }
+
     // Memo fields write to the memo store, then store the resulting
     // block number as a right-aligned ASCII string in the record.
     if (f.type == drivers::DbfFieldType::Memo) {
@@ -277,13 +320,15 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
             return util::Error{5000, 0, "memo block number overflows field", ""};
         }
         std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
-        return writeback_record_();
+        if (auto wb = writeback_record_(); !wb) return wb.error();
+        return sync_active_index_(prev_key);
     }
 
     auto r = drivers::encode_field_string(f, record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
-    return writeback_record_();
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_active_index_(prev_key);
 }
 
 util::Result<void> Table::set_field(std::uint16_t idx, double v) {
@@ -293,11 +338,17 @@ util::Result<void> Table::set_field(std::uint16_t idx, double v) {
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
+    std::string prev_key;
+    if (order_ && order_->index()) {
+        prev_key = compute_index_key_(order_->index()->expression(),
+                                      order_->index()->key_length());
+    }
     auto r = drivers::encode_field_double(driver_->fields().at(idx),
                                           record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
-    return writeback_record_();
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_active_index_(prev_key);
 }
 
 util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
@@ -307,11 +358,17 @@ util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
+    std::string prev_key;
+    if (order_ && order_->index()) {
+        prev_key = compute_index_key_(order_->index()->expression(),
+                                      order_->index()->key_length());
+    }
     auto r = drivers::encode_field_logical(driver_->fields().at(idx),
                                            record_buf_.data(),
                                            record_buf_.size(), v);
     if (!r) return r.error();
-    return writeback_record_();
+    if (auto wb = writeback_record_(); !wb) return wb.error();
+    return sync_active_index_(prev_key);
 }
 
 util::Result<void> Table::mark_deleted() {
@@ -336,7 +393,11 @@ bool Table::is_deleted() const noexcept {
 }
 
 util::Result<void> Table::flush() {
-    return driver_->flush();
+    if (auto r = driver_->flush(); !r) return r.error();
+    if (order_ && order_->index()) {
+        if (auto r = order_->index()->flush(); !r) return r.error();
+    }
+    return {};
 }
 
 TableTypeForLock Table::to_lock_type_() const noexcept {
