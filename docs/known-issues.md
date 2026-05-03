@@ -6,16 +6,18 @@ round-trip *their own* output but cannot interoperate with `.cdx` /
 `.ntx` files produced by other tools, which contradicts the
 README "Validation" goal of byte-level compatibility.
 
-## Status — M3.6 partial (commits c1b8cf8, efe8d22, bb75c22)
+## Status — M3.6 / M3.7 partial
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | CDX leaf entry bit width hardcoded | **Fixed** in `c1b8cf8`. Encoder now uses Harbour-equivalent `compute_layout` (bBits derived from key length). |
-| 6 | AdsOpenIndex lifecycle race | **Fixed** in `efe8d22`. Prior bindings are erased before `set_order` installs a new one. |
-| 7 | AdsCreateIndex indexes deleted records | **Fixed** in `efe8d22`. Loop skips `is_deleted()`. |
-| 12 | Descending / unique flag round-trip untested | **Fixed** in `bb75c22`. Two new tests assert flag persistence. |
+| 1 | CDX leaf entry bit width hardcoded | **Fixed** (`c1b8cf8`). Encoder uses Harbour-equivalent `compute_layout` (bBits derived from key length). |
+| 3 | CDX branch descent wrong endian / offset | **Fixed** (`7f3041f`). `seek_first` now reads child as BE per `hb_cdxPageGetKeyPage`. |
+| 5 | NTX `insert` returns AE_FUNCTION_NOT_AVAILABLE on second page | **Fixed for single-level** (`6ab97c4`). Root-leaf overflow now creates a branch root with two leaves. Multi-level recursion still pending. |
+| 6 | AdsOpenIndex lifecycle race | **Fixed** (`efe8d22`). |
+| 7 | AdsCreateIndex indexes deleted records | **Fixed** (`efe8d22`). |
+| 12 | Descending / unique flag round-trip untested | **Fixed** (`bb75c22`). |
 
-Items 2, 3, 4, 5, 8, 9, 10, 11, 13 remain open and are tracked below.
+Items 2 (CDX compound structure tag), 4 (NTX multi-level `next`/`prev` rework that visits internal-node keys), 8, 9, 10, 11, 13 remain open and are tracked below.
 
 ## Critical (compat-breaking)
 
