@@ -990,9 +990,9 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 - **135 doctest cases / 1820 assertions passing** on Windows / MSVC 2022 Release.
 - **~80 ACE entry points wired** (read / write / lock / index / scope / memo / encryption / autoinc / transaction / savepoint / data dictionary / SQL).
 - **Persistent WAL with crash recovery** is byte-identical for OpenADS-produced files.
-- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`, `m8.1-partial`, `m8.2-done`.
+- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`, `m8.1-partial`, `m8.2-done`, `m8.3-done`.
 - **Drop-in DLL:** `ace64.dll` (Win x64) and `ace32.dll` (Win x86) build from the `openads_ace` SHARED target, exporting **226 `Ads*` entry points** plus 6 legacy MSVC2013-era CRT shims (`_dclass`, `_dsign`, `_wfsopen`, `_getch`, `_kbhit`, `_eof`) referenced by Harbour's prebuilt `msvc64` libs. 80 of the `Ads*` are real implementations (M0–M7); the rest are M8.1 stubs that return `AE_FUNCTION_NOT_AVAILABLE` (5004).
-- **End-to-end Harbour validation (M8.2):** `tests/harbour_smoke/smoke.prg` compiles, links, and **runs** against `rddads.lib` + OpenADS' `ace64.dll`. `AdsVersion()` resolves through the rddads wrapper to OpenADS' `AdsGetVersion` and prints OpenADS' version string. See `tests/harbour_smoke/README.md`.
+- **End-to-end Harbour validation (M8.3):** `tests/harbour_smoke/smoke.prg` opens a real DBF through `USE data VIA "ADSCDX"`, walks its records, and prints each row's data — every call lands on OpenADS' `ace64.dll`. See `tests/harbour_smoke/README.md` for the captured output and the M8.3 fix list.
 
 ### Working on a milestone
 

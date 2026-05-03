@@ -65,8 +65,16 @@ openads::engine::TableType map_type(UNSIGNED16 t) {
 
 UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
     using openads::drivers::DbfFieldType;
+    // The numeric values must match whatever ACE field-type constants
+    // the prebuilt rddads.lib was compiled against — its adsOpen
+    // switch routes each value to a Clipper field type. Empirical
+    // probe (M8.3) showed:
+    //   1  -> rddads' ADS_LOGICAL  (Clipper 'L')
+    //   20 -> rddads' ADS_CISTRING (Clipper 'C', maps to HB_FT_STRING)
+    // Until OpenADS ships its own ace.h, returning 20 for Character
+    // keeps DBF C-fields readable end-to-end through Harbour.
     switch (t) {
-        case DbfFieldType::Character: return ADS_FIELD_TYPE_CHAR;
+        case DbfFieldType::Character: return 20;
         case DbfFieldType::Numeric:
         case DbfFieldType::Float:     return ADS_FIELD_TYPE_NUMERIC;
         case DbfFieldType::Logical:   return ADS_FIELD_TYPE_LOGICAL;
@@ -88,6 +96,31 @@ find_field(Table* tbl, const std::string& name) {
         if (f.name == name) return &f;
     }
     return nullptr;
+}
+
+// Resolve a pucField argument to a 0-based field index. Real ACE.h
+// defines `ADSFIELD(n)` as `((UNSIGNED8*)(UNSIGNED_PTR)(n))`, so
+// callers compiled against that header pass small integers cast to
+// pointers. Anything below 0x10000 cannot be a valid string address in
+// any real process layout, so we treat it as a 1-based field index.
+// Otherwise pucField is a NUL-terminated field name.
+bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
+    if (tbl == nullptr || out == nullptr) return false;
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
+    if (p != 0 && p < 0x10000u) {
+        std::uint16_t one_based = static_cast<std::uint16_t>(p);
+        if (one_based >= 1 && one_based <= tbl->field_count()) {
+            *out = static_cast<std::uint16_t>(one_based - 1);
+            return true;
+        }
+        return false;
+    }
+    if (pucField == nullptr) return false;
+    auto name = openads::abi::to_internal(pucField, 0);
+    for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
+        if (tbl->field_descriptor(i).name == name) { *out = i; return true; }
+    }
+    return false;
 }
 
 Table* get_table(ADSHANDLE h) {
@@ -218,10 +251,11 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16* pusType) {
     Table* t = get_table(hTable);
     if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    auto name = openads::abi::to_internal(pucField, 0);
-    const auto* f = find_field(t, name);
-    if (f == nullptr) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
-    *pusType = map_field_type(f->type);
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusType = map_field_type(t->field_descriptor(idx).type);
     return ok();
 }
 
@@ -229,10 +263,11 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                              UNSIGNED32* pulLen) {
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    auto name = openads::abi::to_internal(pucField, 0);
-    const auto* f = find_field(t, name);
-    if (f == nullptr) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
-    *pulLen = f->length;
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pulLen = t->field_descriptor(idx).length;
     return ok();
 }
 
@@ -257,13 +292,10 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
                        UNSIGNED16 /*usOption*/) {
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    auto name = openads::abi::to_internal(pucField, 0);
     std::uint16_t idx = 0;
-    bool found = false;
-    for (std::uint16_t i = 0; i < t->field_count(); ++i) {
-        if (t->field_descriptor(i).name == name) { idx = i; found = true; break; }
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
-    if (!found) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     UNSIGNED16 cap = static_cast<UNSIGNED16>(

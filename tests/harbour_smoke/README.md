@@ -16,6 +16,57 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.3 — DBF walk via Harbour rddads
+
+The smoke now stages a 88-byte DBF (`make_data.ps1`), opens it through
+the standard Clipper RDD surface (`USE data VIA "ADSCDX"`), and walks
+its records:
+
+```
+OpenADS smoke test (M8.3)
+ACE DLL reports: 0.0a
+AdsConnect handle: .T.
+Opening data.dbf VIA ADSCDX...
+Field count:          1
+Field 1 name : NAME
+Field 1 type : CICHARACTER len=         10
+Record count:          2
+Walking records:
+  rec          1 name=[ ALPHA ]
+  rec          2 name=[ BETA ]
+Done.
+```
+
+This proves the full chain: Harbour PP → rddads.lib's ADSCDX RDD →
+OpenADS' `AdsConnect` / `AdsOpenTable` / `AdsAtEOF` /
+`AdsGetRecordNum` / `AdsGetField` / `AdsSkip` / `AdsCloseTable` /
+`AdsDisconnect`. Records stream back from the OpenADS engine into a
+running Harbour process exactly as they would from SAP's `ace64.dll`.
+
+### Fixes landed in M8.3
+
+- `Connection::open_table` now auto-appends `.dbf` when the caller
+  passes a bare alias (rddads' convention; mirrors Clipper DBFCDX).
+- `AdsGetField` / `AdsGetFieldType` / `AdsGetFieldLength` now resolve
+  `pucField` either as a NUL-terminated field name *or* — courtesy of
+  ACE's `ADSFIELD(n)` macro — as a small integer field index cast to
+  a pointer. A new `resolve_field_index` helper in `ace_exports.cpp`
+  handles both.
+- `AdsConnect(server, &hConnect)` is now a real wrapper around
+  `AdsConnect60` instead of a stub returning 5004; rddads'
+  `HB_FUNC(ADSCONNECT)` calls it for `AdsConnect(".")` from Harbour.
+- `AdsGetFieldRaw` forwards to `AdsGetField` (used by rddads when
+  OEM translation is on; charset translation is a no-op for ASCII
+  fixtures).
+- `AdsIsFound` / `AdsGetLogical` are no longer stubs returning 5004 —
+  the former reports 'not found' (we don't yet track last-seek-hit
+  state), the latter reads the underlying field through `AdsGetField`
+  and decodes 'T' / 'Y' as true.
+- `map_field_type(Character)` now returns **20** (`ADS_CISTRING` in
+  rddads' compiled-in `ace.h`) instead of 1; an empirical probe
+  showed value 1 routes to `ADS_LOGICAL`. Documenting OpenADS'
+  authoritative `ace.h` constant set is M8.4.
+
 ## End-to-end validation result (M8.2)
 
 `smoke.exe` builds **and runs**. Output:

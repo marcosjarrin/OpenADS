@@ -185,15 +185,49 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_MEMO_TEXT      1
 #define ADS_MEMO_PICTURE   0
 
-#define ADS_FIELD_TYPE_CHAR       1
-#define ADS_FIELD_TYPE_NUMERIC    2
-#define ADS_FIELD_TYPE_LOGICAL    3
-#define ADS_FIELD_TYPE_DATE       4
-#define ADS_FIELD_TYPE_DATETIME   5
-#define ADS_FIELD_TYPE_MEMO       6
-#define ADS_FIELD_TYPE_INTEGER    7
-#define ADS_FIELD_TYPE_DOUBLE     8
-#define ADS_FIELD_TYPE_CURRENCY   9
+// ACE field type constants. Values match the real Sybase/SAP ACE SDK
+// header so prebuilt rddads.lib (which switches on these values inside
+// adsOpen) routes each AdsGetFieldType return to the correct Clipper
+// field type.
+#define ADS_STRING                1
+#define ADS_NUMERIC               2
+#define ADS_DATE                  3
+#define ADS_LOGICAL               4
+#define ADS_MEMO                  5
+#define ADS_BINARY                6
+#define ADS_RAW                   6
+#define ADS_IMAGE                 7
+#define ADS_VARCHAR               8
+#define ADS_COMPACTDATE           9
+#define ADS_DOUBLE               10
+#define ADS_INTEGER              11
+#define ADS_SHORTINT             12
+#define ADS_TIME                 13
+#define ADS_TIMESTAMP            14
+#define ADS_AUTOINC              15
+#define ADS_RAW_BINARY            6
+#define ADS_LONGLONG             24
+#define ADS_CURDOUBLE            17
+#define ADS_MONEY                18
+#define ADS_MODTIME              19
+#define ADS_ROWVERSION           20
+#define ADS_VARCHAR_FOX          26
+#define ADS_VARBINARY_FOX        27
+#define ADS_NCHAR                28
+#define ADS_NVARCHAR             29
+#define ADS_NMEMO                30
+#define ADS_CISTRING             31
+// Legacy aliases kept for the OpenADS code that already references the
+// _FIELD_TYPE_* names.
+#define ADS_FIELD_TYPE_CHAR       ADS_STRING
+#define ADS_FIELD_TYPE_NUMERIC    ADS_NUMERIC
+#define ADS_FIELD_TYPE_LOGICAL    ADS_LOGICAL
+#define ADS_FIELD_TYPE_DATE       ADS_DATE
+#define ADS_FIELD_TYPE_DATETIME   ADS_TIMESTAMP
+#define ADS_FIELD_TYPE_MEMO       ADS_MEMO
+#define ADS_FIELD_TYPE_INTEGER    ADS_INTEGER
+#define ADS_FIELD_TYPE_DOUBLE     ADS_DOUBLE
+#define ADS_FIELD_TYPE_CURRENCY   ADS_CURDOUBLE
 #define ADS_FIELD_TYPE_UNKNOWN    99
 
 #ifdef __cplusplus

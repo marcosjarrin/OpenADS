@@ -25,6 +25,11 @@ Makefile
 # Harbour smoke build artefacts
 tests/harbour_smoke/smoke.exe
 tests/harbour_smoke/smoke_out.txt
+tests/harbour_smoke/stubs.log
+tests/harbour_smoke/hb_out.log
+tests/harbour_smoke/data.dbf
+tests/harbour_smoke/openads.txlog
+tests/harbour_smoke/openads.lsnmap*
 tests/harbour_smoke/*.obj
 tests/harbour_smoke/*.c
 tests/harbour_smoke/*.pdb

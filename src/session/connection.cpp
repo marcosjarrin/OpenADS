@@ -66,6 +66,11 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     std::string effective = relative_path;
     if (dd_.has_value()) effective = dd_->resolve(relative_path);
     fs::path full = fs::path(data_dir_) / effective;
+    // Auto-append .dbf when the caller (typically rddads / Clipper)
+    // passed a bare table alias without an extension.
+    if (!full.has_extension()) {
+        full.replace_extension(".dbf");
+    }
     auto resolved = platform::resolve_case_insensitive(full.string());
 
     auto t = engine::Table::open(resolved, type, mode, locking);
