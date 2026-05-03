@@ -1,3 +1,19 @@
+add_library(openads_aes_impl OBJECT
+    ${CMAKE_SOURCE_DIR}/third_party/tinyaes/aes128_impl.c
+    ${CMAKE_SOURCE_DIR}/third_party/tinyaes/aes256_impl.c
+)
+
+target_include_directories(openads_aes_impl PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/tinyaes
+)
+
+if(MSVC)
+    target_compile_options(openads_aes_impl PRIVATE /wd4244 /wd4267)
+else()
+    target_compile_options(openads_aes_impl PRIVATE
+        -Wno-shadow -Wno-conversion -Wno-pedantic)
+endif()
+
 add_library(openads_core STATIC
     util/log.cpp
     platform/path.cpp
@@ -12,6 +28,7 @@ add_library(openads_core STATIC
     engine/cursor.cpp
     engine/lock_mgr.cpp
     engine/order.cpp
+    engine/aes.cpp
     drivers/dbf_common.cpp
     drivers/cdx/cdx_driver.cpp
     drivers/cdx/cdx_index.cpp
@@ -38,7 +55,10 @@ target_include_directories(openads_core
         ${CMAKE_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/third_party/tinyaes
 )
+
+target_link_libraries(openads_core PRIVATE openads_aes_impl)
 
 if(UNIX)
     target_link_libraries(openads_core PUBLIC pthread)
