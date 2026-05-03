@@ -68,6 +68,29 @@ public:
                bool               unique,
                bool               descend);
 
+    // Append a new sub-tag to an existing compound CDX. Inserts an
+    // entry into the structure-tag root leaf, allocates a fresh
+    // CDXTAGHEADER at end-of-file (page-aligned), and returns a
+    // CdxIndex positioned on the new sub-tag (root_page_ = 0 until
+    // first insert).
+    static util::Result<CdxIndex>
+        add_tag(const std::string& path,
+                const std::string& tag_name,
+                const std::string& key_expr,
+                std::uint16_t      key_size,
+                bool               unique,
+                bool               descend);
+
+    // Open a specific sub-tag by name. Empty name selects the first
+    // entry in the structure-tag leaf (legacy `open` semantics).
+    util::Result<void> open_named(const std::string& path,
+                                  IndexOpenMode      mode,
+                                  const std::string& tag_name);
+
+    // Enumerate the tag names declared in a compound CDX.
+    static util::Result<std::vector<std::string>>
+        list_tags(const std::string& path);
+
     using Page = std::array<std::uint8_t, CDX_PAGE_LEN>;
 
 private:

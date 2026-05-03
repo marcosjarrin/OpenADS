@@ -299,6 +299,13 @@ util::Result<void> CdxIndex::flush_page_(std::uint32_t offset) {
 
 util::Result<void>
 CdxIndex::open(const std::string& path, IndexOpenMode mode) {
+    return open_named(path, mode, "");
+}
+
+util::Result<void>
+CdxIndex::open_named(const std::string& path,
+                     IndexOpenMode      mode,
+                     const std::string& tag_name) {
     mode_ = mode;
     auto fres = platform::File::open(path, map_mode(mode));
     if (!fres) return fres.error();
@@ -333,14 +340,26 @@ CdxIndex::open(const std::string& path, IndexOpenMode mode) {
         return util::Error{6106, 0, "CDX structure tag has no entries", path};
     }
 
-    // For now: open the first sub-tag. Multi-tag selection lands as a
-    // follow-up extending IIndex::open with a tag-name parameter.
-    const auto& first = sentries.front();
-    sub_header_offset_ = first.second;
-    // Trim the 10-char padded tag name back to its non-space portion.
-    std::string tn = first.first;
-    while (!tn.empty() && tn.back() == ' ') tn.pop_back();
-    tag_name_ = tn;
+    auto trim_tag = [](const std::string& s) {
+        std::string t = s;
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        return t;
+    };
+
+    const std::pair<std::string, std::uint32_t>* picked = nullptr;
+    if (tag_name.empty()) {
+        picked = &sentries.front();
+    } else {
+        for (auto& e : sentries) {
+            if (trim_tag(e.first) == tag_name) { picked = &e; break; }
+        }
+        if (!picked) {
+            return util::Error{5044, 0,
+                "CDX has no sub-tag with that name", tag_name};
+        }
+    }
+    sub_header_offset_ = picked->second;
+    tag_name_          = trim_tag(picked->first);
 
     // 3) Sub-tag CDXTAGHEADER (1024B) at sub_header_offset_.
     std::array<std::uint8_t, CDX_HEADER_LEN> sub_hdr{};
@@ -734,6 +753,130 @@ CdxIndex::create(const std::string& path,
 
 std::uint16_t CdxIndex::pick_rec_bits_(std::uint32_t max_rec) {
     return bits_for(max_rec);
+}
+
+util::Result<std::vector<std::string>>
+CdxIndex::list_tags(const std::string& path) {
+    auto fres = platform::File::open(path, platform::OpenMode::ReadOnly);
+    if (!fres) return fres.error();
+    platform::File f = std::move(fres).value();
+
+    std::array<std::uint8_t, CDX_HEADER_LEN> hdr{};
+    auto got = f.read_at(0, hdr.data(), hdr.size());
+    if (!got) return got.error();
+    if (got.value() < CDX_HEADER_LEN) {
+        return util::Error{6106, 0, "CDX header truncated", path};
+    }
+    std::uint32_t struct_root = read_u32_le(hdr.data() + 0);
+    if (struct_root == 0) return std::vector<std::string>{};
+
+    Page leaf{};
+    auto got2 = f.read_at(struct_root, leaf.data(), leaf.size());
+    if (!got2) return got2.error();
+    if (got2.value() < CDX_PAGE_LEN) {
+        return util::Error{6106, 0, "CDX struct-tag leaf truncated", path};
+    }
+    auto dec = decode_compact_leaf_static(leaf, CDX_STRUCT_KEY_LEN);
+    if (!dec) return dec.error();
+    std::vector<std::string> out;
+    out.reserve(dec.value().size());
+    for (auto& e : dec.value()) {
+        std::string t = e.first;
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        out.push_back(std::move(t));
+    }
+    return out;
+}
+
+util::Result<CdxIndex>
+CdxIndex::add_tag(const std::string& path,
+                  const std::string& tag_name,
+                  const std::string& key_expr,
+                  std::uint16_t      key_size,
+                  bool               unique,
+                  bool               descend) {
+    auto fres = platform::File::open(path, platform::OpenMode::OpenExisting);
+    if (!fres) return fres.error();
+    platform::File file = std::move(fres).value();
+
+    auto sz = file.size();
+    if (!sz) return sz.error();
+    std::uint64_t file_size = sz.value();
+
+    // 1) Read file header to find struct_root.
+    std::array<std::uint8_t, CDX_HEADER_LEN> fh{};
+    auto got = file.read_at(0, fh.data(), fh.size());
+    if (!got) return got.error();
+    if (got.value() < CDX_HEADER_LEN) {
+        return util::Error{6106, 0, "CDX header truncated", path};
+    }
+    std::uint32_t struct_root = read_u32_le(fh.data() + 0);
+    if (struct_root == 0) {
+        return util::Error{6106, 0, "CDX has no structure tag root", path};
+    }
+
+    // 2) Read + decode struct-tag leaf.
+    Page leaf{};
+    auto got2 = file.read_at(struct_root, leaf.data(), leaf.size());
+    if (!got2) return got2.error();
+    auto dec = decode_compact_leaf_static(leaf, CDX_STRUCT_KEY_LEN);
+    if (!dec) return dec.error();
+    auto entries = std::move(dec).value();
+
+    // Reject duplicates.
+    std::string padded = tag_name;
+    if (padded.size() < CDX_STRUCT_KEY_LEN)
+        padded.append(CDX_STRUCT_KEY_LEN - padded.size(), ' ');
+    if (padded.size() > CDX_STRUCT_KEY_LEN)
+        padded.resize(CDX_STRUCT_KEY_LEN);
+    for (auto& e : entries) {
+        if (e.first == padded) {
+            return util::Error{5044, 0,
+                "CDX already has a sub-tag with that name", tag_name};
+        }
+    }
+
+    // 3) Allocate sub-tag header at end-of-file, page-aligned to CDX_PAGE_LEN.
+    std::uint64_t new_off = (file_size + CDX_PAGE_LEN - 1)
+                          / CDX_PAGE_LEN * CDX_PAGE_LEN;
+    if (new_off < CDX_SUB_DATA_BASE) new_off = CDX_SUB_DATA_BASE;
+
+    // 4) Append struct-tag entry, sort by name, re-encode, write back.
+    entries.emplace_back(padded, static_cast<std::uint32_t>(new_off));
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b){ return a.first < b.first; });
+    Page new_leaf{};
+    auto enc = encode_compact_leaf_static(new_leaf, CDX_STRUCT_KEY_LEN,
+                                          entries,
+                                          0xFFFFFFFFu, 0xFFFFFFFFu);
+    if (!enc) return enc.error();
+    auto wrote = file.write_at(struct_root, new_leaf.data(), new_leaf.size());
+    if (!wrote) return wrote.error();
+
+    // 5) Write fresh sub-tag CDXTAGHEADER at new_off.
+    auto sub_hdr = build_subtag_header(0, key_size, key_expr,
+                                       tag_name, unique, descend);
+    auto wrote2 = file.write_at(new_off, sub_hdr.data(), sub_hdr.size());
+    if (!wrote2) return wrote2.error();
+
+    if (auto s = file.sync(); !s) return s.error();
+
+    CdxIndex ix;
+    ix.file_              = std::move(file);
+    ix.mode_              = IndexOpenMode::Shared;
+    ix.root_page_         = 0;
+    ix.free_ptr_          = 0xFFFFFFFFu;
+    ix.counter_           = 1;
+    ix.key_size_          = key_size;
+    ix.index_opt_         = static_cast<std::uint8_t>(
+        (unique ? 0x01 : 0x00) | 0x20);
+    ix.unique_            = unique;
+    ix.descend_           = descend;
+    ix.key_expr_          = key_expr;
+    ix.tag_name_          = tag_name;
+    ix.sub_header_offset_ = static_cast<std::uint32_t>(new_off);
+    ix.file_size_         = new_off + CDX_HEADER_LEN;
+    return ix;
 }
 
 } // namespace openads::drivers::cdx

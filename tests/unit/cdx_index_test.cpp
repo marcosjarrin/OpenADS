@@ -185,6 +185,87 @@ TEST_CASE("CdxIndex compound layout: file header + struct-tag leaf + sub-tag hea
     fs::remove(p);
 }
 
+TEST_CASE("CdxIndex multi-tag: add_tag + open_named round-trip independent sub-trees") {
+    auto p = fs::temp_directory_path() / "openads_m310_cdx_multitag.cdx";
+    fs::remove(p);
+
+    // 1) Create the CDX with a first tag and insert into it.
+    {
+        auto created = CdxIndex::create(p.string(), "PRIMARY", "PK", 4, false, false);
+        REQUIRE(created.has_value());
+        CdxIndex ix = std::move(created).value();
+        REQUIRE(ix.insert(1, "AAAA").has_value());
+        REQUIRE(ix.insert(2, "BBBB").has_value());
+        REQUIRE(ix.flush().has_value());
+    }
+
+    // 2) Add a second tag with a different key length and key expression,
+    //    then insert independent rows into it.
+    {
+        auto added = CdxIndex::add_tag(p.string(), "SECOND", "EXPR", 6, true, false);
+        REQUIRE(added.has_value());
+        CdxIndex ix = std::move(added).value();
+        REQUIRE(ix.insert(10, "alpha1").has_value());
+        REQUIRE(ix.insert(20, "beta22").has_value());
+        REQUIRE(ix.flush().has_value());
+    }
+
+    // 3) list_tags reports both.
+    {
+        auto tags = CdxIndex::list_tags(p.string());
+        REQUIRE(tags.has_value());
+        auto& tv = tags.value();
+        REQUIRE(tv.size() == 2);
+        // Sorted by tag name.
+        CHECK(tv[0] == "PRIMARY");
+        CHECK(tv[1] == "SECOND");
+    }
+
+    // 4) open_named picks each sub-tag independently and walks its keys.
+    {
+        CdxIndex ix;
+        REQUIRE(ix.open_named(p.string(), IndexOpenMode::Shared, "PRIMARY")
+                .has_value());
+        CHECK(ix.name() == "PRIMARY");
+        CHECK(ix.expression() == "PK");
+        CHECK(ix.key_length() == 4);
+        REQUIRE(ix.seek_first().has_value());
+        CHECK(ix.current_key() == "AAAA");
+        REQUIRE(ix.next().has_value());
+        CHECK(ix.current_key() == "BBBB");
+    }
+    {
+        CdxIndex ix;
+        REQUIRE(ix.open_named(p.string(), IndexOpenMode::Shared, "SECOND")
+                .has_value());
+        CHECK(ix.name() == "SECOND");
+        CHECK(ix.expression() == "EXPR");
+        CHECK(ix.key_length() == 6);
+        CHECK(ix.unique() == true);
+        REQUIRE(ix.seek_first().has_value());
+        CHECK(ix.current_key() == "alpha1");
+        REQUIRE(ix.next().has_value());
+        CHECK(ix.current_key() == "beta22");
+    }
+
+    // 5) open_named with a non-existent tag returns 5044.
+    {
+        CdxIndex ix;
+        auto r = ix.open_named(p.string(), IndexOpenMode::Shared, "NOPE");
+        CHECK_FALSE(r.has_value());
+        CHECK(r.error().code == 5044);
+    }
+
+    // 6) add_tag rejects duplicate tag names.
+    {
+        auto r = CdxIndex::add_tag(p.string(), "PRIMARY", "X", 4, false, false);
+        CHECK_FALSE(r.has_value());
+        CHECK(r.error().code == 5044);
+    }
+
+    fs::remove(p);
+}
+
 TEST_CASE("CdxIndex unique tag rejects duplicates") {
     auto p = fs::temp_directory_path() / "openads_m35_cdx_unique.cdx";
     fs::remove(p);
