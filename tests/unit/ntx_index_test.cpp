@@ -229,6 +229,47 @@ TEST_CASE("NtxIndex create with unique=true persists the flag through reopen") {
     fs::remove(p);
 }
 
+TEST_CASE("NtxIndex insert that overflows the leaf splits the root into a branch") {
+    auto p = fs::temp_directory_path() / "openads_m37_ntx_split.ntx";
+    fs::remove(p);
+    // 200-byte keys force a small max_keys so the split fires after a
+    // handful of inserts. Multi-level walk via next()/prev() over a
+    // branch root is incomplete — this test focuses on the structural
+    // invariant: the insert that triggers the split must succeed and
+    // a subsequent seek_key on the largest inserted key must locate it.
+    constexpr int kInserts = 5;
+    std::string biggest;
+    {
+        auto created = NtxIndex::create(p.string(), "T1", "TAG", 200, false, false);
+        REQUIRE(created.has_value());
+        NtxIndex ix = std::move(created).value();
+        for (int i = 0; i < kInserts; ++i) {
+            char k[16];
+            std::snprintf(k, sizeof(k), "%03dXXXX", i);
+            biggest = k;
+            REQUIRE(ix.insert(static_cast<std::uint32_t>(i + 1),
+                              std::string(k))
+                        .has_value());
+        }
+        REQUIRE(ix.flush().has_value());
+    }
+    {
+        NtxIndex ix;
+        REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
+        // Pad the seek key out to key_length with spaces, matching the
+        // way insert() pads.
+        std::string padded = biggest;
+        if (padded.size() < ix.key_length()) {
+            padded.append(ix.key_length() - padded.size(), ' ');
+        }
+        auto r = ix.seek_key(padded, false);
+        REQUIRE(r.has_value());
+        CHECK(r.value().hit == openads::drivers::SeekHit::Exact);
+        CHECK(r.value().recno == kInserts);
+    }
+    fs::remove(p);
+}
+
 TEST_CASE("NtxIndex create with descend=true persists the flag through reopen") {
     auto p = fs::temp_directory_path() / "openads_m36_ntx_descend.ntx";
     fs::remove(p);

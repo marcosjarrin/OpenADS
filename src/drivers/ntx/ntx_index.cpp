@@ -421,31 +421,111 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         }
     }
 
-    if (kc + 1 > max_keys_) {
-        return util::Error{5004, 0, "NTX leaf split not yet implemented in M3", ""};
+    if (kc + 1 <= max_keys_) {
+        // Simple insert: shift offset entries [insert_at .. kc] right by one.
+        std::uint16_t free_off = get_key_offset(leaf, kc);
+        for (std::int32_t i = static_cast<std::int32_t>(kc); i > insert_at; --i) {
+            std::uint16_t prev = get_key_offset(leaf, i - 1);
+            set_key_offset(leaf, i, prev);
+        }
+        set_key_offset(leaf, insert_at, free_off);
+        std::uint16_t new_tail_off = static_cast<std::uint16_t>(
+            free_off + item_size_);
+        set_key_offset(leaf, kc + 1, new_tail_off);
+
+        write_u32_le(leaf.data() + free_off,     0);
+        write_u32_le(leaf.data() + free_off + 4, recno);
+        std::memcpy (leaf.data() + free_off + 8, padded.data(), key_size_);
+
+        set_key_count(leaf, kc + 1);
+        dirty_[leaf_frame.page] = true;
+        return {};
     }
 
-    // Shift offset entries [insert_at .. kc] right by one.
-    // Save the offset that will become slot insert_at by stealing the
-    // currently-trailing slot kc (which points at the next free entry slot).
-    std::uint16_t free_off = get_key_offset(leaf, kc);
-    for (std::int32_t i = static_cast<std::int32_t>(kc); i > insert_at; --i) {
-        std::uint16_t prev = get_key_offset(leaf, i - 1);
-        set_key_offset(leaf, i, prev);
+    // Leaf is full — split. M3.7 currently supports a single split level
+    // (the leaf was the root, or a sibling under a one-level branch root).
+    // Multi-level recursion lands in a follow-up.
+    if (stack_.size() > 1) {
+        return util::Error{5004, 0,
+            "NTX multi-level split not yet implemented", ""};
     }
-    set_key_offset(leaf, insert_at, free_off);
-    // Trailing slot (kc+1) gets a fresh offset past existing area.
-    std::uint16_t new_tail_off = static_cast<std::uint16_t>(
-        free_off + item_size_);
-    set_key_offset(leaf, kc + 1, new_tail_off);
 
-    // Write new entry payload into free_off.
-    write_u32_le(leaf.data() + free_off,     0);
-    write_u32_le(leaf.data() + free_off + 4, recno);
-    std::memcpy (leaf.data() + free_off + 8, padded.data(), key_size_);
+    // Build a sorted vector of (recno, key) for the kc existing entries
+    // plus the new one. Both halves below are leaves so left_child = 0
+    // for every promoted entry.
+    struct Entry {
+        std::uint32_t recno;
+        std::string   key;
+    };
+    std::vector<Entry> all;
+    all.reserve(kc + 1);
+    for (std::int32_t i = 0; i < kc; ++i) {
+        Entry e;
+        e.recno = get_recno(leaf, i);
+        e.key.assign(reinterpret_cast<const char*>(get_key_data(leaf, i)),
+                     key_size_);
+        all.push_back(std::move(e));
+    }
+    Entry inserted;
+    inserted.recno = recno;
+    inserted.key   = padded;
+    all.insert(all.begin() + insert_at, std::move(inserted));
 
-    set_key_count(leaf, kc + 1);
-    dirty_[leaf_frame.page] = true;
+    std::size_t mid = all.size() / 2;
+
+    // Allocate a new sibling page and re-format both halves.
+    std::uint32_t left_off  = leaf_frame.page;
+    std::uint32_t right_off = next_avail_;
+    next_avail_ += NTX_PAGE_SIZE;
+
+    auto fill_leaf = [&](std::uint32_t page_off,
+                         const std::vector<Entry>& subset) {
+        Page p{};
+        format_empty_page(p, max_keys_, item_size_);
+        for (std::size_t i = 0; i < subset.size(); ++i) {
+            std::uint16_t off = get_key_offset(p, static_cast<std::int32_t>(i));
+            write_u32_le(p.data() + off,     0);
+            write_u32_le(p.data() + off + 4, subset[i].recno);
+            std::memcpy (p.data() + off + 8, subset[i].key.data(), key_size_);
+        }
+        set_key_count(p, static_cast<std::uint16_t>(subset.size()));
+        page_cache_[page_off] = p;
+        dirty_[page_off]      = true;
+    };
+
+    std::vector<Entry> left_half (all.begin(), all.begin() + mid);
+    std::vector<Entry> right_half(all.begin() + mid, all.end());
+    fill_leaf(left_off,  left_half);
+    fill_leaf(right_off, right_half);
+
+    // Build a new internal root with one separator entry: left_child →
+    // left_off, key = right_half[0], and a trailing right child → right_off.
+    Page root{};
+    format_empty_page(root, max_keys_, item_size_);
+    {
+        std::uint16_t off = get_key_offset(root, 0);
+        write_u32_le(root.data() + off,     left_off);
+        write_u32_le(root.data() + off + 4, right_half[0].recno);
+        std::memcpy (root.data() + off + 8, right_half[0].key.data(), key_size_);
+        std::uint16_t tail = get_key_offset(root, 1);
+        write_u32_le(root.data() + tail, right_off);
+    }
+    set_key_count(root, 1);
+
+    std::uint32_t new_root_off = next_avail_;
+    next_avail_ += NTX_PAGE_SIZE;
+    page_cache_[new_root_off] = root;
+    dirty_[new_root_off]      = true;
+    root_page_                = new_root_off;
+
+    // Persist header.
+    Page hdr{};
+    auto got = file_.read_at(0, hdr.data(), hdr.size());
+    if (!got) return got.error();
+    write_u32_le(hdr.data() + 4, root_page_);
+    write_u32_le(hdr.data() + 8, next_avail_);
+    auto wrote = file_.write_at(0, hdr.data(), hdr.size());
+    if (!wrote) return wrote.error();
 
     return {};
 }
