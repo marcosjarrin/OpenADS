@@ -23,7 +23,9 @@ public:
 
     util::Result<Handle>
         open_table(const std::string& relative_path,
-                   engine::TableType  type);
+                   engine::TableType  type,
+                   engine::OpenMode   mode = engine::OpenMode::Shared,
+                   engine::LockingMode locking = engine::LockingMode::Compatible);
 
     void close_table(Handle h);
 

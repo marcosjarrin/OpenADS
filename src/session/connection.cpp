@@ -19,12 +19,14 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
 }
 
 util::Result<Handle> Connection::open_table(const std::string& relative_path,
-                                            engine::TableType  type) {
+                                            engine::TableType  type,
+                                            engine::OpenMode   mode,
+                                            engine::LockingMode locking) {
     namespace fs = std::filesystem;
     fs::path full = fs::path(data_dir_) / relative_path;
     auto resolved = platform::resolve_case_insensitive(full.string());
 
-    auto t = engine::Table::open(resolved, type);
+    auto t = engine::Table::open(resolved, type, mode, locking);
     if (!t) return t.error();
 
     auto holder = std::make_unique<engine::Table>(std::move(t).value());
