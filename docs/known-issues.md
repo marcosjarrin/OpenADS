@@ -6,9 +6,16 @@ round-trip *their own* output but cannot interoperate with `.cdx` /
 `.ntx` files produced by other tools, which contradicts the
 README "Validation" goal of byte-level compatibility.
 
-These issues are tracked here until **M3.6** lands the fixes. Do not
-treat the `m3-done` / `m3.5-done` tags as production-ready until
-M3.6 ships.
+## Status — M3.6 partial (commits c1b8cf8, efe8d22, bb75c22)
+
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | CDX leaf entry bit width hardcoded | **Fixed** in `c1b8cf8`. Encoder now uses Harbour-equivalent `compute_layout` (bBits derived from key length). |
+| 6 | AdsOpenIndex lifecycle race | **Fixed** in `efe8d22`. Prior bindings are erased before `set_order` installs a new one. |
+| 7 | AdsCreateIndex indexes deleted records | **Fixed** in `efe8d22`. Loop skips `is_deleted()`. |
+| 12 | Descending / unique flag round-trip untested | **Fixed** in `bb75c22`. Two new tests assert flag persistence. |
+
+Items 2, 3, 4, 5, 8, 9, 10, 11, 13 remain open and are tracked below.
 
 ## Critical (compat-breaking)
 
