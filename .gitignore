@@ -19,6 +19,9 @@ Makefile
 .idea/
 *.user
 
+# Claude Code local
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
