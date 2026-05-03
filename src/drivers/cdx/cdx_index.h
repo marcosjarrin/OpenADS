@@ -20,6 +20,21 @@ constexpr std::uint16_t CDX_NODE_BRANCH = 0;
 constexpr std::uint16_t CDX_NODE_ROOT   = 1;
 constexpr std::uint16_t CDX_NODE_LEAF   = 2;
 
+// FoxPro CDX is a compound index: page 0 is the file header, which
+// doubles as the structure tag's CDXTAGHEADER. Its B+tree maps tag
+// names (10-byte keys) to per-sub-tag CDXTAGHEADER offsets. Each
+// sub-tag has its own 1024-byte header plus an independent B+tree.
+//
+// OpenADS layout (single sub-tag per file for now):
+//   [0      .. 1024)  file / structure-tag header
+//   [1024   .. 1536)  structure-tag root leaf (one entry: tag-name -> 1536)
+//   [1536   .. 2560)  sub-tag header
+//   [2560   ..  ... )  sub-tag B+tree pages
+constexpr std::uint16_t CDX_STRUCT_KEY_LEN     = 10;
+constexpr std::uint32_t CDX_STRUCT_ROOT_OFFSET = 1024;
+constexpr std::uint32_t CDX_SUB_HEADER_OFFSET  = CDX_STRUCT_ROOT_OFFSET + CDX_PAGE_LEN;
+constexpr std::uint32_t CDX_SUB_DATA_BASE      = CDX_SUB_HEADER_OFFSET + CDX_HEADER_LEN;
+
 class CdxIndex final : public IIndex {
 public:
     util::Result<void> open(const std::string& path, IndexOpenMode mode) override;
@@ -44,10 +59,7 @@ public:
                               const std::string& key) override;
     util::Result<void> flush() override;
 
-    // Build a fresh single-tag CDX on disk. Layout: page 0 is the
-    // (only) tag header; the first leaf is allocated lazily on first
-    // insert. Real FoxPro compound CDX (with a structure tag) is a
-    // future extension.
+    // Build a fresh compound CDX on disk with a single sub-tag.
     static util::Result<CdxIndex>
         create(const std::string& path,
                const std::string& tag_name,
@@ -88,6 +100,10 @@ private:
     std::string                             key_expr_;
     std::string                             tag_name_;
     std::uint64_t                           file_size_ = 0;
+
+    // Compound layout: offset of this sub-tag's CDXTAGHEADER (1024B
+    // block). All header rewrites write here, not at offset 0.
+    std::uint32_t                           sub_header_offset_ = 0;
 
     std::unordered_map<std::uint32_t, Page> page_cache_;
     std::unordered_map<std::uint32_t, bool> dirty_;
