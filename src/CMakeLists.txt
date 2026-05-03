@@ -82,6 +82,7 @@ add_library(openads_ace SHARED
     abi/ace_stubs.cpp
     abi/charset.cpp
     abi/last_error.cpp
+    abi/legacy_crt_shims.cpp
 )
 
 if(WIN32)

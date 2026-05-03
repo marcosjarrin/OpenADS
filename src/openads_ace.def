@@ -232,3 +232,14 @@ EXPORTS
     AdsVerifySQL
     AdsWriteAllRecords
 
+    ; Legacy MSVC2013-era CRT shims (M8.2). Harbour's msvc64 prebuilt
+    ; libs reference these symbols; modern UCRT no longer ships them.
+    ; ace64.dll re-exports them under their legacy names so a Harbour
+    ; app links cleanly without rebuilding Harbour.
+    _dclass   = openads_dclass
+    _dsign    = openads_dsign
+    _wfsopen  = openads_wfsopen
+    _getch    = openads_getch
+    _kbhit    = openads_kbhit
+    _eof      = openads_eof
+

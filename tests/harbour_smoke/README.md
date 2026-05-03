@@ -16,24 +16,52 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
-## Known limitation: Harbour-side CRT mismatch
+## End-to-end validation result (M8.2)
 
-`smoke.exe` does **not** finish linking on the current host. The
-remaining 3 unresolved externals are CRT functions that Harbour's
-prebuilt `msvc64` libs were compiled against:
+`smoke.exe` builds **and runs**. Output:
 
-    __imp__dclass    referenced in hbcommon.lib(hbprintf.obj)
-    __imp__dsign     referenced in hbcommon.lib(hbprintf.obj)
-    __imp__wfsopen   referenced in hbcommon.lib(hbfopen.obj)
+    OpenADS smoke test
+    rddads version probe...
+    ACE DLL reports: 0.0a
 
-These are legacy MSVC 2013-era runtime symbols that disappeared when
-Microsoft split the C runtime into `ucrt` + `vcruntime` in VS2015.
-This is a **Harbour build flag issue**, not an OpenADS issue:
-re-building Harbour `contrib/hbcommon` with `-DHB_LEGACY_LEVEL5 = 0`
-or with `legacy_stdio_definitions.lib` on the link line resolves them.
+The flow exercised:
 
-A clean smoke that produces a runnable `smoke.exe` lands in **M8.2**
-once a Harbour build matching the host VS toolchain is available.
+1. Harbour PP compiles `smoke.prg` and resolves `AdsVersion()` to the
+   `HB_FUN_ADSVERSION` wrapper inside `rddads.lib`.
+2. `rddads.lib`'s wrapper calls `AdsGetVersion(...)` — a true import
+   resolved through the OpenADS-shipped `ace64.lib` import library.
+3. At runtime, `ace64.dll` (loaded from `c:\harbour\bin\win\msvc64\`)
+   answers the call and returns OpenADS' version string.
+
+### Legacy CRT shims
+
+Harbour's prebuilt `msvc64` libs were compiled against MSVC 2013-era
+CRT entry points that disappeared in the VS2015 UCRT split. To keep
+Harbour usable without rebuilding Harbour itself, `ace64.dll` exports
+shims for the missing symbols (`abi/legacy_crt_shims.cpp`):
+
+| Legacy symbol | Replacement                                 |
+|---------------|---------------------------------------------|
+| `_dclass`     | `std::fpclassify`                           |
+| `_dsign`      | `std::signbit`                              |
+| `_wfsopen`    | UCRT `_wfsopen`                             |
+| `_getch`      | UCRT `_getch` (used by gtstd)               |
+| `_kbhit`      | UCRT `_kbhit` (used by gtstd)               |
+| `_eof`        | UCRT `_eof`   (used by gtstd)               |
+
+`openads_ace.def` aliases these legacy names onto OpenADS-prefixed
+implementations so the DLL exports the names hbcommon / gtstd expect.
+
+### Drop-in install
+
+`run_build.bat` (and any future automation) currently overwrites the
+two Harbour-shipped artefacts:
+
+    c:\harbour\lib\win\msvc64\ace64.lib   (import lib for the DLL)
+    c:\harbour\bin\win\msvc64\ace64.dll   (loaded at runtime)
+
+with the OpenADS-built versions. After that, `hbmk2 -comp=msvc64
+-gtstd -lrddads -lace64 smoke.prg` produces a runnable executable.
 
 ## Running
 
