@@ -376,9 +376,596 @@ TxRecover::run()
   truncate log
 ```
 
-## Validation
+## Concurrency and lock ranges
 
-The success criterion is that existing Harbour applications using `contrib/rddads` work unmodified when `ace32.dll` / `ace64.dll` are replaced with OpenADS builds, running the tests in `c:\harbour\contrib\rddads\tests\` (`datad.prg`, `manage.prg`).
+### Locking modes
+
+`AdsLocking(ON | OFF)` selects the byte-range scheme:
+
+| Mode | When to use | Coexistence |
+|------|-------------|-------------|
+| **Proprietary** (default) | ADS-only deployments | ADS-specific ranges, fastest |
+| **Compatible** (`ADS_COMPATIBLE_LOCKING`) | Coexistence with Clipper / FoxPro / Harbour `DBF*` RDDs over the same files | Standard Clipper / FoxPro ranges |
+
+OpenADS supports both modes. The `rddads` frontend selects via `AdsSetServerType(ADS_LOCAL_SERVER)` combined with `AdsLocking(ON | OFF)`.
+
+### Granularity
+
+Three hierarchical levels:
+
+1. **File lock** (exclusive) — locks the whole table. `AdsLockTable` / `flock` open mode `EXCLUSIVE`.
+2. **Record lock** — shared for reads, exclusive for writes. `AdsLockRecord(recno)`.
+3. **Header lock** — first byte of the file header, taken only during writes that mutate the header (append, pack, zap, recno recalculation).
+
+Rules:
+
+- Open SHARED → acquires a shared header lock over the header range.
+- Append / Pack / Zap → exclusive header lock plus an exclusive file-equivalent lock (Compatible mode uses byte `LOCKOFFSET_FILE`; Proprietary uses an internal ADS range).
+- Update record → record lock required (RDD enforcement, not OS).
+- Read record → no lock required in `READ COMMITTED`; `READ UNCOMMITTED` skips even versioning.
+
+### Concrete byte-range layout
+
+#### Compatible mode (Clipper / FoxPro coexistence)
+
+```
+DBF + NTX (Clipper scheme):
+  FILE LOCK    : offset 1_000_000_000        size 1
+  RECORD LOCK  : offset 1_000_000_001 + recno size 1
+
+DBF + CDX (FoxPro scheme — descending):
+  FILE LOCK    : offset 0x7FFFFFFE           size 1
+  RECORD LOCK  : offset 0x7FFFFFFE - recno   size 1
+
+DBF + VFP CDX (FoxPro VFP — same as CDX but offset 0x40000000-1):
+  FILE LOCK    : offset 0x3FFFFFFE           size 1
+  RECORD LOCK  : offset 0x3FFFFFFE - recno   size 1
+
+ADT proprietary:
+  FILE LOCK    : offset 0x80000000_00000000  size 0x10000  (64-bit)
+  RECORD LOCK  : offset 0x80000000_00000000 + (recno << 16)  size 1
+```
+
+#### Proprietary mode
+
+ADS-specific. The ranges are derived from captures of original ACE running over an instrumented filesystem and pinned in `docs/lock-ranges.md`. For phase 1 they are a constant table, validated by `tools/ace-trace`.
+
+### LockMgr API (L4)
+
+```cpp
+class LockMgr {
+public:
+    // OS-level byte-range — inter-process coexistence
+    Result<LockToken> lock_file_excl(FileHandle& fh, LockingMode mode);
+    Result<LockToken> lock_record   (FileHandle& fh, LockingMode mode,
+                                     uint64_t recno, LockType, Timeout);
+    Result<>          unlock        (LockToken);
+
+    // Tx-scoped — lifetime tied to TxLog::tx_id
+    Result<>          lock_for_tx   (tx_id_t, FileHandle& fh,
+                                     uint64_t recno, LockType);
+    void              release_tx    (tx_id_t);
+
+    // Intra-process re-entry
+    bool              already_held  (FileHandle& fh, uint64_t recno) const;
+};
+```
+
+Notes:
+
+- **Intra-process re-entrancy.** A connection that already holds a record lock does not call the OS again; only a local counter is incremented.
+- **Timeouts.** Per-connection (`AdsSetWaitTime`-equivalent), default 0 (fail fast).
+- **Deadlock detection.** Cycle search over the `tx_id → resource → tx_id` graph. On detection, the youngest transaction is aborted (ADS does not document this precisely; OpenADS picks the youngest as victim).
+- **Errors.** `AE_LOCKED` (5012) and `AE_LOCK_FAILED` (5013), mapped from LockMgr return codes.
+
+### Coordination with TxLog
+
+Inside an `AdsBeginTransaction` block, locks become tx-scoped: they are not released by `AdsUnlockRecord`, only by `AdsCommitTransaction` / `AdsRollbackTransaction`. This is required to preserve isolation guarantees.
+
+Outside any transaction (autocommit), unlock releases immediately.
+
+### Critical tests
+
+- `lock_mgr_test.cpp` — re-entrancy, timeouts, deadlock detection.
+- `tools/ace-trace` running real applications against original ACE → captures range logs → diffs against OpenADS.
+- Multi-process conformance test: two OpenADS processes plus one original-ACE process operating on the same CDX table in Compatible mode — must complete without corruption.
+
+## Transactions and write-ahead log
+
+### Model
+
+ARIES-lite. Page-level physiological logging. Multi-table atomicity. Nestable savepoints. Deterministic crash recovery.
+
+### Log location
+
+A single log shared per **data directory** (or per Data Dictionary if an `.add` file exists):
+
+```
+<data-dir>/openads.txlog          ← active log
+<data-dir>/openads.txlog.<n>      ← rotated archives (truncated post-checkpoint)
+<data-dir>/openads.checkpoint     ← latest CP record (LSN, dirty page table)
+```
+
+One log per DD avoids cross-DD coordination. Applications that do not use a DD but open tables in the same directory automatically share the log (detected by `Connection::open`).
+
+### Record format
+
+```
+struct LogRecord {
+    uint64_t  lsn;            // monotonic, unique
+    uint64_t  prev_lsn;       // previous record in this tx (chain for undo)
+    uint64_t  tx_id;
+    uint16_t  type;           // BEGIN | UPDATE | INSERT | DELETE | ...
+    uint16_t  driver_id;      // adt | cdx | ntx | vfp | memo | index
+    uint32_t  table_id;       // assigned at first touch by tx
+    uint64_t  page_no;
+    uint16_t  before_len;
+    uint16_t  after_len;
+    uint8_t   payload[];      // before_image || after_image
+    uint32_t  crc32c;         // record integrity
+};
+```
+
+Record types:
+
+| Type | Semantics |
+|------|-----------|
+| `BEGIN` | tx started, includes timestamp |
+| `UPDATE` | physiological page update (before + after image) |
+| `INSERT` | new record append (after only; undo = decrement recno) |
+| `DELETE` | logical delete (after only; undo = clear deleted flag) |
+| `INDEX_OP` | B+tree mutation (page split / merge / insert / delete key) |
+| `MEMO_ALLOC` / `MEMO_FREE` | blob lifecycle in `.adm` / `.fpt` / `.dbt` |
+| `SAVEPOINT` | named marker; `prev_lsn` chains here on partial rollback |
+| `CLR` | compensation log record (written during undo, redo-only) |
+| `COMMIT` | tx end ok, fsync barrier |
+| `ABORT` | tx end rollback; all CLRs already written |
+| `CHECKPOINT_BEGIN` / `CHECKPOINT_END` | stable point, dirty page table snapshot |
+
+CLRs (compensation log records) make undo idempotent: a crash during rollback simply re-executes the CLRs without duplicating work (CLRs are redo-only, never undo).
+
+### Group commit
+
+```
+AdsCommitTransaction(hConn)
+  → TxLog::append(COMMIT_PENDING)              [in memory]
+  → TxLog::group_commit_barrier()              [waits up to 10ms or N tx]
+       └─ writev() batched COMMIT records
+       └─ fsync(log_fd)
+  → tx becomes visible
+```
+
+10 ms / 64 tx, whichever first (configurable). Reduces `fsync × N` to a single `fsync`.
+
+### Savepoints
+
+```
+AdsCreateSavepoint(hConn, "sp1")
+  → TxLog::append(SAVEPOINT name=sp1 lsn=L1)
+  → conn->savepoint_stack.push("sp1", L1)
+
+AdsRollbackTransaction80(hConn, "sp1")    // partial
+  → walk back log from current_lsn to L1, write CLRs for each record
+  → discard savepoints above sp1
+  // tx still active
+```
+
+The classic `AdsRollbackTransaction()` performs a full rollback to BEGIN.
+
+### Recovery (startup)
+
+Three ARIES-lite phases:
+
+```
+TxRecover::run() {
+  // 1. ANALYSIS
+  scan log forward from the last CHECKPOINT_BEGIN
+  build active_tx_table  (tx_id → last_lsn)
+  build dirty_page_table (page_id → first_lsn that dirtied it)
+
+  // 2. REDO
+  scan log forward from min(dirty_page_table.first_lsn)
+  for each UPDATE / INDEX_OP / INSERT / DELETE / CLR:
+      if page.lsn < record.lsn:                 // not yet applied
+          apply after_image to page
+          page.lsn = record.lsn
+
+  // 3. UNDO (loser txs only — no COMMIT seen)
+  for each tx in active_tx_table sorted by last_lsn DESC:
+      walk prev_lsn chain
+      for each non-CLR record:
+          apply before_image
+          write CLR(undo_next_lsn = record.prev_lsn)
+      write ABORT record
+}
+```
+
+Determinism: re-entering recovery N times produces the same final state (idempotent via CLRs).
+
+### Page LSN
+
+Each page (DBF, ADT, CDX, NTX, ADI, memo) carries an 8-byte LSN at the end of its page footer. Cost: 8 bytes per page. Required to skip already-applied redo work.
+
+**Compatible mode exception.** DBF / CDX / NTX pages in Compatible mode do not carry an inline LSN footer (it would break byte compatibility with Clipper / FoxPro applications). Workaround: in Compatible mode `TxLog` keeps a separate `lsn_table` (overlay file `.lsnmap`) instead of inlining the LSN. The cost is an extra page of I/O per commit, which is acceptable.
+
+### Checkpointing
+
+A background thread:
+
+- Runs every 30 s or every 1000 transactions (configurable).
+- Writes `CHECKPOINT_BEGIN` with a snapshot of `active_tx_table` and `dirty_page_table`.
+- Flushes dirty pages with `lsn ≤ checkpoint_lsn`.
+- Writes `CHECKPOINT_END`.
+- Truncates `openads.txlog.<n>` archives older than the checkpoint.
+
+### Recoverable vs unrecoverable errors
+
+| Situation | Action |
+|-----------|--------|
+| Crash with pending tx | Recovery rollback |
+| CRC failure on a log record | Stop recovery at the last valid record, log a warning |
+| Missing log file at startup | Assume clean shutdown (legacy ACE behaviour) |
+| Page LSN > log tail LSN | Log corruption → halt, requires manual intervention |
+| Out of space during commit | Force partial fsync → mark log full → reject new tx until space is freed |
+
+### Tests
+
+- `tx_log_test.cpp` — unit: write / read / CRC / replay.
+- `tx_recover_test.cpp` — inject a crash at every LSN boundary, verify consistency.
+- `tools/tx-replay <log>` — human-readable dump and dry-run replay.
+- Conformance: simulate `AdsBegin / Update / Crash` with `kill -9` mid-write, verify a consistent restart.
+
+## SQL engine internals
+
+### High-level pipeline
+
+```
+SQL string
+  ▼  Lexer        (DFA, ~150 keywords, xBase + ANSI SQL)
+tokens
+  ▼  Parser       (recursive descent, Pratt for expressions)
+AST
+  ▼  Resolver     (name binding, type check, * expansion, qualification)
+Bound AST
+  ▼  Planner      (logical plan: relational algebra tree)
+LogicalPlan
+  ▼  Optimizer    (rules + cost model)
+PhysicalPlan
+  ▼  Executor     (Volcano: open / next / close iterators)
+Result rows / row count
+```
+
+### Lexer
+
+Hand-written DFA. Recognises:
+
+- Case-insensitive keywords (~150).
+- Identifiers: `[A-Za-z_][A-Za-z0-9_]*`, plus delimited `[name]` and `"name"`.
+- Literals: int, float, string (ANSI plus `''` escape), date `{^YYYY-MM-DD}`, boolean `.T.` / `.F.` (xBase).
+- Operators: ANSI plus xBase `=`, `==`, `!=`, `#`, `$` (substring contains), `||`.
+- Parameters: `?` positional, `:name` named.
+
+Output: stream of `Token { kind, lexeme, line, col }`. Errors carry source position.
+
+### Parser
+
+Recursive descent plus a Pratt parser for expressions (ANSI precedence plus xBase `$` and `||`).
+
+EBNF grammar in `docs/sql-grammar.md`. Key productions:
+
+```ebnf
+SelectStmt   := WithClause? "SELECT" SelectList FromClause? WhereClause?
+                GroupByClause? HavingClause? OrderByClause?
+                LimitClause? (CompoundOp SelectStmt)?
+FromClause   := "FROM" TableRef ("," TableRef)*
+TableRef     := QualifiedName ("AS"? Alias)?
+              | "(" SelectStmt ")" "AS"? Alias                  -- derived
+              | TableRef JoinType TableRef "ON" Expr            -- join
+JoinType     := "INNER" | "LEFT" "OUTER"? | "RIGHT" "OUTER"? |
+                "FULL" "OUTER"? | "CROSS"
+CompoundOp   := "UNION" "ALL"? | "INTERSECT" | "EXCEPT"
+Expr         := PrimaryExpr (InfixOp Expr)*                     -- Pratt
+PrimaryExpr  := Literal | ColumnRef | FuncCall | CaseExpr |
+                "(" Expr ")" | SubQuery | Parameter |
+                "CAST" "(" Expr "AS" TypeName ")"
+CaseExpr     := "CASE" Expr? ("WHEN" Expr "THEN" Expr)+
+                ("ELSE" Expr)? "END"
+```
+
+The AST is built from sum types (`std::variant`) per category. Visitor pattern for passes.
+
+### Resolver
+
+- **Name binding.** Tables are looked up via `Catalog` (DD-aware when the connection has a DD). Columns are searched in the current scope, including CTEs, derived tables, and `JOIN USING`.
+- **`*` expansion.** `SELECT *` becomes a list of `ColumnRef`; `t.*` expands only columns of `t`.
+- **Type check.** Arithmetic on numeric, concatenation on character, comparison on compatible types. xBase coercions are permissive (`numeric` ↔ `string` implicit conversion is configurable).
+- **Aggregate detection.** Marks expressions as aggregate or scalar; validates `HAVING` vs `WHERE`.
+- **Subquery scope.** Correlated references are annotated with `outer_scope_depth`.
+- **Errors.** `AE_PARSE_ERROR` (7200), `AE_COLUMN_NOT_FOUND` (5063), and so on.
+
+### Planner (logical)
+
+Generates a relational algebra tree of Volcano nodes:
+
+```
+LogicalNode = Scan(table)
+            | Filter(child, pred)
+            | Project(child, exprs)
+            | Sort(child, keys)
+            | TopN(child, k)
+            | Aggregate(child, group_keys, aggs)
+            | Distinct(child)
+            | Join(left, right, kind, pred)
+            | Union(left, right, all?)
+            | CTE(name, child)
+            | Insert / Update / Delete (table, source, set, pred)
+```
+
+Canonical construction first, no optimisation.
+
+### Optimizer
+
+Rule and cost passes:
+
+| Pass | Type | Description |
+|------|------|-------------|
+| `predicate_pushdown` | rule | Pushes Filter below Join / Project when column refs allow. |
+| `column_pruning` | rule | Project drops columns not used upstream. |
+| `constant_folding` | rule | Evaluates constant expressions. |
+| `predicate_simplify` | rule | `x AND TRUE → x`, `NOT NOT x → x`, etc. |
+| `index_selection` | cost | Matches Filter predicates against available indexes → IndexScan. |
+| `join_order` | cost | Selinger-style DP up to 8 tables, greedy beyond. |
+| `join_method` | cost | NLJ vs HashJoin vs MergeJoin based on cardinality and ordering. |
+| `sort_avoidance` | rule | If the Sort key is a prefix of the IndexScan order, drop the Sort. |
+| `aggregate_pushdown` | rule | Pre-aggregates locally when group keys are a subset of the partition. |
+| `topn_pushdown` | rule | `LIMIT k` paired with index order becomes early-stop IndexScan. |
+
+Cost model:
+
+- Row-count estimation uses per-table statistics in `Catalog` (recno plus simple equi-width index histograms).
+- I/O cost is page reads (CdxIndex 8 KB, ADT 4 KB typical).
+- CPU cost is `row_count × per-op constant`.
+
+### PhysicalPlan / Executor
+
+Volcano iterators. Each `next()` returns `Optional<Row>`.
+
+Physical operators:
+
+| Operator | Description |
+|----------|-------------|
+| `SeqScanOp` | Iterates a `Cursor` over a `Table`, reading via L4 `Table::scan()`. |
+| `IndexScanOp` | `Cursor` follows `Index::seek_range()`. |
+| `IndexLookupOp` | Nested-loop join inner side via index seek. |
+| `FilterOp` | Predicate evaluation, drops false rows. |
+| `ProjectOp` | Per-row expression evaluation. |
+| `SortOp` | External merge sort, runs in `<data-dir>/openads.tmp.<N>`. |
+| `TopNOp` | Min-heap with k slots. |
+| `HashAggregateOp` | Hash-table aggregation. |
+| `StreamAggregateOp` | Input already ordered by group keys. |
+| `DistinctOp` | Hash set. |
+| `NestedLoopJoinOp` | Outer × inner (with index seek when available). |
+| `HashJoinOp` | Builds a hash on the smaller side, probes. |
+| `MergeJoinOp` | Both sides ordered (after `sort_avoidance`). |
+| `UnionOp` / `UnionAllOp` | Concat plus optional dedupe. |
+| `CTEScanOp` | Reuses a materialised CTE result. |
+| `InsertOp` / `UpdateOp` / `DeleteOp` | DML, writes via `Table` API and `TxLog`. |
+
+External sort: runs up to `mem_budget` (default 64 MB), spills to tempfiles, K-way merge.
+
+Hash join build: if the hash table exceeds the budget, falls back to Grace Hash (partition plus spill).
+
+### xBase scalar UDFs
+
+Registered in `src/sql/func/scalar.cpp`. Subset (~80 functions):
+
+```
+String : LEFT, RIGHT, SUBSTR, AT, RAT, LTRIM, RTRIM, ALLTRIM, PADL, PADR,
+         PADC, REPL, SPACE, UPPER, LOWER, STUFF, STRTRAN, LIKE, MATCH
+Date   : CTOD, DTOS, DTOC, STOD, DAY, MONTH, YEAR, DOW, CMONTH, CDOW,
+         DATE, TIME, NOW, DATEADD, DATEDIFF
+Numeric: STR, VAL, INT, ROUND, MOD, ABS, MAX, MIN, EXP, LOG, SQRT,
+         SIGN, FLOOR, CEILING
+Logic  : IIF, IsNULL, COALESCE, NULLIF, CASE
+Type   : CAST, CONVERT, EMPTY, TYPE
+Misc   : RECNO, RECCOUNT, DELETED, FOUND, EOF, BOF, LASTREC,
+         FIELDNAME, FIELDPOS, FCOUNT
+```
+
+Aggregates: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `STDDEV`, `VARIANCE`, plus xBase `TOTAL`.
+
+The UDF registry allows AEP plugins to add custom functions.
+
+### AEP host (stored procedures)
+
+Advantage Extended Procedures are `.dll` / `.so` plugins exposing a C ABI. Loading and invocation:
+
+```cpp
+// AEP plugin entry (mirrored from the ADS spec):
+extern "C" UNSIGNED32 GetProcInfo(...);
+extern "C" UNSIGNED32 InvokeProc(IInvokeContext*);
+
+// IInvokeContext = ABI exposed by OpenADS to the plugin:
+struct IInvokeContext {
+    UNSIGNED32 (*GetInputRowFieldCount)(...);
+    UNSIGNED32 (*GetInputRowField)(...);
+    UNSIGNED32 (*WriteOutputRow)(...);
+    UNSIGNED32 (*OpenTable)(...);
+    // ... ~30 functions
+};
+```
+
+`AepHost` (`src/sql/aep/host.cpp`):
+
+- Resolves `dll_name + entry` from DD properties `ADS_DD_PROC_DLL_*`.
+- Lazy `dlopen` / `LoadLibrary` on first call.
+- Marshals input / output arguments through a stable ABI.
+- Sandboxing is optional; the plugin runs in-process (matching original ACE — no sandbox).
+
+SQL invocation: `EXECUTE PROCEDURE my_proc(:p1)` causes the planner to emit `AepCallOp`.
+
+Triggers (`BEFORE` / `AFTER INSERT / UPDATE / DELETE`) are AEP plugins fired by `Table::write_record` during DML.
+
+### Prepared statements and cursors
+
+```
+AdsPrepareSQL(hStmt, sql)
+  → parse + resolve + plan + optimize, caches the PhysicalPlan
+  → parameter binding deferred
+AdsExecuteSQL(hStmt)
+  → binds parameters → executes → returns Cursor
+```
+
+Cursor types:
+
+- **Forward-only** (default): `next()` only.
+- **Scrollable** (`AdsCacheRecords ON`): materialised in a tempfile, supports `AdsGotoRecord(n)` and `AdsSkip(-N)`.
+
+`PlanCache` (LRU, key = `SQL hash + schema_version`) avoids re-planning on repeats.
+
+### Result rows backed by a cursor
+
+`AdsGetField(hCursor, fieldName, ...)` reads the current row of the cursor. The cursor keeps a pointer to the row buffer (zero-copy on scans, copy when computed).
+
+### Errors and codes
+
+Mapped to existing ACE codes:
+
+- `7200` AE_PARSE_ERROR
+- `7201` AE_INVALID_SQL_TOKEN
+- `5063` AE_COLUMN_NOT_FOUND
+- `5066` AE_TABLE_NOT_FOUND
+- `7041` AE_TYPE_MISMATCH
+- `7042` AE_DIVISION_BY_ZERO
+- and so on.
+
+### Tests
+
+- `sql_lexer_test.cpp`, `sql_parser_test.cpp` — grammar coverage.
+- `sql_resolver_test.cpp` — name-binding edge cases.
+- `sql_planner_test.cpp` — golden-file plans for canonical queries.
+- `sql_optimizer_test.cpp` — verifies that rules fired (snapshot of the post-optimizer plan).
+- `sql_executor_test.cpp` — end-to-end against fixtures with expected results.
+- `aep_host_test.cpp` — a sample `.dll` / `.so` plugin returning fixed rows.
+- `sql_conformance/` — Advantage SQL test suite derived from official ADS documentation samples.
+
+## Error handling
+
+### Internal model
+
+Internal C++ code uses `Result<T>` (an `expected`-style type in `src/util/result.h`) so error paths are explicit and exceptions are reserved for true programming bugs (`assert`-equivalent contract violations).
+
+```cpp
+template<class T> using Result = std::expected<T, Error>;
+
+struct Error {
+    int32_t  code;        // ACE error code (e.g. 5012)
+    int32_t  sub_code;    // OS errno / GetLastError when applicable
+    std::string message;  // formatted, localised
+    std::string context;  // file, table, recno, sql snippet
+};
+```
+
+Errors propagate via early-return; no exception unwinding through L4.
+
+### ACE error code surface
+
+The L1 ABI returns the canonical `UNSIGNED32` ACE error code on every call. OpenADS reproduces the documented ranges so existing apps reading `AdsGetLastError` see identical numbers:
+
+| Range | Family | Examples |
+|-------|--------|----------|
+| 4000–4999 | Transport / connection | `4001 AE_NETWORK_ERROR`, `4097 AE_INVALID_CONNECTION_HANDLE` |
+| 5000–5999 | Engine / locking / records | `5012 AE_LOCKED`, `5036 AE_NO_CONNECTION`, `5063 AE_COLUMN_NOT_FOUND`, `5066 AE_TABLE_NOT_FOUND` |
+| 6000–6999 | Index / order | `6105 AE_INDEX_NOT_FOUND`, `6106 AE_INDEX_CORRUPT` |
+| 7000–7999 | SQL / parser / type | `7041 AE_TYPE_MISMATCH`, `7200 AE_PARSE_ERROR`, `7201 AE_INVALID_SQL_TOKEN` |
+
+A canonical table lives in `src/abi/error_codes.h`, generated from the documented ACE constants. Anything not yet implemented returns `5004 AE_FUNCTION_NOT_AVAILABLE` rather than a fabricated code, so apps and `rddads` can degrade gracefully.
+
+### `AdsGetLastError` semantics
+
+ACE keeps a per-thread last-error slot. OpenADS replicates this:
+
+```cpp
+thread_local Error g_last_error;
+
+extern "C" UNSIGNED32 AdsGetLastError(UNSIGNED32* pulErr,
+                                      UNSIGNED8* pucBuf,
+                                      UNSIGNED16* pusBufLen) {
+    *pulErr = g_last_error.code;
+    copy_text(pucBuf, pusBufLen, g_last_error.message);
+    return AE_SUCCESS;
+}
+```
+
+Every L1 thunk updates the slot before returning. Successful calls clear it.
+
+### Localised messages
+
+Default English. Optional catalogues for Spanish and Portuguese (large legacy ADS user bases). Selected via `AdsSetLocalizedMessages` or env `OPENADS_LOCALE=es`. Catalogues live in `src/abi/messages_<locale>.cpp`, lookup by `code`.
+
+### Logging / tracing
+
+Three levels controlled by env:
+
+| Var | Effect |
+|-----|--------|
+| `OPENADS_LOG=info` | Connection open / close, table open, SQL executed (truncated) |
+| `OPENADS_LOG=debug` | Plus index seeks, locks acquired, tx boundaries |
+| `OPENADS_LOG=trace` | Every L1 entry / exit with arguments and return code |
+| `OPENADS_LOG_FILE=<path>` | Redirect log; default `stderr` |
+
+`tools/ace-trace` is a separate shim that intercepts every `Ads*` call and writes a structured trace; useful for diffing against original ACE behaviour.
+
+### Failure boundaries
+
+| Boundary | Strategy |
+|----------|----------|
+| L5 (OS) errors | Map errno / `GetLastError` into `Error.sub_code`, surface a 4xxx or 5xxx ACE code |
+| L4 corruption (CRC / LSN mismatch) | Halt access to the affected file, return `5103 AE_TABLE_CORRUPTED`, log details |
+| L3 SQL errors | Return 7xxx range, no abort of the connection |
+| L2 invalid handle | `4097 AE_INVALID_CONNECTION_HANDLE`, no crash |
+| L1 panic (assert) | Last-resort: log and `abort()` only on contract violations during debug builds; release builds convert to `5000 AE_INTERNAL_ERROR` |
+
+## Testing strategy and roadmap
+
+### Test pyramid
+
+| Layer | Tools | Coverage target |
+|-------|-------|-----------------|
+| Unit | doctest, run on every commit | ≥ 85 % per module (engine, drivers, sql, lock, tx) |
+| Integration (in-process) | doctest, real files | Full driver matrix (ADT / CDX / NTX / VFP) × open / write / index / memo / tx |
+| ABI conformance | C harness invoking L1 entry points | All ~230 ACE entry points exercised at least once |
+| Harbour smoke | `harbour_smoke.prg` linked against `rddads` and OpenADS DLL | `tests/datad.prg`, `tests/manage.prg` from `c:\harbour\contrib\rddads\tests\` plus custom xBase scenarios |
+| Byte compatibility | `tools/adt-dump`, `tools/cdx-dump` diff vs ACE-produced fixtures | All write paths produce byte-identical output |
+| Multi-process | Two OpenADS plus optional original ACE on shared files | No corruption, lock semantics match |
+| Fuzzing | libFuzzer over lexer / parser / log replay / driver readers | Zero crashes / UB after N hours |
+| Benchmarks | google-benchmark micro-suite | No regression vs previous tag |
+| Recovery | Crash-injection harness (`kill -9` between LSN boundaries) | Recovery converges deterministically |
+
+### CI matrix
+
+GitHub Actions:
+
+- Compilers: MSVC 2022 (x86 / x64), GCC 11+, Clang 14+, MinGW-w64.
+- OS: Windows 2022, Ubuntu 22.04, macOS 13, FreeBSD 14 (via cross / VM).
+- Sanitisers: ASan, UBSan, TSan on Linux Clang job.
+- Nightly: full Harbour rddads test suite plus byte-compat job against pinned ACE-produced fixtures.
+
+### Phase 1 milestones
+
+| Milestone | Deliverable |
+|-----------|-------------|
+| **M0 — skeleton** | CMake + L5 platform + util + doctest harness. Builds on Win / Linux / macOS. |
+| **M1 — DBF read** | `dbf_common` + CDX driver read-only, no index. `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField` work over a CDX-typed DBF. |
+| **M2 — DBF write + lock** | Append / update / delete + `LockMgr` Compatible mode. NTX driver. Single-process integrity tests. |
+| **M3 — indexes** | CDX read / write, NTX read / write, ADI scaffolding. Seek, scope, AOF basics. |
+| **M4 — ADT + memo** | ADT driver full, `.adm` / `.fpt` / `.dbt` memo stores. VFP driver. Encryption AES-128 / 256. |
+| **M5 — TPS** | TxLog WAL + recovery, savepoints, multi-table atomicity, group commit. Compatible-mode `.lsnmap` overlay. |
+| **M6 — DD** | `.add` reader / writer, users / groups / RI / views / procs metadata, `AdsConnect60` to a DD. |
+| **M7 — SQL** | Lexer / parser / resolver / planner / optimizer / executor. xBase UDFs. AEP host. Triggers. |
+| **M8 — Conformance** | Full Harbour `tests/datad.prg` and `tests/manage.prg` green. Byte-compat job green. Multi-process green. First tagged release `0.1.0`. |
+
+Phase 2 (post-1.0): TCP server reusing L2-L5, wire-protocol design, replication, AIS / HTTP gateways. Out of scope for this document.
 
 ## License
 
