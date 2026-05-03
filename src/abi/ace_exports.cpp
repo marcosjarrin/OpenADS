@@ -8,6 +8,8 @@
 #include "session/connection.h"
 #include "session/handle_registry.h"
 #include "drivers/dbf_common.h"
+#include "drivers/index_trait.h"
+#include "drivers/ntx/ntx_index.h"
 
 #include <cstring>
 #include <memory>
@@ -401,6 +403,254 @@ UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->flush();
     if (!r) return fail(r.error());
+    return ok();
+}
+
+// --- M3 index / scope / seek -----------------------------------------------
+
+namespace {
+
+// Index handles: a single "logical" handle wraps the table-bound order
+// since openads::engine::Table owns the active IIndex via Order. We keep a
+// per-process map so the L1 thunks can resolve the table from the index
+// handle.
+struct IndexBinding { Table* table; std::string tag_name; };
+std::unordered_map<ADSHANDLE, IndexBinding>& index_bindings() {
+    static std::unordered_map<ADSHANDLE, IndexBinding> m;
+    return m;
+}
+
+ADSHANDLE next_index_handle() {
+    static std::uint64_t n = 0x40000000ULL;  // disjoint from table handles
+    return ++n;
+}
+
+Table* table_for_index(ADSHANDLE hIndex) {
+    auto it = index_bindings().find(hIndex);
+    if (it == index_bindings().end()) return nullptr;
+    return it->second.table;
+}
+
+} // namespace
+
+UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
+                        ADSHANDLE* phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
+    }
+    auto path = openads::abi::to_internal(pucName, 0);
+    auto idx = std::make_unique<openads::drivers::ntx::NtxIndex>();
+    if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
+        return fail(r.error());
+    }
+    std::string tag_name = idx->name();
+    t->set_order(std::move(idx));
+    ADSHANDLE h = next_index_handle();
+    index_bindings()[h] = IndexBinding{t, tag_name};
+    *phIndex = h;
+    return ok();
+}
+
+UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    if (it->second.table) it->second.table->clear_order();
+    m.erase(it);
+    return ok();
+}
+
+UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto& m = index_bindings();
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->second.table == t) it = m.erase(it);
+        else                       ++it;
+    }
+    t->clear_order();
+    return ok();
+}
+
+UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
+                          UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
+                          UNSIGNED8* /*pucCondition*/, UNSIGNED32 /*ulOptions*/,
+                          UNSIGNED16 /*usKeyType*/, ADSHANDLE* phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
+    }
+    auto file = openads::abi::to_internal(pucFile, 0);
+    auto tag  = openads::abi::to_internal(pucTag,  0);
+    auto expr = openads::abi::to_internal(pucExpr, 0);
+
+    // Resolve the field referenced by the expression to determine key length.
+    std::int32_t fidx = t->field_index(expr);
+    if (fidx < 0) {
+        return fail(openads::AE_COLUMN_NOT_FOUND,
+                    "AdsCreateIndex: expression must be a bare field name");
+    }
+    std::uint16_t klen = t->field_descriptor(static_cast<std::uint16_t>(fidx)).length;
+
+    auto created = openads::drivers::ntx::NtxIndex::create(
+        file, tag, expr, klen, false, false);
+    if (!created) return fail(created.error());
+
+    auto idx = std::make_unique<openads::drivers::ntx::NtxIndex>(
+        std::move(created).value());
+
+    // Populate from existing records in primary order.
+    auto rec_count = t->record_count();
+    for (std::uint32_t r = 1; r <= rec_count; ++r) {
+        if (auto rr = t->goto_record(r); !rr) return fail(rr.error());
+        auto v = t->read_field(static_cast<std::uint16_t>(fidx));
+        if (!v) return fail(v.error());
+        std::string padded = v.value().as_string;
+        if (padded.size() < klen) padded.append(klen - padded.size(), ' ');
+        if (padded.size() > klen) padded.resize(klen);
+        if (auto ins = idx->insert(r, padded); !ins) return fail(ins.error());
+    }
+    if (auto fl = idx->flush(); !fl) return fail(fl.error());
+
+    t->set_order(std::move(idx));
+    ADSHANDLE h = next_index_handle();
+    index_bindings()[h] = IndexBinding{t, tag};
+    *phIndex = h;
+    return ok();
+}
+
+UNSIGNED32 AdsDeleteIndex(ADSHANDLE hIndex) {
+    return AdsCloseIndex(hIndex);
+}
+
+UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
+    Table* t = get_table(hTable);
+    if (!t || pusCount == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    *pusCount = t->order() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
+                             ADSHANDLE* phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto name = openads::abi::to_internal(pucName, 0);
+    for (auto& [h, b] : index_bindings()) {
+        if (b.table == t && b.tag_name == name) { *phIndex = h; return ok(); }
+    }
+    return fail(openads::AE_INTERNAL_ERROR, "index name not found");
+}
+
+UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 /*usOrder*/,
+                                    ADSHANDLE* phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    for (auto& [h, b] : index_bindings()) {
+        if (b.table == t) { *phIndex = h; return ok(); }
+    }
+    return fail(openads::AE_INTERNAL_ERROR, "no active index");
+}
+
+UNSIGNED32 AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                           UNSIGNED16* pusBufLen) {
+    Table* t = table_for_index(hIndex);
+    if (!t || !t->order() || !t->order()->index()) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusBufLen,
+                                 t->order()->index()->expression());
+    return ok();
+}
+
+UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                           UNSIGNED16* pusBufLen) {
+    Table* t = table_for_index(hIndex);
+    if (!t || !t->order() || !t->order()->index()) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    }
+    openads::abi::copy_to_caller(pucBuf, pusBufLen,
+                                 t->order()->index()->name());
+    return ok();
+}
+
+UNSIGNED32 AdsSetIndexDirection(ADSHANDLE /*hIndex*/, UNSIGNED16 /*usDir*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsSetIndexDirection deferred");
+}
+
+UNSIGNED32 AdsSeek(ADSHANDLE hIndex, UNSIGNED8* pucKey,
+                   UNSIGNED16 usOption, UNSIGNED16* pbFound) {
+    Table* t = table_for_index(hIndex);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    auto key = openads::abi::to_internal(pucKey, 0);
+    bool soft = (usOption & ADS_SOFTSEEK) != 0;
+    auto r = t->seek_key(key, soft);
+    if (!r) return fail(r.error());
+    if (pbFound != nullptr) *pbFound = r.value() ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex, UNSIGNED8* pucKey,
+                       UNSIGNED16* pbFound) {
+    return AdsSeek(hIndex, pucKey, 0, pbFound);
+}
+
+UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
+                       UNSIGNED8* pucKey) {
+    Table* t = table_for_index(hIndex);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    auto key = openads::abi::to_internal(pucKey, 0);
+    auto r = t->set_scope(usScope == ADS_TOP, key);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
+    Table* t = table_for_index(hIndex);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    auto r = t->clear_scope(usScope == ADS_TOP);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
+                       UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    Table* t = table_for_index(hIndex);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    auto s = t->get_scope(usScope == ADS_TOP);
+    openads::abi::copy_to_caller(pucBuf, pusLen, s.value_or(""));
+    return ok();
+}
+
+UNSIGNED32 AdsPackTable(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsPackTable lands in M4 alongside memo store");
+}
+
+UNSIGNED32 AdsZapTable(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsZapTable lands in M4 alongside memo store");
+}
+
+UNSIGNED32 AdsSetAOF(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucCondition*/,
+                     UNSIGNED16 /*usResolve*/) {
+    return ok();   // accept silently; AOF level remains NONE
+}
+
+UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE /*hTable*/, UNSIGNED16* pusLevel,
+                             UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
+    if (pusLevel != nullptr) *pusLevel = ADS_OPTIMIZED_NONE;
+    return ok();
+}
+
+UNSIGNED32 AdsClearAOF(ADSHANDLE /*hTable*/) {
     return ok();
 }
 

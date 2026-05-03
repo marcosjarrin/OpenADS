@@ -88,6 +88,50 @@ UNSIGNED32 AdsUnlockTable   (ADSHANDLE hTable);
 
 UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable);
 
+UNSIGNED32 AdsOpenIndex     (ADSHANDLE hTable, UNSIGNED8* pucName,
+                              ADSHANDLE* phIndex);
+UNSIGNED32 AdsCloseIndex    (ADSHANDLE hIndex);
+UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable);
+UNSIGNED32 AdsCreateIndex   (ADSHANDLE hTable, UNSIGNED8* pucFile,
+                              UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
+                              UNSIGNED8* pucCondition, UNSIGNED32 ulOptions,
+                              UNSIGNED16 usKeyType, ADSHANDLE* phIndex);
+UNSIGNED32 AdsDeleteIndex   (ADSHANDLE hIndex);
+UNSIGNED32 AdsGetNumIndexes (ADSHANDLE hTable, UNSIGNED16* pusCount);
+UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
+                              ADSHANDLE* phIndex);
+UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
+                                    ADSHANDLE* phIndex);
+UNSIGNED32 AdsGetIndexExpr  (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                              UNSIGNED16* pusBufLen);
+UNSIGNED32 AdsGetIndexName  (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                              UNSIGNED16* pusBufLen);
+UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir);
+
+UNSIGNED32 AdsSeek          (ADSHANDLE hIndex, UNSIGNED8* pucKey,
+                              UNSIGNED16 usOption, UNSIGNED16* pbFound);
+UNSIGNED32 AdsSeekLast      (ADSHANDLE hIndex, UNSIGNED8* pucKey,
+                              UNSIGNED16* pbFound);
+
+UNSIGNED32 AdsSetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,
+                              UNSIGNED8* pucKey);
+UNSIGNED32 AdsClearScope    (ADSHANDLE hIndex, UNSIGNED16 usScope);
+UNSIGNED32 AdsGetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,
+                              UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+
+UNSIGNED32 AdsPackTable     (ADSHANDLE hTable);
+UNSIGNED32 AdsZapTable      (ADSHANDLE hTable);
+UNSIGNED32 AdsSetAOF        (ADSHANDLE hTable, UNSIGNED8* pucCondition,
+                              UNSIGNED16 usResolve);
+UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
+                              UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+UNSIGNED32 AdsClearAOF      (ADSHANDLE hTable);
+
+#define ADS_TOP            0
+#define ADS_BOTTOM         1
+#define ADS_SOFTSEEK       1
+#define ADS_OPTIMIZED_NONE 3
+
 #define ADS_FIELD_TYPE_CHAR       1
 #define ADS_FIELD_TYPE_NUMERIC    2
 #define ADS_FIELD_TYPE_LOGICAL    3
