@@ -1,1 +1,117 @@
-// placeholder, real content lands in a later task
+#ifdef _WIN32
+
+#include "platform/file.h"
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+namespace openads::platform {
+
+namespace {
+
+util::Error os_error(const char* op) {
+    DWORD code = ::GetLastError();
+    util::Error e;
+    e.code = (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND)
+                 ? 5103   // AE_TABLE_NOT_FOUND-style placeholder
+                 : 5000;  // AE_INTERNAL_ERROR placeholder
+    e.sub_code = static_cast<std::int32_t>(code);
+    e.message = op;
+    return e;
+}
+
+} // namespace
+
+File::File(File&& other) noexcept : native_(other.native_) {
+    other.native_ = nullptr;
+}
+
+File& File::operator=(File&& other) noexcept {
+    if (this != &other) {
+        close_();
+        native_ = other.native_;
+        other.native_ = nullptr;
+    }
+    return *this;
+}
+
+File::~File() { close_(); }
+
+void File::close_() noexcept {
+    if (native_ != nullptr) {
+        ::CloseHandle(reinterpret_cast<HANDLE>(native_));
+        native_ = nullptr;
+    }
+}
+
+util::Result<File> File::open(const std::string& path, OpenMode mode) {
+    DWORD access = 0;
+    DWORD share  = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    DWORD disp   = OPEN_EXISTING;
+    switch (mode) {
+        case OpenMode::ReadOnly:
+            access = GENERIC_READ;
+            break;
+        case OpenMode::ReadWrite:
+            access = GENERIC_READ | GENERIC_WRITE;
+            break;
+        case OpenMode::CreateRW:
+            access = GENERIC_READ | GENERIC_WRITE;
+            disp   = CREATE_ALWAYS;
+            break;
+        case OpenMode::OpenExisting:
+            access = GENERIC_READ | GENERIC_WRITE;
+            disp   = OPEN_EXISTING;
+            break;
+    }
+    HANDLE h = ::CreateFileA(path.c_str(), access, share, nullptr, disp,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return os_error("CreateFileA");
+    return File{h};
+}
+
+util::Result<std::size_t> File::read_at(std::uint64_t offset,
+                                        void* buf, std::size_t n) {
+    OVERLAPPED ov{};
+    ov.Offset     = static_cast<DWORD>(offset & 0xFFFFFFFFu);
+    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
+    DWORD got = 0;
+    if (!::ReadFile(reinterpret_cast<HANDLE>(native_), buf,
+                    static_cast<DWORD>(n), &got, &ov)) {
+        DWORD code = ::GetLastError();
+        if (code != ERROR_HANDLE_EOF) return os_error("ReadFile");
+    }
+    return static_cast<std::size_t>(got);
+}
+
+util::Result<std::size_t> File::write_at(std::uint64_t offset,
+                                         const void* buf, std::size_t n) {
+    OVERLAPPED ov{};
+    ov.Offset     = static_cast<DWORD>(offset & 0xFFFFFFFFu);
+    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
+    DWORD wrote = 0;
+    if (!::WriteFile(reinterpret_cast<HANDLE>(native_), buf,
+                     static_cast<DWORD>(n), &wrote, &ov)) {
+        return os_error("WriteFile");
+    }
+    return static_cast<std::size_t>(wrote);
+}
+
+util::Result<std::uint64_t> File::size() const {
+    LARGE_INTEGER li{};
+    if (!::GetFileSizeEx(reinterpret_cast<HANDLE>(native_), &li)) {
+        return os_error("GetFileSizeEx");
+    }
+    return static_cast<std::uint64_t>(li.QuadPart);
+}
+
+util::Result<void> File::sync() {
+    if (!::FlushFileBuffers(reinterpret_cast<HANDLE>(native_))) {
+        return os_error("FlushFileBuffers");
+    }
+    return {};
+}
+
+} // namespace openads::platform
+
+#endif // _WIN32
