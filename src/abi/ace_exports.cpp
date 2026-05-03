@@ -847,4 +847,47 @@ UNSIGNED32 AdsDecryptRecord(ADSHANDLE /*hTable*/) {
                 "AdsDecryptRecord pending ADS encryption-mode RE");
 }
 
+// --- M5 transaction surface (in-memory; WAL persistence pending) -----------
+
+UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = c->begin_tx();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsCommitTransaction(ADSHANDLE hConnect) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = c->commit_tx();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto r = c->rollback_tx();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c || pbInTx == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    *pbInTx = c->in_tx() ? 1 : 0;
+    return ok();
+}
+
 } // extern "C"

@@ -72,8 +72,72 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     }
 
     Handle h = next_table_handle_++;
+    if (tx_.active()) {
+        holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
+    }
     tables_.emplace(h, std::move(holder));
     return h;
+}
+
+util::Result<void> Connection::begin_tx() {
+    if (tx_.active()) {
+        return util::Error{5000, 0, "transaction already active", ""};
+    }
+    tx_.activate(next_tx_id_++);
+    for (auto& [h, holder] : tables_) {
+        holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
+    }
+    return {};
+}
+
+util::Result<void> Connection::commit_tx() {
+    if (!tx_.active()) {
+        return util::Error{5000, 0, "no active transaction", ""};
+    }
+    for (auto& [h, holder] : tables_) {
+        (void)h;
+        holder->detach_tx();
+        // Persist driver buffers; without a WAL, durability ends at flush.
+        (void)holder->flush();
+    }
+    tx_.clear();
+    return {};
+}
+
+util::Result<void> Connection::rollback_tx() {
+    if (!tx_.active()) {
+        return util::Error{5000, 0, "no active transaction", ""};
+    }
+    // Restore before-images.
+    tx_.for_each_before_image(
+        [&](const engine::Tx::RecordKey& k,
+            const std::vector<std::uint8_t>& bytes) {
+            auto it = tables_.find(static_cast<Handle>(k.table));
+            if (it == tables_.end()) return;
+            auto* drv = it->second->driver();
+            if (drv) {
+                (void)drv->write_record_raw(k.recno, bytes.data(), bytes.size());
+            }
+        });
+    // Mark records appended in this tx as deleted.
+    tx_.for_each_append([&](const engine::Tx::RecordKey& k) {
+        auto it = tables_.find(static_cast<Handle>(k.table));
+        if (it == tables_.end()) return;
+        auto* drv = it->second->driver();
+        if (!drv) return;
+        auto rec = drv->read_record_raw(k.recno);
+        if (!rec) return;
+        auto buf = std::move(rec).value();
+        openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
+        (void)drv->write_record_raw(k.recno, buf.data(), buf.size());
+    });
+    for (auto& [h, holder] : tables_) {
+        (void)h;
+        holder->detach_tx();
+        (void)holder->flush();
+    }
+    tx_.clear();
+    return {};
 }
 
 void Connection::close_table(Handle h) {

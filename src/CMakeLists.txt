@@ -29,6 +29,7 @@ add_library(openads_core STATIC
     engine/lock_mgr.cpp
     engine/order.cpp
     engine/aes.cpp
+    engine/tx.cpp
     drivers/dbf_common.cpp
     drivers/cdx/cdx_driver.cpp
     drivers/cdx/cdx_index.cpp

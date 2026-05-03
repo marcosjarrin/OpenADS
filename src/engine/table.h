@@ -6,6 +6,7 @@
 #include "drivers/memo_trait.h"
 #include "engine/lock_mgr.h"
 #include "engine/order.h"
+#include "engine/tx.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -72,6 +73,16 @@ public:
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
     drivers::IMemoStore* memo() noexcept { return memo_.get(); }
 
+    // Transaction binding (M5). When a Connection has an active Tx,
+    // it points each open Table at it via attach_tx so Table writes
+    // record before-images for rollback.
+    void               attach_tx(Tx* tx, Tx::TableId tid) noexcept {
+        tx_ = tx; tid_ = tid;
+    }
+    void               detach_tx() noexcept { tx_ = nullptr; }
+
+    drivers::IDriver*  driver() noexcept { return driver_.get(); }
+
     // Order + scope surface (M3).
     void               set_order(std::unique_ptr<drivers::IIndex> idx);
     void               clear_order();
@@ -101,6 +112,8 @@ private:
 
     std::unique_ptr<drivers::IDriver>             driver_;
     std::unique_ptr<drivers::IMemoStore>          memo_;
+    Tx*                                           tx_       = nullptr;
+    Tx::TableId                                   tid_      = 0;
     OpenMode                                      mode_     = OpenMode::Read;
     LockingMode                                   locking_  = LockingMode::Compatible;
     TableType                                     type_     = TableType::Cdx;

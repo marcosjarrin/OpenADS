@@ -69,6 +69,12 @@ util::Result<void> Table::writeback_record_() {
     if (state_ != State::Positioned) {
         return util::Error{5000, 0, "no record positioned", ""};
     }
+    if (tx_ && tx_->active()) {
+        auto cur = driver_->read_record_raw(recno_);
+        if (cur) {
+            tx_->note_before_image(tid_, recno_, std::move(cur).value());
+        }
+    }
     return driver_->write_record_raw(recno_, record_buf_.data(),
                                      record_buf_.size());
 }
@@ -216,6 +222,9 @@ util::Result<void> Table::append_record() {
     record_buf_ = std::move(rec);
     recno_      = new_recno.value();
     state_      = State::Positioned;
+    if (tx_ && tx_->active()) {
+        tx_->note_append(tid_, recno_);
+    }
     return {};
 }
 

@@ -147,6 +147,11 @@ UNSIGNED32 AdsDecryptTable     (ADSHANDLE hTable);
 UNSIGNED32 AdsEncryptRecord    (ADSHANDLE hTable);
 UNSIGNED32 AdsDecryptRecord    (ADSHANDLE hTable);
 
+UNSIGNED32 AdsBeginTransaction   (ADSHANDLE hConnect);
+UNSIGNED32 AdsCommitTransaction  (ADSHANDLE hConnect);
+UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect);
+UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
+
 #define ADS_TOP            0
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1
