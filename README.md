@@ -973,7 +973,7 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 
 | Milestone | Plan | Status |
 |-----------|------|--------|
-| **M0 — Skeleton** | [`2026-05-03-openads-m0-skeleton.md`](docs/superpowers/plans/2026-05-03-openads-m0-skeleton.md) | Plan ready, awaiting execution. CMake project, L5 platform layer (file / lock / mmap / path / time / thread), `util/Result<T>` / `Span<T>` / `Log`, doctest harness, GitHub Actions matrix (Windows / Linux / macOS). |
+| **M0 — Skeleton** | [`2026-05-03-openads-m0-skeleton.md`](docs/superpowers/plans/2026-05-03-openads-m0-skeleton.md) | **Done.** CMake project, L5 platform layer (file / lock / mmap / path / time / thread), `util/Result<T>` / `Span<T>` / `Log`, doctest harness (27 cases / 77 assertions), GitHub Actions matrix (Windows / Linux / macOS). |
 | **M1 — DBF read (CDX)** | TBD | Read-only path: `Connection`, `Table`, `Cursor` for DBF + CDX-typed table. `AdsConnect60` / `AdsOpenTable` / `AdsGotoTop` / `AdsSkip` / `AdsGetField`. |
 | **M2 — DBF write + LockMgr** | TBD | Append / update / delete, `LockMgr` Compatible mode, NTX driver. Single-process integrity tests. |
 | **M3 — Indexes** | TBD | CDX read / write, NTX read / write, ADI scaffolding, seek / scope / AOF basics. |
