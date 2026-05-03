@@ -339,12 +339,21 @@ util::Result<SeekOutcome> CdxIndex::seek_first() {
             if (!pg) return pg.error();
             std::uint16_t at = read_u16_le(pg.value()->data());
             if (at & CDX_NODE_LEAF) { cur_leaf_ = cur; break; }
-            // Branch entries: each is keySize+8 bytes; first child at
-            // offset 12 + keySize + 4.
+            // Per FoxPro / Harbour hb_cdxPageGetKeyPage
+            // (dbfcdx1.c:1544-1556): an internal entry is laid out as
+            //   key_data[keylen]   recno[4 BE]   child[4 BE]
+            // and the child of entry i lives at (i+1)*(keylen+8)-4 from
+            // the start of the entry pool. For the leftmost descent we
+            // use entry 0, i.e. CDX_INT_HEADSIZE + keylen + 4.
             std::uint8_t* base = pg.value()->data();
             std::uint16_t nkeys = read_u16_le(base + 2);
             if (nkeys == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
-            cur = read_u32_le(base + CDX_INT_HEADSIZE + key_size_ + 4);
+            const std::uint8_t* child_ptr =
+                base + CDX_INT_HEADSIZE + key_size_ + 4;
+            cur =  (static_cast<std::uint32_t>(child_ptr[0]) << 24) |
+                   (static_cast<std::uint32_t>(child_ptr[1]) << 16) |
+                   (static_cast<std::uint32_t>(child_ptr[2]) <<  8) |
+                    static_cast<std::uint32_t>(child_ptr[3]);
         }
     }
 
