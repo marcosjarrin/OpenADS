@@ -183,3 +183,56 @@ TEST_CASE("NtxIndex prev walks backwards") {
     }
     fs::remove(p);
 }
+
+TEST_CASE("NtxIndex create then insert + reopen finds the keys") {
+    auto p = fs::temp_directory_path() / "openads_m3_ntx_create.ntx";
+    fs::remove(p);
+    {
+        auto created = NtxIndex::create(p.string(), "T1", "TAG", 4, false, false);
+        REQUIRE(created.has_value());
+        NtxIndex ix = std::move(created).value();
+        REQUIRE(ix.insert(1, "BBBB").has_value());
+        REQUIRE(ix.insert(2, "AAAA").has_value());
+        REQUIRE(ix.insert(3, "CCCC").has_value());
+        REQUIRE(ix.flush().has_value());
+    }
+    {
+        NtxIndex ix;
+        REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
+        auto a = ix.seek_first();
+        REQUIRE(a.has_value());
+        CHECK(ix.current_key() == "AAAA");
+        REQUIRE(ix.next().has_value());
+        CHECK(ix.current_key() == "BBBB");
+        REQUIRE(ix.next().has_value());
+        CHECK(ix.current_key() == "CCCC");
+    }
+    fs::remove(p);
+}
+
+TEST_CASE("NtxIndex erase removes a key") {
+    auto p = fs::temp_directory_path() / "openads_m3_ntx_erase.ntx";
+    fs::remove(p);
+    {
+        auto created = NtxIndex::create(p.string(), "T1", "TAG", 4, false, false);
+        REQUIRE(created.has_value());
+        NtxIndex ix = std::move(created).value();
+        REQUIRE(ix.insert(1, "AAAA").has_value());
+        REQUIRE(ix.insert(2, "BBBB").has_value());
+        REQUIRE(ix.insert(3, "CCCC").has_value());
+        REQUIRE(ix.erase(2, "BBBB").has_value());
+        REQUIRE(ix.flush().has_value());
+    }
+    {
+        NtxIndex ix;
+        REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
+        REQUIRE(ix.seek_first().has_value());
+        CHECK(ix.current_key() == "AAAA");
+        REQUIRE(ix.next().has_value());
+        CHECK(ix.current_key() == "CCCC");
+        auto end = ix.next();
+        REQUIRE(end.has_value());
+        CHECK_FALSE(end.value().positioned);
+    }
+    fs::remove(p);
+}

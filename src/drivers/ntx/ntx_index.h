@@ -46,8 +46,9 @@ public:
                bool               unique,
                bool               descend);
 
-private:
     using Page = std::array<std::uint8_t, NTX_PAGE_SIZE>;
+
+private:
 
     struct StackFrame {
         std::uint32_t page;
