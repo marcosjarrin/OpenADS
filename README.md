@@ -6,7 +6,66 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-Phase 1 in design. No code yet.
+**0.1.0-rc1** — drop-in replacement validated end-to-end.
+
+A real Harbour application, compiled against the standard
+`contrib/rddads` static library, opens a DBF, walks records, runs
+`dbSeek`, appends rows, writes per-field values, and reopens to
+verify durability — all calls land on OpenADS' `ace64.dll` with no
+Harbour rebuild. See `tests/harbour_smoke/README.md` for the full
+captured output.
+
+```
+$ smoke.exe
+OpenADS smoke test
+ACE DLL reports: 0.0a
+Schema:
+  1 NAME   C len=10 dec=0
+  2 AGE    N len= 3 dec=0
+  3 ACTIVE L len= 1 dec=0
+  4 BORN   D len= 8 dec=0
+Walk in NAME order: ALPHA, BETA, GAMMA
+Append + write back...
+Reopen & dbSeek 'DELTA': Found=T NAME=[DELTA] AGE=99 ACTIVE=F BORN=20260101
+Done.
+```
+
+### What works in 0.1.0-rc1
+
+- **DBF read/write** — Character / Numeric / Logical / Date columns,
+  positional + by-name field access, APPEND BLANK, per-field
+  assignment, deletion flag, durable flush.
+- **CDX index** — compound layout (multi-tag-per-file, see M3.10),
+  B+tree leaf splits, branch descent, dbSeek (exact + soft), index
+  walk, auto-sync on dbAppend / FIELD-> := value.
+- **NTX index** — multi-level next/prev via cache-based traversal,
+  leaf-split fix.
+- **WAL recovery** — group commit, per-record LSN, idempotent
+  recovery via `openads.lsnmap` sidecar.
+- **AES-128 / AES-256 ECB** — FIPS-197 vectors pass.
+- **Memo (DBT / FPT)** — read + write round-trip.
+- **Data Dictionary** — `.add` alias resolution.
+- **Minimal SQL** — `SELECT * FROM ... [WHERE col op 'lit' ...]`.
+- **226 `Ads*` exports** — every entry point Harbour `rddads.lib`
+  references resolves cleanly through the OpenADS DLL.
+- **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
+  `_kbhit`, `_eof` exported from `ace64.dll` so apps built against
+  Harbour's prebuilt MSVC2013-era libs link without rebuilding
+  Harbour itself.
+
+### What's deferred to 0.2.0
+
+- Multi-tag focus through `OrdSetFocus` (M8.9).
+- Harbour `BeginTransaction` / `CommitTransaction` end-to-end smoke
+  (M8.10 — engine-side WAL is M5.4/M5.5 done; ABI plumbing pending).
+- Memo M-field round-trip via Harbour `FieldGet` / `FieldPut` (M8.11).
+- Compound CDX expressions (`UPPER(NAME)`, concatenations) in
+  `Table::compute_index_key_`.
+- Real impls for the 140 remaining `Ads*` stubs.
+- Linux / macOS / BSD builds (the engine is portable; only the
+  Harbour smoke is Windows-anchored today).
+- Full Advantage SQL dialect, AEP host, ADT / VFP / ADI formats,
+  remote TCP server.
 
 ## Phase 1 scope
 
