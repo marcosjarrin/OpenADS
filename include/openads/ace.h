@@ -127,10 +127,32 @@ UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
 UNSIGNED32 AdsClearAOF      (ADSHANDLE hTable);
 
+UNSIGNED32 AdsGetMemoLength    (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED32* pulLen);
+UNSIGNED32 AdsGetMemoDataType  (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16* pusType);
+UNSIGNED32 AdsBinaryToFile     (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED8* pucPath);
+UNSIGNED32 AdsFileToBinary     (ADSHANDLE hTable, UNSIGNED8* pucField,
+                                 UNSIGNED16 usType, UNSIGNED8* pucPath);
+UNSIGNED32 AdsGetLastAutoinc   (ADSHANDLE hTable, UNSIGNED32* pulValue);
+
+UNSIGNED32 AdsEnableEncryption (ADSHANDLE hConnect, UNSIGNED8* pucPassword);
+UNSIGNED32 AdsDisableEncryption(ADSHANDLE hConnect);
+UNSIGNED32 AdsIsEncryptionEnabled(ADSHANDLE hConnect, UNSIGNED16* pbEnabled);
+UNSIGNED32 AdsIsTableEncrypted (ADSHANDLE hTable, UNSIGNED16* pbEncrypted);
+UNSIGNED32 AdsIsRecordEncrypted(ADSHANDLE hTable, UNSIGNED16* pbEncrypted);
+UNSIGNED32 AdsEncryptTable     (ADSHANDLE hTable);
+UNSIGNED32 AdsDecryptTable     (ADSHANDLE hTable);
+UNSIGNED32 AdsEncryptRecord    (ADSHANDLE hTable);
+UNSIGNED32 AdsDecryptRecord    (ADSHANDLE hTable);
+
 #define ADS_TOP            0
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1
 #define ADS_OPTIMIZED_NONE 3
+#define ADS_MEMO_TEXT      1
+#define ADS_MEMO_PICTURE   0
 
 #define ADS_FIELD_TYPE_CHAR       1
 #define ADS_FIELD_TYPE_NUMERIC    2

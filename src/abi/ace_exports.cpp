@@ -707,4 +707,144 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE /*hTable*/) {
     return ok();
 }
 
+// --- M4 memo + autoinc + encryption ----------------------------------------
+
+UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+                            UNSIGNED32* pulLen) {
+    Table* t = get_table(hTable);
+    if (!t || pulLen == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto name = openads::abi::to_internal(pucField, 0);
+    std::int32_t idx = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    auto v = t->read_field(static_cast<std::uint16_t>(idx));
+    if (!v) return fail(v.error());
+    *pulLen = static_cast<UNSIGNED32>(v.value().as_string.size());
+    return ok();
+}
+
+UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* /*pucField*/,
+                              UNSIGNED16* pusType) {
+    Table* t = get_table(hTable);
+    if (!t || pusType == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    // OpenADS memo stores currently treat all payloads as text.
+    *pusType = ADS_MEMO_TEXT;
+    return ok();
+}
+
+UNSIGNED32 AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
+                           UNSIGNED8* pucPath) {
+    Table* t = get_table(hTable);
+    if (!t || pucPath == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto name = openads::abi::to_internal(pucField, 0);
+    std::int32_t idx = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    auto v = t->read_field(static_cast<std::uint16_t>(idx));
+    if (!v) return fail(v.error());
+    auto path = openads::abi::to_internal(pucPath, 0);
+    auto fres = openads::platform::File::open(
+        path, openads::platform::OpenMode::CreateRW);
+    if (!fres) return fail(fres.error());
+    auto file = std::move(fres).value();
+    const auto& payload = v.value().as_string;
+    auto wrote = file.write_at(0, payload.data(), payload.size());
+    if (!wrote) return fail(wrote.error());
+    return ok();
+}
+
+UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
+                           UNSIGNED16 /*usType*/, UNSIGNED8* pucPath) {
+    Table* t = get_table(hTable);
+    if (!t || pucPath == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    auto path = openads::abi::to_internal(pucPath, 0);
+    auto fres = openads::platform::File::open(
+        path, openads::platform::OpenMode::ReadOnly);
+    if (!fres) return fail(fres.error());
+    auto file = std::move(fres).value();
+    auto sz = file.size();
+    if (!sz) return fail(sz.error());
+    std::string payload;
+    payload.resize(static_cast<std::size_t>(sz.value()));
+    if (!payload.empty()) {
+        auto rd = file.read_at(0, payload.data(), payload.size());
+        if (!rd) return fail(rd.error());
+    }
+    auto name = openads::abi::to_internal(pucField, 0);
+    std::int32_t idx = t->field_index(name);
+    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    auto r = t->set_field(static_cast<std::uint16_t>(idx), payload);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsGetLastAutoinc(ADSHANDLE hTable, UNSIGNED32* pulValue) {
+    Table* t = get_table(hTable);
+    if (!t || pulValue == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
+    // ADT/VFP autoinc tracking lands when those drivers gain extended
+    // type support. For now report 0 — the field still reads as part
+    // of the record buffer for non-autoinc types.
+    *pulValue = 0;
+    return ok();
+}
+
+// Encryption thunks. The AES primitive is real (engine::Aes, validated
+// against FIPS-197 / NIST SP 800-38A); the record-level boundary that
+// marks a table encrypted on disk and re-keys per-record is part of a
+// later milestone alongside ADT, since ADS-original encryption mode
+// is not yet documented byte-for-byte. The thunks below behave as
+// no-ops or fail with AE_FUNCTION_NOT_AVAILABLE.
+
+UNSIGNED32 AdsEnableEncryption(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucPassword*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsEnableEncryption pending ADS encryption-mode RE");
+}
+
+UNSIGNED32 AdsDisableEncryption(ADSHANDLE /*hConnect*/) {
+    return ok();
+}
+
+UNSIGNED32 AdsIsEncryptionEnabled(ADSHANDLE /*hConnect*/, UNSIGNED16* pbEnabled) {
+    if (pbEnabled != nullptr) *pbEnabled = 0;
+    return ok();
+}
+
+UNSIGNED32 AdsIsTableEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
+    if (pbEncrypted != nullptr) *pbEncrypted = 0;
+    return ok();
+}
+
+UNSIGNED32 AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
+    if (pbEncrypted != nullptr) *pbEncrypted = 0;
+    return ok();
+}
+
+UNSIGNED32 AdsEncryptTable(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsEncryptTable pending ADS encryption-mode RE");
+}
+
+UNSIGNED32 AdsDecryptTable(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsDecryptTable pending ADS encryption-mode RE");
+}
+
+UNSIGNED32 AdsEncryptRecord(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsEncryptRecord pending ADS encryption-mode RE");
+}
+
+UNSIGNED32 AdsDecryptRecord(ADSHANDLE /*hTable*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                "AdsDecryptRecord pending ADS encryption-mode RE");
+}
+
 } // extern "C"
