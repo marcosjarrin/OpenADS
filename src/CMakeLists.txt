@@ -69,3 +69,34 @@ target_link_libraries(openads_core PRIVATE openads_aes_impl)
 if(UNIX)
     target_link_libraries(openads_core PUBLIC pthread)
 endif()
+
+# ----------------------------------------------------------------------
+# Drop-in replacement DLL: ace32.dll (x86) / ace64.dll (x64).
+# Harbour's contrib/rddads links against ace32.lib / ace64.lib import
+# libraries; placing this DLL on PATH replaces the SAP-shipped
+# ace32.dll / ace64.dll without recompiling consuming applications.
+# ----------------------------------------------------------------------
+add_library(openads_ace SHARED
+    abi/ace_exports.cpp
+    abi/charset.cpp
+    abi/last_error.cpp
+)
+
+if(WIN32)
+    target_sources(openads_ace PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/openads_ace.def)
+endif()
+
+target_include_directories(openads_ace
+    PUBLIC  ${CMAKE_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/third_party/tinyaes
+)
+
+target_link_libraries(openads_ace PRIVATE openads_core)
+
+# Output name follows ACE convention.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "ace64")
+else()
+    set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "ace32")
+endif()
