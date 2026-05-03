@@ -14,14 +14,17 @@ namespace openads::sql {
 // WHERE, AND/OR, ORDER BY, projection lists, joins, subqueries, and
 // aggregates land in subsequent milestones.
 
-struct WhereEq {
+enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge };
+
+struct WhereCmp {
     std::string column;
+    WhereOp     op = WhereOp::Eq;
     std::string literal;   // raw string content, unquoted
 };
 
 struct SelectStmt {
-    std::string             table;
-    std::optional<WhereEq>  where;
+    std::string              table;
+    std::optional<WhereCmp>  where;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);

@@ -1081,11 +1081,22 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::int32_t fidx = tbl->field_index(w.column);
         if (fidx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
         std::string literal = w.literal;
+        openads::sql::WhereOp op = w.op;
         std::uint16_t fi = static_cast<std::uint16_t>(fidx);
-        tbl->set_filter([fi, literal](openads::engine::Table& t) {
+        tbl->set_filter([fi, literal, op](openads::engine::Table& t) {
             auto v = t.read_field(fi);
             if (!v) return false;
-            return v.value().as_string == literal;
+            const std::string& s = v.value().as_string;
+            int cmp = s.compare(literal);
+            switch (op) {
+                case openads::sql::WhereOp::Eq: return cmp == 0;
+                case openads::sql::WhereOp::Ne: return cmp != 0;
+                case openads::sql::WhereOp::Lt: return cmp <  0;
+                case openads::sql::WhereOp::Gt: return cmp >  0;
+                case openads::sql::WhereOp::Le: return cmp <= 0;
+                case openads::sql::WhereOp::Ge: return cmp >= 0;
+            }
+            return false;
         });
     }
 

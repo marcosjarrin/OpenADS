@@ -58,6 +58,18 @@ public:
         return false;
     }
 
+    bool match_seq(const char* seq) {
+        skip_ws();
+        std::size_t len = 0;
+        while (seq[len] != '\0') ++len;
+        if (pos_ + len > s_.size()) return false;
+        for (std::size_t i = 0; i < len; ++i) {
+            if (s_[pos_ + i] != seq[i]) return false;
+        }
+        pos_ += len;
+        return true;
+    }
+
     std::string read_identifier_or_filename() {
         skip_ws();
         std::string out;
@@ -133,16 +145,24 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected table name", sql};
     }
 
-    // Optional single-equality WHERE.
+    // Optional single-comparison WHERE.
     if (c.match_keyword("WHERE")) {
-        WhereEq w;
+        WhereCmp w;
         w.column = c.read_identifier();
         if (w.column.empty()) {
             return util::Error{7200, 0, "expected column name after WHERE", sql};
         }
-        if (!c.match_char('=')) {
+        c.skip_ws();
+        if      (c.match_seq("<=")) w.op = WhereOp::Le;
+        else if (c.match_seq(">=")) w.op = WhereOp::Ge;
+        else if (c.match_seq("<>")) w.op = WhereOp::Ne;
+        else if (c.match_seq("!=")) w.op = WhereOp::Ne;
+        else if (c.match_char('=')) w.op = WhereOp::Eq;
+        else if (c.match_char('<')) w.op = WhereOp::Lt;
+        else if (c.match_char('>')) w.op = WhereOp::Gt;
+        else {
             return util::Error{7200, 0,
-                "M7.x WHERE supports only `column = '<literal>'`", sql};
+                "expected =, !=, <>, <, >, <= or >= after column name", sql};
         }
         auto lit = c.read_string_literal();
         if (!lit) return lit.error();

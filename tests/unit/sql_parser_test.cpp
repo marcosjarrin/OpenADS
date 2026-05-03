@@ -50,10 +50,25 @@ TEST_CASE("parse_select WHERE accepts case-insensitive keyword and tight whitesp
     CHECK(r.value().where->literal == "Anna");
 }
 
-TEST_CASE("parse_select WHERE rejects non-equality operators") {
-    auto r = parse_select("SELECT * FROM x WHERE TAG > 'A'");
-    CHECK_FALSE(r.has_value());
-    CHECK(r.error().code == 7200);
+TEST_CASE("parse_select WHERE accepts each comparison operator") {
+    using openads::sql::WhereOp;
+    struct Case { const char* op; WhereOp expected; };
+    Case cases[] = {
+        {"=",  WhereOp::Eq},
+        {"!=", WhereOp::Ne},
+        {"<>", WhereOp::Ne},
+        {"<",  WhereOp::Lt},
+        {">",  WhereOp::Gt},
+        {"<=", WhereOp::Le},
+        {">=", WhereOp::Ge},
+    };
+    for (const auto& tc : cases) {
+        std::string sql = std::string("SELECT * FROM x WHERE TAG ") + tc.op + " 'A'";
+        auto r = parse_select(sql);
+        REQUIRE(r.has_value());
+        REQUIRE(r.value().where.has_value());
+        CHECK(r.value().where->op == tc.expected);
+    }
 }
 
 TEST_CASE("parse_select WHERE rejects unterminated string literal") {
