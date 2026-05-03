@@ -1,5 +1,10 @@
 #include "drivers/dbf_common.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+
 namespace openads::drivers {
 
 namespace {
@@ -90,6 +95,79 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size) {
         pos += 32;
     }
     return out;
+}
+
+namespace {
+
+std::string make_string(const std::uint8_t* p, std::size_t n) {
+    std::string s(reinterpret_cast<const char*>(p), n);
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    return s;
+}
+
+double parse_numeric(const std::uint8_t* p, std::size_t n) {
+    char tmp[64];
+    if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
+    std::memcpy(tmp, p, n);
+    tmp[n] = '\0';
+    char* end = nullptr;
+    return std::strtod(tmp, &end);
+}
+
+} // namespace
+
+util::Result<DbfFieldValue> decode_field(const DbfField& field,
+                                         const std::uint8_t* record_buf,
+                                         std::size_t record_size) {
+    DbfFieldValue v;
+    if (static_cast<std::size_t>(field.record_offset) +
+        static_cast<std::size_t>(field.length) > record_size) {
+        return util::Error{5000, 0, "field range past record buffer", ""};
+    }
+    const std::uint8_t* p = record_buf + field.record_offset;
+
+    switch (field.type) {
+        case DbfFieldType::Character:
+            v.as_string = make_string(p, field.length);
+            break;
+
+        case DbfFieldType::Numeric:
+        case DbfFieldType::Float:
+            v.as_double = parse_numeric(p, field.length);
+            v.as_string = make_string(p, field.length);
+            break;
+
+        case DbfFieldType::Date:
+        case DbfFieldType::DateTime:
+            v.as_string = make_string(p, field.length);
+            break;
+
+        case DbfFieldType::Logical: {
+            char c = static_cast<char>(p[0]);
+            v.as_bool   = (c == 'T' || c == 't' || c == 'Y' || c == 'y');
+            v.as_string = std::string(1, c);
+            break;
+        }
+
+        case DbfFieldType::Memo:
+            // M1 deliberately does not load memo blocks; they land in M4.
+            v.as_string.clear();
+            break;
+
+        case DbfFieldType::Integer:
+        case DbfFieldType::Currency:
+        case DbfFieldType::Double:
+        case DbfFieldType::Unknown:
+            v.as_string = make_string(p, field.length);
+            break;
+    }
+    return v;
+}
+
+bool record_is_deleted(const std::uint8_t* record_buf,
+                       std::size_t record_size) noexcept {
+    if (record_size == 0) return false;
+    return record_buf[0] == '*';
 }
 
 } // namespace openads::drivers

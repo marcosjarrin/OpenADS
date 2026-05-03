@@ -55,4 +55,18 @@ struct DbfField {
 util::Result<std::vector<DbfField>>
 parse_dbf_fields(const std::uint8_t* data, std::size_t size);
 
+struct DbfFieldValue {
+    std::string  as_string;
+    double       as_double = 0.0;
+    bool         as_bool   = false;
+    bool         is_null   = false;
+};
+
+util::Result<DbfFieldValue> decode_field(const DbfField& field,
+                                         const std::uint8_t* record_buf,
+                                         std::size_t record_size);
+
+bool record_is_deleted(const std::uint8_t* record_buf,
+                       std::size_t record_size) noexcept;
+
 } // namespace openads::drivers
