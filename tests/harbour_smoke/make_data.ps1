@@ -1,13 +1,22 @@
-# Generates a minimal DBF fixture (data.dbf) for the M8.3 smoke test.
+# Generates a multi-field DBF fixture (data.dbf) for the M8.5 smoke test.
+#
+# Schema:
+#   NAME    C(10)   - character
+#   AGE     N(3,0)  - numeric, 3 digits, 0 decimals
+#   ACTIVE  L(1)    - logical
+#   BORN    D(8)    - date (stored as YYYYMMDD ASCII)
+#
+# Records:
+#   ALPHA       30   T   1990-01-01
+#   BETA       125   F   2000-06-15
+#   GAMMA       77   T   2025-12-31
 #
 # Layout:
-#   - 32-byte file header (signature 0x03 = dBASE III, 2 records,
-#     header_len = 65, record_len = 11)
-#   - one 32-byte field descriptor: NAME, type C, length 10
+#   - 32-byte header (signature 0x03, 3 records, header_len = 161,
+#     record_len = 23)
+#   - 4 x 32-byte field descriptors
 #   - 0x0D field-terminator
-#   - 2 records of (delete-flag + 10 chars):
-#       ' ' "ALPHA     "
-#       ' ' "BETA      "
+#   - 3 x 23-byte records (delete-flag + 10 NAME + 3 AGE + 1 ACTIVE + 8 BORN)
 #   - 0x1A end-of-file marker
 
 param(
@@ -17,34 +26,66 @@ param(
 $bytes = New-Object System.Collections.Generic.List[byte]
 
 # Header (32 bytes).
-$bytes.Add(0x03)              # signature: dBASE III, no memo
-$bytes.AddRange([byte[]]@(0,0,0))   # last update yymm dd zeros
-$bytes.AddRange([byte[]]@(2,0,0,0)) # record count = 2
-$bytes.AddRange([byte[]]@(65,0))    # header length = 32 + 32 + 1
-$bytes.AddRange([byte[]]@(11,0))    # record length = 1 + 10
-1..20 | ForEach-Object { $bytes.Add([byte]0) }  # padding to 32 bytes
+$bytes.Add(0x03)
+$bytes.AddRange([byte[]]@(0,0,0))           # last update yymm dd zeros
+$bytes.AddRange([byte[]]@(3,0,0,0))         # record count = 3
+$bytes.AddRange([byte[]]@(161,0))           # header length = 32 + 4*32 + 1
+$bytes.AddRange([byte[]]@(23,0))            # record length = 1 + 10 + 3 + 1 + 8
+1..20 | ForEach-Object { $bytes.Add([byte]0) }
 
-# Field descriptor for NAME (32 bytes).
-$nameBytes = [byte[]]@([byte][char]'N',[byte][char]'A',[byte][char]'M',[byte][char]'E')
-$bytes.AddRange($nameBytes)
-1..7 | ForEach-Object { $bytes.Add([byte]0) }   # zero-padded name (11 bytes total)
-$bytes.Add([byte][char]'C')         # field type C
-$bytes.AddRange([byte[]]@(0,0,0,0)) # field data address (unused)
-$bytes.Add(10)                       # field length = 10
-$bytes.Add(0)                        # decimal count
-1..14 | ForEach-Object { $bytes.Add([byte]0) }  # padding to 32 bytes
+function Add-FieldDescriptor {
+    param(
+        [System.Collections.Generic.List[byte]]$bytes,
+        [string]$Name,
+        [char]$TypeChar,
+        [byte]$Length,
+        [byte]$Decimals = 0
+    )
+    $nameBytes = [System.Text.Encoding]::ASCII.GetBytes($Name)
+    foreach ($b in $nameBytes) { $bytes.Add($b) }
+    $remaining = 11 - $nameBytes.Length
+    1..$remaining | ForEach-Object { $bytes.Add([byte]0) }
+    $bytes.Add([byte]$TypeChar)
+    $bytes.AddRange([byte[]]@(0,0,0,0))     # field data address
+    $bytes.Add($Length)
+    $bytes.Add($Decimals)
+    1..14 | ForEach-Object { $bytes.Add([byte]0) }
+}
+
+Add-FieldDescriptor $bytes 'NAME'   'C' 10 0
+Add-FieldDescriptor $bytes 'AGE'    'N'  3 0
+Add-FieldDescriptor $bytes 'ACTIVE' 'L'  1 0
+Add-FieldDescriptor $bytes 'BORN'   'D'  8 0
 
 # Field-descriptor terminator.
 $bytes.Add(0x0D)
 
-# Records. Each is 1 delete-flag byte + a 10-byte fixed-width NAME field.
-function Add-Record([System.Collections.Generic.List[byte]]$bytes, [string]$name) {
-    $bytes.Add([byte][char]' ')
-    $padded = $name.PadRight(10).Substring(0, 10)
-    foreach ($c in $padded.ToCharArray()) { $bytes.Add([byte]$c) }
+# Records: delete-flag + NAME(10) + AGE(3) + ACTIVE(1) + BORN(8).
+function Add-Record {
+    param(
+        [System.Collections.Generic.List[byte]]$bytes,
+        [string]$Name,
+        [int]$Age,
+        [bool]$Active,
+        [string]$Born   # YYYYMMDD
+    )
+    $bytes.Add([byte][char]' ')                     # not deleted
+    foreach ($c in $Name.PadRight(10).Substring(0,10).ToCharArray()) {
+        $bytes.Add([byte]$c)
+    }
+    $ageStr = ([string]$Age).PadLeft(3)
+    foreach ($c in $ageStr.Substring(0,3).ToCharArray()) {
+        $bytes.Add([byte]$c)
+    }
+    $bytes.Add([byte][char]($(if ($Active) {'T'} else {'F'})))
+    foreach ($c in $Born.PadRight(8).Substring(0,8).ToCharArray()) {
+        $bytes.Add([byte]$c)
+    }
 }
-Add-Record $bytes 'ALPHA'
-Add-Record $bytes 'BETA'
+
+Add-Record $bytes 'ALPHA'  30 $true  '19900101'
+Add-Record $bytes 'BETA'  125 $false '20000615'
+Add-Record $bytes 'GAMMA'  77 $true  '20251231'
 
 # End-of-file marker.
 $bytes.Add(0x1A)

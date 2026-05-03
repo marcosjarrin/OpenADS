@@ -82,24 +82,20 @@ uint32_t AdsGetConnectionType() { STUB_TRACE(AdsGetConnectionType); return 5004u
 uint32_t AdsGetDateFormat() { STUB_TRACE(AdsGetDateFormat); return 5004u; }
 uint32_t AdsGetDefault() { STUB_TRACE(AdsGetDefault); return 5004u; }
 uint32_t AdsGetDeleted() { STUB_TRACE(AdsGetDeleted); return 5004u; }
-uint32_t AdsGetDouble() { STUB_TRACE(AdsGetDouble); return 5004u; }
 uint32_t AdsGetEpoch() { STUB_TRACE(AdsGetEpoch); return 5004u; }
 uint32_t AdsGetErrorString() { STUB_TRACE(AdsGetErrorString); return 5004u; }
 uint32_t AdsGetExact() { STUB_TRACE(AdsGetExact); return 5004u; }
-uint32_t AdsGetFieldDecimals() { STUB_TRACE(AdsGetFieldDecimals); return 5004u; }
 uint32_t AdsGetFieldW() { STUB_TRACE(AdsGetFieldW); return 5004u; }
 uint32_t AdsGetFilter() { STUB_TRACE(AdsGetFilter); return 5004u; }
 uint32_t AdsGetHandleType() { STUB_TRACE(AdsGetHandleType); return 5004u; }
 uint32_t AdsGetIndexCondition() { STUB_TRACE(AdsGetIndexCondition); return 5004u; }
 uint32_t AdsGetIndexFilename() { STUB_TRACE(AdsGetIndexFilename); return 5004u; }
 uint32_t AdsGetIndexOrderByHandle() { STUB_TRACE(AdsGetIndexOrderByHandle); return 5004u; }
-uint32_t AdsGetJulian() { STUB_TRACE(AdsGetJulian); return 5004u; }
 uint32_t AdsGetKeyLength() { STUB_TRACE(AdsGetKeyLength); return 5004u; }
 uint32_t AdsGetKeyNum() { STUB_TRACE(AdsGetKeyNum); return 5004u; }
 uint32_t AdsGetKeyType() { STUB_TRACE(AdsGetKeyType); return 5004u; }
 uint32_t AdsGetLastTableUpdate() { STUB_TRACE(AdsGetLastTableUpdate); return 5004u; }
 
-uint32_t AdsGetLong() { STUB_TRACE(AdsGetLong); return 5004u; }
 uint32_t AdsGetLongLong() { STUB_TRACE(AdsGetLongLong); return 5004u; }
 uint32_t AdsGetMilliseconds() { STUB_TRACE(AdsGetMilliseconds); return 5004u; }
 uint32_t AdsGetNumActiveLinks() { STUB_TRACE(AdsGetNumActiveLinks); return 5004u; }

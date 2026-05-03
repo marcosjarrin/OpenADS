@@ -266,6 +266,84 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
+UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
+                               UNSIGNED16* pusDec) {
+    Table* t = get_table(hTable);
+    if (!t || pusDec == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    *pusDec = t->field_descriptor(idx).decimals;
+    return ok();
+}
+
+UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
+    Table* t = get_table(hTable);
+    if (!t || plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    *plVal = static_cast<SIGNED32>(v.value().as_double);
+    return ok();
+}
+
+UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
+    Table* t = get_table(hTable);
+    if (!t || pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    *pdVal = v.value().as_double;
+    return ok();
+}
+
+namespace {
+
+// Gregorian -> Clipper/Harbour Julian Day Number. Same formula as
+// hb_dateEncode in Harbour core.
+SIGNED32 to_julian(int y, int m, int d) {
+    long y32 = y;
+    long m32 = m;
+    long d32 = d;
+    return static_cast<SIGNED32>(
+        (1461 * (y32 + 4800 + (m32 - 14) / 12)) / 4
+      + (367  * (m32 - 2 - 12 * ((m32 - 14) / 12))) / 12
+      - (3    * ((y32 + 4900 + (m32 - 14) / 12) / 100)) / 4
+      + d32 - 32075);
+}
+
+} // namespace
+
+UNSIGNED32 AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate) {
+    Table* t = get_table(hTable);
+    if (!t || plDate == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    const std::string& s = v.value().as_string;
+    *plDate = 0;
+    if (s.size() >= 8) {
+        int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100
+              + (s[2] - '0') * 10   + (s[3] - '0');
+        int m = (s[4] - '0') * 10   + (s[5] - '0');
+        int d = (s[6] - '0') * 10   + (s[7] - '0');
+        if (y > 0 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+            *plDate = to_julian(y, m, d);
+        }
+    }
+    return ok();
+}
+
 UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                            UNSIGNED32* pulRecordNum) {
     Table* t = get_table(hTable);

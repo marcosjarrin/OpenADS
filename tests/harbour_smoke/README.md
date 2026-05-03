@@ -16,6 +16,35 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.5 — Multi-field DBF (C / N / L / D)
+
+The fixture now declares four fields (NAME C(10), AGE N(3,0),
+ACTIVE L(1), BORN D(8)) and three records, and the smoke prints
+each field per row:
+
+```
+Schema:
+  1 NAME   C len=10 dec=0
+  2 AGE    N len= 3 dec=0
+  3 ACTIVE L len= 1 dec=0
+  4 BORN   D len= 8 dec=0
+Walking 3 records:
+  rec 1 NAME=[ALPHA] AGE=30  ACTIVE=T BORN=19900101
+  rec 2 NAME=[BETA ] AGE=125 ACTIVE=F BORN=20000615
+  rec 3 NAME=[GAMMA] AGE=77  ACTIVE=T BORN=20251231
+```
+
+Implementations landed for the per-type ACE getters rddads' adsGetValue
+calls into:
+
+- `AdsGetFieldDecimals` reads `DbfField::decimals` (was a 5004 stub —
+  rddads previously left `dec` uninitialised at 65535).
+- `AdsGetLong` returns the numeric field rounded to a 32-bit integer.
+- `AdsGetDouble` returns the numeric field as a double.
+- `AdsGetJulian` parses the 8-byte `YYYYMMDD` date string and returns
+  the Clipper Julian Day Number, computed with the same Gregorian
+  formula Harbour core uses (`hb_dateEncode`).
+
 ## M8.4 — ACE field-type constants verified
 
 Empirical sweep against `c:\harbour\lib\win\msvc64\rddads.lib`: probe
