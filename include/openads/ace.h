@@ -1,0 +1,84 @@
+#pragma once
+
+// OpenADS ACE-compatible C ABI — phase 1, milestone M1 subset.
+// See openads/error.h for AE_* error codes.
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef uint8_t  UNSIGNED8;
+typedef uint16_t UNSIGNED16;
+typedef uint32_t UNSIGNED32;
+typedef int32_t  SIGNED32;
+typedef uint64_t ADSHANDLE;
+
+#define ADS_DEFAULT 0
+#define ADS_NTX     1
+#define ADS_CDX     2
+#define ADS_ADT     3
+#define ADS_VFP     4
+
+#define ADS_LOCAL_SERVER  1
+#define ADS_REMOTE_SERVER 2
+
+UNSIGNED32 AdsConnect60     (UNSIGNED8* pucServer, UNSIGNED16 usServerType,
+                              UNSIGNED8* pucUserName, UNSIGNED8* pucPassword,
+                              UNSIGNED32 ulOptions, ADSHANDLE* phConnect);
+UNSIGNED32 AdsDisconnect    (ADSHANDLE hConnect);
+
+UNSIGNED32 AdsOpenTable     (ADSHANDLE  hConnect,
+                              UNSIGNED8* pucName,
+                              UNSIGNED8* pucAlias,
+                              UNSIGNED16 usTableType,
+                              UNSIGNED16 usCharType,
+                              UNSIGNED16 usLockType,
+                              UNSIGNED16 usCheckRights,
+                              UNSIGNED16 usMode,
+                              ADSHANDLE* phTable);
+UNSIGNED32 AdsCloseTable    (ADSHANDLE hTable);
+
+UNSIGNED32 AdsGotoTop       (ADSHANDLE hTable);
+UNSIGNED32 AdsGotoBottom    (ADSHANDLE hTable);
+UNSIGNED32 AdsSkip          (ADSHANDLE hTable, SIGNED32 lRows);
+UNSIGNED32 AdsAtEOF         (ADSHANDLE hTable, UNSIGNED16* pbAtEnd);
+UNSIGNED32 AdsAtBOF         (ADSHANDLE hTable, UNSIGNED16* pbAtBegin);
+
+UNSIGNED32 AdsGetField      (ADSHANDLE  hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                              UNSIGNED16 usOption);
+UNSIGNED32 AdsGetFieldName  (ADSHANDLE  hTable, UNSIGNED16 usFieldNum,
+                              UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+UNSIGNED32 AdsGetNumFields  (ADSHANDLE  hTable, UNSIGNED16* pusFields);
+UNSIGNED32 AdsGetFieldType  (ADSHANDLE  hTable, UNSIGNED8* pucField,
+                              UNSIGNED16* pusType);
+UNSIGNED32 AdsGetFieldLength(ADSHANDLE  hTable, UNSIGNED8* pucField,
+                              UNSIGNED32* pulLen);
+UNSIGNED32 AdsGetRecordNum  (ADSHANDLE  hTable, UNSIGNED16 bFilterOption,
+                              UNSIGNED32* pulRecordNum);
+UNSIGNED32 AdsGetRecordCount(ADSHANDLE  hTable, UNSIGNED16 bFilterOption,
+                              UNSIGNED32* pulRecordCount);
+
+UNSIGNED32 AdsGetLastError  (UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
+                              UNSIGNED16* pusBufLen);
+
+UNSIGNED32 AdsGetVersion    (UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
+                              UNSIGNED32* pulLetter, UNSIGNED32* pulDesc);
+
+#define ADS_FIELD_TYPE_CHAR       1
+#define ADS_FIELD_TYPE_NUMERIC    2
+#define ADS_FIELD_TYPE_LOGICAL    3
+#define ADS_FIELD_TYPE_DATE       4
+#define ADS_FIELD_TYPE_DATETIME   5
+#define ADS_FIELD_TYPE_MEMO       6
+#define ADS_FIELD_TYPE_INTEGER    7
+#define ADS_FIELD_TYPE_DOUBLE     8
+#define ADS_FIELD_TYPE_CURRENCY   9
+#define ADS_FIELD_TYPE_UNKNOWN    99
+
+#ifdef __cplusplus
+}
+#endif
