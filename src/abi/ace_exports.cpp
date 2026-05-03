@@ -453,11 +453,12 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED8* pucValue, UNSIGNED32 ulLen) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto name = openads::abi::to_internal(pucField, 0);
-    auto idx  = t->field_index(name);
-    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
     std::string val(reinterpret_cast<const char*>(pucValue), ulLen);
-    auto r = t->set_field(static_cast<std::uint16_t>(idx), val);
+    auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
 }
@@ -466,10 +467,11 @@ UNSIGNED32 AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16 bValue) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto name = openads::abi::to_internal(pucField, 0);
-    auto idx  = t->field_index(name);
-    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
-    auto r = t->set_field(static_cast<std::uint16_t>(idx), bValue != 0);
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto r = t->set_field(idx, bValue != 0);
     if (!r) return fail(r.error());
     return ok();
 }
@@ -478,10 +480,57 @@ UNSIGNED32 AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
                         double dValue) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto name = openads::abi::to_internal(pucField, 0);
-    auto idx  = t->field_index(name);
-    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
-    auto r = t->set_field(static_cast<std::uint16_t>(idx), dValue);
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto r = t->set_field(idx, dValue);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsSetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
+                          std::int64_t llValue) {
+    return AdsSetDouble(hTable, pucField, static_cast<double>(llValue));
+}
+
+namespace {
+
+// Inverse of to_julian — convert a Clipper Julian Day Number back to
+// a Gregorian (Y, M, D) triple.
+void julian_to_ymd(SIGNED32 jd, int& y, int& m, int& d) {
+    long L = static_cast<long>(jd) + 68569;
+    long N = (4 * L) / 146097;
+    L = L - (146097 * N + 3) / 4;
+    long I = (4000 * (L + 1)) / 1461001;
+    L = L - (1461 * I) / 4 + 31;
+    long J = (80 * L) / 2447;
+    d = static_cast<int>(L - (2447 * J) / 80);
+    L = J / 11;
+    m = static_cast<int>(J + 2 - 12 * L);
+    y = static_cast<int>(100 * (N - 49) + I + L);
+}
+
+} // namespace
+
+UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        SIGNED32 lDate) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    char buf[9];
+    if (lDate <= 0) {
+        std::memset(buf, ' ', 8); buf[8] = '\0';
+    } else {
+        int y = 0, m = 0, d = 0;
+        julian_to_ymd(lDate, y, m, d);
+        std::snprintf(buf, sizeof(buf), "%04d%02d%02d", y, m, d);
+    }
+    std::string val(buf, 8);
+    auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
 }

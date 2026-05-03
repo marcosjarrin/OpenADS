@@ -155,8 +155,6 @@ uint32_t AdsSetEpoch() { STUB_TRACE(AdsSetEpoch); return 5004u; }
 uint32_t AdsSetExact() { STUB_TRACE(AdsSetExact); return 5004u; }
 uint32_t AdsSetFieldRaw() { STUB_TRACE(AdsSetFieldRaw); return 5004u; }
 uint32_t AdsSetFilter() { STUB_TRACE(AdsSetFilter); return 5004u; }
-uint32_t AdsSetJulian() { STUB_TRACE(AdsSetJulian); return 5004u; }
-uint32_t AdsSetLongLong() { STUB_TRACE(AdsSetLongLong); return 5004u; }
 uint32_t AdsSetMilliseconds() { STUB_TRACE(AdsSetMilliseconds); return 5004u; }
 uint32_t AdsSetRecord() { STUB_TRACE(AdsSetRecord); return 5004u; }
 uint32_t AdsSetRelation() { STUB_TRACE(AdsSetRelation); return 5004u; }

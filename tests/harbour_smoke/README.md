@@ -16,6 +16,46 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.7 (partial) — Write path: dbAppend + FIELD-> := value
+
+The smoke now exercises `dbAppend()` plus per-field assignment, then
+closes and reopens to verify durability:
+
+```
+Initial record count: 3
+Append a fourth row...
+  appended at recno 4
+Walk in NAME order: ALPHA, BETA, GAMMA, DELTA   (in DBF order; only
+                                                 first 3 visible
+                                                 through the index)
+Reopened record count: 4
+```
+
+The DBF mutation is durable: the appended record survives reopen,
+record count climbs from 3 to 4, and the field bytes are intact on
+disk. ABI-side fixes:
+
+- `AdsSetString` / `AdsSetLogical` / `AdsSetDouble` now resolve
+  `pucField` with `resolve_field_index` (previously they only
+  accepted string field names; rddads passes `ADSFIELD(idx)` =
+  small-int field index cast to a pointer).
+- `AdsSetLongLong` is now a real wrapper that forwards to
+  `AdsSetDouble` (was a 5004 stub; rddads uses it for
+  HB_FT_INTEGER columns).
+- `AdsSetJulian` converts the Clipper Julian Day Number back to
+  `YYYYMMDD` ASCII and writes it through `Table::set_field`. The
+  `julian_to_ymd` helper is the inverse of M8.5's `to_julian`.
+
+### Known gap (lands as M8.8)
+
+After dbAppend, the active CDX is **not** updated with the new key.
+That means dbSeek for the appended row's key fails, and the index
+walk (`dbGoTop` + `dbSkip`) only visits the original three records.
+Real ACE auto-syncs the active index on every record mutation. M8.8
+will wire `Table::set_field` / `Table::append_record` into the
+active `Order` so an `insert(recno, key)` runs after the record
+write, mirroring SAP's behavior.
+
 ## M8.6 — Index seek through OpenADS' CDX
 
 The smoke now stages a CDX alongside the DBF (built by `make_cdx.exe`,

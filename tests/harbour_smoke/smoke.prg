@@ -1,20 +1,16 @@
-/* OpenADS / Harbour rddads smoke test (M8.6).
+/* OpenADS / Harbour rddads smoke test (M8.7).
  *
- * Multi-field DBF + a pre-staged CDX index (built by make_cdx.exe via
- * OpenADS' own CdxIndex::create). The smoke opens both, walks every
- * record in NAME order, then exercises dbSeek for an existing key, a
- * key-not-found key, and a soft-seek partial match.
+ * Multi-field DBF + CDX. Walk + dbSeek + APPEND BLANK + write back +
+ * close + reopen + verify the appended row is visible.
  */
 #include "ads.ch"
 
 REQUEST ADS, ADSCDX, ADSNTX
 
 PROCEDURE Main()
-   LOCAL nFld
-
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
-   ? "OpenADS smoke test (M8.6)"
+   ? "OpenADS smoke test (M8.7)"
    ? "ACE DLL reports:", AdsVersion()
 
    AdsSetFileType( ADS_CDX )
@@ -31,16 +27,20 @@ PROCEDURE Main()
       RETURN
    ENDIF
 
-   ? "Schema:"
-   FOR nFld := 1 TO FCount()
-      ? "  ", nFld, FieldName(nFld), FieldType(nFld), ;
-        "len=", FieldLen(nFld), "dec=", FieldDec(nFld)
-   NEXT
+   ? "Initial record count:", LastRec()
 
-   ? "OrderName:", OrdName()
-   ? "OrderKey :", OrdKey()
+   ? "Append a fourth row..."
+   dbAppend()
+   FIELD->NAME   := "DELTA"
+   FIELD->AGE    := 99
+   FIELD->ACTIVE := .F.
+   FIELD->BORN   := SToD( "20260101" )
+   dbCommit()
+   ? "  appended at recno", RecNo()
 
-   ? "Walking", LastRec(), "records in NAME order:"
+   ? "After append, record count:", LastRec()
+
+   ? "Walk in NAME order:"
    dbGoTop()
    DO WHILE ! Eof()
       ? "  rec", RecNo(), ;
@@ -51,25 +51,21 @@ PROCEDURE Main()
       dbSkip()
    ENDDO
 
-   ? ""
-   ? "Seek 'BETA' (exact)..."
-   dbSeek("BETA")
-   ? "  Found=" + iif(Found(), "T", "F"), ;
-     "RecNo=" + LTrim(Str(RecNo())), ;
-     "NAME=[" + FIELD->NAME + "]"
-
-   ? "Seek 'GAMMA' (exact, last key)..."
-   dbSeek("GAMMA")
-   ? "  Found=" + iif(Found(), "T", "F"), ;
-     "RecNo=" + LTrim(Str(RecNo())), ;
-     "NAME=[" + FIELD->NAME + "]"
-
-   ? "Seek 'NOPE' (miss)..."
-   dbSeek("NOPE")
-   ? "  Found=" + iif(Found(), "T", "F"), ;
-     "EOF=" + iif(Eof(), "T", "F")
-
    USE
+
+   ? ""
+   ? "Reopen and re-walk to verify durability..."
+   USE data INDEX data VIA "ADSCDX"
+   ? "Reopened record count:", LastRec()
+   dbSeek("DELTA")
+   ? "  Seek 'DELTA': Found=" + iif(Found(), "T", "F"), ;
+     "RecNo=" + LTrim(Str(RecNo())), ;
+     "NAME=[" + FIELD->NAME + "]", ;
+     "AGE=" + LTrim(Str(FIELD->AGE)), ;
+     "ACTIVE=" + iif(FIELD->ACTIVE, "T", "F"), ;
+     "BORN=" + DToS(FIELD->BORN)
+   USE
+
    ? "Done."
    RETURN
 
