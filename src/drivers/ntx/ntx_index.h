@@ -55,6 +55,15 @@ private:
         std::int32_t  key_index;
     };
 
+    struct CachedKey {
+        std::uint32_t recno;
+        std::string   key;
+    };
+
+    util::Result<void> ensure_cache_();
+    util::Result<void> walk_subtree_(std::uint32_t page_off,
+                                     std::vector<CachedKey>& out);
+
     util::Result<Page*> get_page_(std::uint32_t offset);
     util::Result<void>  flush_page_(std::uint32_t offset);
     util::Result<void>  load_current_key_();
@@ -72,6 +81,8 @@ private:
 
     util::Result<SeekOutcome> descend_leftmost_(std::uint32_t root);
     util::Result<SeekOutcome> descend_rightmost_(std::uint32_t root);
+    util::Result<SeekOutcome>
+        seek_key_for_write_(const std::string& padded_key, bool soft);
 
     platform::File                                 file_;
     IndexOpenMode                                  mode_      = IndexOpenMode::ReadOnly;
@@ -94,6 +105,13 @@ private:
     std::vector<StackFrame>                        stack_;
     std::string                                    current_key_;
     std::uint32_t                                  current_recno_ = 0;
+
+    // M3.8 cache-based traversal. The tree is walked depth-first into
+    // a flat vector on first read access; nav methods then walk that
+    // vector. Cache is invalidated by any insert / erase.
+    std::vector<CachedKey>                         cache_;
+    bool                                           cache_dirty_ = true;
+    std::int64_t                                   cache_idx_   = -1;
 };
 
 } // namespace openads::drivers::ntx

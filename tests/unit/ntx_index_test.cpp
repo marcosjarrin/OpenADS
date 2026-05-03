@@ -229,6 +229,53 @@ TEST_CASE("NtxIndex create with unique=true persists the flag through reopen") {
     fs::remove(p);
 }
 
+TEST_CASE("NtxIndex multi-level next/prev visits every key in order (cache-based)") {
+    auto p = fs::temp_directory_path() / "openads_m38_ntx_walk.ntx";
+    fs::remove(p);
+    constexpr int kInserts = 5;
+    {
+        auto created = NtxIndex::create(p.string(), "T1", "TAG", 200, false, false);
+        REQUIRE(created.has_value());
+        NtxIndex ix = std::move(created).value();
+        const char* keys[kInserts] = {"002B", "000B", "004B", "001B", "003B"};
+        for (int i = 0; i < kInserts; ++i) {
+            REQUIRE(ix.insert(static_cast<std::uint32_t>(i + 1),
+                              std::string(keys[i])).has_value());
+        }
+        REQUIRE(ix.flush().has_value());
+    }
+    {
+        NtxIndex ix;
+        REQUIRE(ix.open(p.string(), IndexOpenMode::Shared).has_value());
+        REQUIRE(ix.seek_first().has_value());
+        std::vector<std::string> got;
+        for (;;) {
+            got.push_back(ix.current_key().substr(0, 4));
+            auto n = ix.next();
+            REQUIRE(n.has_value());
+            if (!n.value().positioned) break;
+        }
+        REQUIRE(got.size() == kInserts);
+        for (std::size_t i = 1; i < got.size(); ++i) {
+            CHECK(got[i - 1] < got[i]);
+        }
+
+        REQUIRE(ix.seek_last().has_value());
+        std::vector<std::string> rev;
+        for (;;) {
+            rev.push_back(ix.current_key().substr(0, 4));
+            auto n = ix.prev();
+            REQUIRE(n.has_value());
+            if (!n.value().positioned) break;
+        }
+        CHECK(rev.size() == kInserts);
+        for (std::size_t i = 1; i < rev.size(); ++i) {
+            CHECK(rev[i - 1] > rev[i]);
+        }
+    }
+    fs::remove(p);
+}
+
 TEST_CASE("NtxIndex insert that overflows the leaf splits the root into a branch") {
     auto p = fs::temp_directory_path() / "openads_m37_ntx_split.ntx";
     fs::remove(p);

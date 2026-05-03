@@ -205,22 +205,77 @@ NtxIndex::descend_rightmost_(std::uint32_t root) {
     return SeekOutcome{SeekHit::AfterEnd, 0, false};
 }
 
+util::Result<void>
+NtxIndex::walk_subtree_(std::uint32_t page_off,
+                        std::vector<CachedKey>& out) {
+    if (page_off == 0) return {};
+    auto pg = get_page_(page_off);
+    if (!pg) return pg.error();
+    Page p_copy = *pg.value();   // copy: nested get_page_ may invalidate refs
+    Page& p = p_copy;
+    std::uint16_t kc = get_key_count(p);
+    if (kc == 0) return {};
+
+    std::uint32_t lc0 = get_left_child(p, 0);
+    if (lc0 == 0) {
+        for (std::int32_t i = 0; i < kc; ++i) {
+            CachedKey ck;
+            ck.recno = get_recno(p, i);
+            ck.key.assign(reinterpret_cast<const char*>(get_key_data(p, i)),
+                          key_size_);
+            out.push_back(std::move(ck));
+        }
+        return {};
+    }
+    for (std::int32_t i = 0; i < kc; ++i) {
+        if (auto r = walk_subtree_(get_left_child(p, i), out); !r) {
+            return r.error();
+        }
+        CachedKey ck;
+        ck.recno = get_recno(p, i);
+        ck.key.assign(reinterpret_cast<const char*>(get_key_data(p, i)),
+                      key_size_);
+        out.push_back(std::move(ck));
+    }
+    if (auto r = walk_subtree_(get_left_child(p, kc), out); !r) {
+        return r.error();
+    }
+    return {};
+}
+
+util::Result<void> NtxIndex::ensure_cache_() {
+    if (!cache_dirty_) return {};
+    cache_.clear();
+    if (root_page_ != 0) {
+        if (auto r = walk_subtree_(root_page_, cache_); !r) return r.error();
+    }
+    cache_dirty_ = false;
+    cache_idx_   = -1;
+    return {};
+}
+
 util::Result<SeekOutcome> NtxIndex::seek_first() {
-    return descend_leftmost_(root_page_);
+    if (auto r = ensure_cache_(); !r) return r.error();
+    if (cache_.empty()) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    cache_idx_     = 0;
+    current_recno_ = cache_[0].recno;
+    current_key_   = cache_[0].key;
+    return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
 util::Result<SeekOutcome> NtxIndex::seek_last() {
-    return descend_rightmost_(root_page_);
+    if (auto r = ensure_cache_(); !r) return r.error();
+    if (cache_.empty()) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    cache_idx_     = static_cast<std::int64_t>(cache_.size() - 1);
+    current_recno_ = cache_.back().recno;
+    current_key_   = cache_.back().key;
+    return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
 util::Result<SeekOutcome>
-NtxIndex::seek_key(const std::string& key, bool soft) {
+NtxIndex::seek_key_for_write_(const std::string& padded, bool soft) {
     stack_.clear();
     if (root_page_ == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
-    std::string padded = key;
-    if (padded.size() < key_size_) padded.append(key_size_ - padded.size(), ' ');
-    else if (padded.size() > key_size_) padded.resize(key_size_);
-
     std::uint32_t cur = root_page_;
     bool found_exact = false;
     while (cur != 0) {
@@ -260,85 +315,61 @@ NtxIndex::seek_key(const std::string& key, bool soft) {
     return SeekOutcome{SeekHit::AfterEnd, 0, false};
 }
 
-util::Result<SeekOutcome> NtxIndex::next() {
-    if (stack_.empty()) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+util::Result<SeekOutcome>
+NtxIndex::seek_key(const std::string& key, bool soft) {
+    if (auto r = ensure_cache_(); !r) return r.error();
+    if (cache_.empty()) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    std::string padded = key;
+    if (padded.size() < key_size_) padded.append(key_size_ - padded.size(), ' ');
+    else if (padded.size() > key_size_) padded.resize(key_size_);
 
-    auto& top = stack_.back();
-    auto page = get_page_(top.page);
-    if (!page) return page.error();
-    std::uint32_t right_child = get_left_child(*page.value(), top.key_index + 1);
-    if (right_child != 0) {
-        stack_.back().key_index += 1;
-        std::uint32_t cur = right_child;
-        while (cur != 0) {
-            auto pg = get_page_(cur);
-            if (!pg) return pg.error();
-            Page& pp = *pg.value();
-            std::uint16_t kc = get_key_count(pp);
-            if (kc == 0) break;
-            std::uint32_t child = get_left_child(pp, 0);
-            if (child == 0) {
-                stack_.push_back({cur, 0});
-                if (auto r = load_current_key_(); !r) return r.error();
-                return SeekOutcome{SeekHit::Exact, current_recno_, true};
-            }
-            stack_.push_back({cur, 0});
-            cur = child;
-        }
-    }
-
-    while (!stack_.empty()) {
-        auto& f = stack_.back();
-        auto pg = get_page_(f.page);
-        if (!pg) return pg.error();
-        Page& pp = *pg.value();
-        std::uint16_t kc = get_key_count(pp);
-        if (f.key_index + 1 < static_cast<std::int32_t>(kc)) {
-            f.key_index += 1;
-            if (auto r = load_current_key_(); !r) return r.error();
+    for (std::size_t i = 0; i < cache_.size(); ++i) {
+        int cmp = cache_[i].key.compare(padded);
+        if (cmp == 0) {
+            cache_idx_     = static_cast<std::int64_t>(i);
+            current_recno_ = cache_[i].recno;
+            current_key_   = cache_[i].key;
             return SeekOutcome{SeekHit::Exact, current_recno_, true};
         }
-        stack_.pop_back();
+        if (cmp > 0) {
+            if (!soft) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+            cache_idx_     = static_cast<std::int64_t>(i);
+            current_recno_ = cache_[i].recno;
+            current_key_   = cache_[i].key;
+            return SeekOutcome{SeekHit::AfterKey, current_recno_, true};
+        }
     }
-    return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    if (!soft) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    cache_idx_     = static_cast<std::int64_t>(cache_.size() - 1);
+    current_recno_ = cache_.back().recno;
+    current_key_   = cache_.back().key;
+    return SeekOutcome{SeekHit::AfterKey, current_recno_, true};
+}
+
+util::Result<SeekOutcome> NtxIndex::next() {
+    if (auto r = ensure_cache_(); !r) return r.error();
+    if (cache_idx_ < 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    std::int64_t nxt = cache_idx_ + 1;
+    if (nxt >= static_cast<std::int64_t>(cache_.size())) {
+        cache_idx_ = -1;
+        return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    }
+    cache_idx_     = nxt;
+    current_recno_ = cache_[nxt].recno;
+    current_key_   = cache_[nxt].key;
+    return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
 util::Result<SeekOutcome> NtxIndex::prev() {
-    if (stack_.empty()) return SeekOutcome{SeekHit::BeforeBegin, 0, false};
-
-    auto& top = stack_.back();
-    auto page = get_page_(top.page);
-    if (!page) return page.error();
-    std::uint32_t left_child = get_left_child(*page.value(), top.key_index);
-    if (left_child != 0) {
-        std::uint32_t cur = left_child;
-        while (cur != 0) {
-            auto pg = get_page_(cur);
-            if (!pg) return pg.error();
-            Page& pp = *pg.value();
-            std::uint16_t kc = get_key_count(pp);
-            if (kc == 0) break;
-            std::uint32_t child = get_left_child(pp, kc);
-            if (child == 0) {
-                stack_.push_back({cur, kc - 1});
-                if (auto r = load_current_key_(); !r) return r.error();
-                return SeekOutcome{SeekHit::Exact, current_recno_, true};
-            }
-            stack_.push_back({cur, kc});
-            cur = child;
-        }
+    if (auto r = ensure_cache_(); !r) return r.error();
+    if (cache_idx_ <= 0) {
+        cache_idx_ = -1;
+        return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
-
-    while (!stack_.empty()) {
-        auto& f = stack_.back();
-        if (f.key_index > 0) {
-            f.key_index -= 1;
-            if (auto r = load_current_key_(); !r) return r.error();
-            return SeekOutcome{SeekHit::Exact, current_recno_, true};
-        }
-        stack_.pop_back();
-    }
-    return SeekOutcome{SeekHit::BeforeBegin, 0, false};
+    --cache_idx_;
+    current_recno_ = cache_[cache_idx_].recno;
+    current_key_   = cache_[cache_idx_].key;
+    return SeekOutcome{SeekHit::Exact, current_recno_, true};
 }
 
 namespace {
@@ -365,6 +396,7 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
     if (mode_ == IndexOpenMode::ReadOnly) {
         return util::Error{5000, 0, "NTX opened read-only", ""};
     }
+    cache_dirty_ = true;
     std::string padded = key;
     if (padded.size() < key_size_) padded.append(key_size_ - padded.size(), ' ');
     else if (padded.size() > key_size_) padded.resize(key_size_);
@@ -397,8 +429,8 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         return flush_page_(new_root);
     }
 
-    // Locate insertion point (leaf only — multi-level split deferred).
-    auto seek = seek_key(key, true);
+    // Locate insertion point via stack-based descent (cache is read-only path).
+    auto seek = seek_key_for_write_(padded, true);
     if (!seek) return seek.error();
 
     if (stack_.empty()) {
@@ -493,20 +525,23 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         dirty_[page_off]      = true;
     };
 
+    // Promote all[mid] up to the new branch root. left_half stays in
+    // the original page; right_half holds entries strictly after mid.
+    // This prevents the separator key from being visited twice during
+    // an in-order walk.
+    Entry separator = all[mid];
     std::vector<Entry> left_half (all.begin(), all.begin() + mid);
-    std::vector<Entry> right_half(all.begin() + mid, all.end());
+    std::vector<Entry> right_half(all.begin() + mid + 1, all.end());
     fill_leaf(left_off,  left_half);
     fill_leaf(right_off, right_half);
 
-    // Build a new internal root with one separator entry: left_child →
-    // left_off, key = right_half[0], and a trailing right child → right_off.
     Page root{};
     format_empty_page(root, max_keys_, item_size_);
     {
         std::uint16_t off = get_key_offset(root, 0);
         write_u32_le(root.data() + off,     left_off);
-        write_u32_le(root.data() + off + 4, right_half[0].recno);
-        std::memcpy (root.data() + off + 8, right_half[0].key.data(), key_size_);
+        write_u32_le(root.data() + off + 4, separator.recno);
+        std::memcpy (root.data() + off + 8, separator.key.data(), key_size_);
         std::uint16_t tail = get_key_offset(root, 1);
         write_u32_le(root.data() + tail, right_off);
     }
@@ -535,7 +570,11 @@ NtxIndex::erase(std::uint32_t recno, const std::string& key) {
     if (mode_ == IndexOpenMode::ReadOnly) {
         return util::Error{5000, 0, "NTX opened read-only", ""};
     }
-    auto seek = seek_key(key, false);
+    cache_dirty_ = true;
+    std::string padded = key;
+    if (padded.size() < key_size_) padded.append(key_size_ - padded.size(), ' ');
+    else if (padded.size() > key_size_) padded.resize(key_size_);
+    auto seek = seek_key_for_write_(padded, false);
     if (!seek) return seek.error();
     if (!seek.value().positioned) {
         return util::Error{5044, 0, "NTX key not found", key};
