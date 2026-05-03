@@ -890,4 +890,34 @@ UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
     return ok();
 }
 
+UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c || pucName == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto name = openads::abi::to_internal(pucName, 0);
+    auto r = c->create_savepoint(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    if (pucSavepoint == nullptr) {
+        // Full rollback if no savepoint name supplied (matches ACE legacy).
+        auto r = c->rollback_tx();
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    auto name = openads::abi::to_internal(pucSavepoint, 0);
+    auto r = c->rollback_to_savepoint(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 } // extern "C"

@@ -39,6 +39,8 @@ public:
     util::Result<void> begin_tx();
     util::Result<void> commit_tx();
     util::Result<void> rollback_tx();
+    util::Result<void> create_savepoint(const std::string& name);
+    util::Result<void> rollback_to_savepoint(const std::string& name);
     bool               in_tx() const noexcept { return tx_.active(); }
 
 private:

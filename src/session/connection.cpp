@@ -158,6 +158,46 @@ util::Result<void> Connection::rollback_tx() {
     return {};
 }
 
+util::Result<void>
+Connection::create_savepoint(const std::string& name) {
+    if (!tx_.active()) {
+        return util::Error{5000, 0, "no active transaction", ""};
+    }
+    tx_.create_savepoint(name);
+    return {};
+}
+
+util::Result<void>
+Connection::rollback_to_savepoint(const std::string& name) {
+    if (!tx_.active()) {
+        return util::Error{5000, 0, "no active transaction", ""};
+    }
+    std::size_t idx = tx_.savepoint_index(name);
+    if (idx == static_cast<std::size_t>(-1)) {
+        return util::Error{5000, 0, "savepoint not found", name};
+    }
+    const auto& ops = tx_.ops();
+    for (std::size_t i = ops.size(); i > idx; --i) {
+        const auto& op = ops[i - 1];
+        auto it = tables_.find(static_cast<Handle>(op.table));
+        if (it == tables_.end()) continue;
+        auto* drv = it->second->driver();
+        if (!drv) continue;
+        if (op.is_append) {
+            auto rec = drv->read_record_raw(op.recno);
+            if (!rec) continue;
+            auto buf = std::move(rec).value();
+            openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
+            (void)drv->write_record_raw(op.recno, buf.data(), buf.size());
+        } else {
+            (void)drv->write_record_raw(op.recno,
+                                        op.before.data(), op.before.size());
+        }
+    }
+    tx_.truncate_ops_to(idx);
+    return {};
+}
+
 util::Result<void> Connection::recover_orphan_tx_() {
     auto recs_r = tx_log_.read_all();
     if (!recs_r) return recs_r.error();

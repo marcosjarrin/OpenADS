@@ -46,6 +46,19 @@ public:
 
     void note_append(TableId table, Recno recno);
 
+    // Savepoints (in-memory, M5.3).
+    struct OrderedOp {
+        TableId                  table;
+        Recno                    recno;
+        bool                     is_append;
+        std::vector<std::uint8_t> before;
+    };
+
+    void create_savepoint(const std::string& name);
+    const std::vector<OrderedOp>& ops() const noexcept { return ops_; }
+    std::size_t savepoint_index(const std::string& name) const;
+    void truncate_ops_to(std::size_t idx);
+
     bool active() const noexcept { return active_; }
 
     void activate(std::uint64_t id, TxLog* log) noexcept {
@@ -55,6 +68,7 @@ public:
     void clear() noexcept {
         active_ = false; log_ = nullptr;
         before_images_.clear(); appended_.clear(); paths_.clear();
+        ops_.clear(); savepoints_.clear();
     }
 
     void register_table(TableId id, std::string relative_path) {
@@ -88,6 +102,9 @@ private:
                        RecordKeyHash> before_images_;
     std::unordered_map<RecordKey, bool, RecordKeyHash> appended_;
     std::unordered_map<TableId, std::string>           paths_;
+
+    std::vector<OrderedOp>                              ops_;
+    std::vector<std::pair<std::string, std::size_t>>    savepoints_;
 };
 
 } // namespace openads::engine

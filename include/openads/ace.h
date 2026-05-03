@@ -152,6 +152,9 @@ UNSIGNED32 AdsCommitTransaction  (ADSHANDLE hConnect);
 UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect);
 UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
 
+UNSIGNED32 AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName);
+UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint);
+
 #define ADS_TOP            0
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1
