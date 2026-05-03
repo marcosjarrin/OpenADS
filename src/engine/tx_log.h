@@ -31,7 +31,7 @@ enum class TxRecordType : std::uint8_t {
 };
 
 struct TxUpdatePayload {
-    std::uint32_t              table_id;
+    std::string                table_path; // relative to data dir
     std::uint32_t              recno;
     std::vector<std::uint8_t>  before;
     std::vector<std::uint8_t>  after;
@@ -57,7 +57,7 @@ public:
 
     util::Result<void> append_begin (std::uint64_t tx_id);
     util::Result<void> append_update(std::uint64_t tx_id,
-                                     std::uint32_t table_id,
+                                     const std::string& table_path,
                                      std::uint32_t recno,
                                      const std::vector<std::uint8_t>& before,
                                      const std::vector<std::uint8_t>& after);

@@ -103,16 +103,22 @@ util::Result<void> TxLog::append_begin(std::uint64_t tx_id) {
 
 util::Result<void>
 TxLog::append_update(std::uint64_t tx_id,
-                     std::uint32_t table_id, std::uint32_t recno,
+                     const std::string& table_path,
+                     std::uint32_t recno,
                      const std::vector<std::uint8_t>& before,
                      const std::vector<std::uint8_t>& after) {
-    std::vector<std::uint8_t> payload(4 + 4 + 2 + before.size() + 2 + after.size());
+    std::size_t plen = 2 + table_path.size() + 4 + 2 + before.size()
+                       + 2 + after.size();
+    std::vector<std::uint8_t> payload(plen);
     std::uint8_t* p = payload.data();
-    write_u32_le(p + 0, table_id);
-    write_u32_le(p + 4, recno);
-    write_u16_le(p + 8, static_cast<std::uint16_t>(before.size()));
-    if (!before.empty()) std::memcpy(p + 10, before.data(), before.size());
-    std::size_t off = 10 + before.size();
+    write_u16_le(p + 0, static_cast<std::uint16_t>(table_path.size()));
+    if (!table_path.empty())
+        std::memcpy(p + 2, table_path.data(), table_path.size());
+    std::size_t off = 2 + table_path.size();
+    write_u32_le(p + off, recno); off += 4;
+    write_u16_le(p + off, static_cast<std::uint16_t>(before.size()));
+    if (!before.empty()) std::memcpy(p + off + 2, before.data(), before.size());
+    off += 2 + before.size();
     write_u16_le(p + off, static_cast<std::uint16_t>(after.size()));
     if (!after.empty()) std::memcpy(p + off + 2, after.data(), after.size());
     return append_record_(TxRecordType::Update, tx_id, payload);
@@ -158,13 +164,15 @@ util::Result<std::vector<TxRecord>> TxLog::read_all() {
         TxRecord r;
         r.type  = static_cast<TxRecordType>(type_byte);
         r.tx_id = tx_id;
-        if (r.type == TxRecordType::Update && plen >= 12) {
+        if (r.type == TxRecordType::Update && plen >= 10) {
             const std::uint8_t* p = buf.data() + pos + 16;
-            r.update.table_id = read_u32_le(p + 0);
-            r.update.recno    = read_u32_le(p + 4);
-            std::uint16_t bl  = read_u16_le(p + 8);
-            r.update.before.assign(p + 10, p + 10 + bl);
-            std::size_t off = 10 + bl;
+            std::uint16_t pl = read_u16_le(p + 0);
+            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
+            std::size_t off = 2 + pl;
+            r.update.recno = read_u32_le(p + off); off += 4;
+            std::uint16_t bl = read_u16_le(p + off);
+            r.update.before.assign(p + off + 2, p + off + 2 + bl);
+            off += 2 + bl;
             std::uint16_t al = read_u16_le(p + off);
             r.update.after.assign(p + off + 2, p + off + 2 + al);
         }

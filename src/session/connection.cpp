@@ -1,12 +1,17 @@
 #include "session/connection.h"
 
+#include "drivers/cdx/cdx_driver.h"
 #include "drivers/dbt/dbt_memo.h"
 #include "drivers/fpt/fpt_memo.h"
+#include "drivers/ntx/ntx_driver.h"
 #include "platform/path.h"
 
 #include <filesystem>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace openads::session {
 
@@ -18,6 +23,12 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
     }
     Connection c;
     c.data_dir_ = data_dir;
+
+    fs::path log_path = fs::path(data_dir) / "openads.txlog";
+    auto lr = c.tx_log_.open(log_path.string());
+    if (!lr) return lr.error();
+
+    if (auto rr = c.recover_orphan_tx_(); !rr) return rr.error();
     return c;
 }
 
@@ -34,9 +45,7 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
 
     auto holder = std::make_unique<engine::Table>(std::move(t).value());
 
-    // Auto-attach a memo store if the table has M-fields and a sibling
-    // memo file exists. CDX/VFP tables look for .fpt; NTX (Clipper)
-    // looks for .dbt.
+    // Auto-attach a memo store if the table has M-fields.
     bool has_memo_field = false;
     for (std::uint16_t i = 0; i < holder->field_count(); ++i) {
         if (holder->field_descriptor(i).type ==
@@ -74,8 +83,10 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     Handle h = next_table_handle_++;
     if (tx_.active()) {
         holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
+        tx_.register_table(static_cast<engine::Tx::TableId>(h), relative_path);
     }
     tables_.emplace(h, std::move(holder));
+    table_paths_.emplace(h, relative_path);
     return h;
 }
 
@@ -83,9 +94,15 @@ util::Result<void> Connection::begin_tx() {
     if (tx_.active()) {
         return util::Error{5000, 0, "transaction already active", ""};
     }
-    tx_.activate(next_tx_id_++);
+    std::uint64_t tid = next_tx_id_++;
+    tx_.activate(tid, &tx_log_);
+    if (auto r = tx_log_.append_begin(tid); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
+        auto pit = table_paths_.find(h);
+        if (pit != table_paths_.end()) {
+            tx_.register_table(static_cast<engine::Tx::TableId>(h), pit->second);
+        }
     }
     return {};
 }
@@ -94,13 +111,14 @@ util::Result<void> Connection::commit_tx() {
     if (!tx_.active()) {
         return util::Error{5000, 0, "no active transaction", ""};
     }
+    if (auto r = tx_log_.append_commit(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         (void)h;
         holder->detach_tx();
-        // Persist driver buffers; without a WAL, durability ends at flush.
         (void)holder->flush();
     }
     tx_.clear();
+    (void)tx_log_.truncate();
     return {};
 }
 
@@ -108,7 +126,6 @@ util::Result<void> Connection::rollback_tx() {
     if (!tx_.active()) {
         return util::Error{5000, 0, "no active transaction", ""};
     }
-    // Restore before-images.
     tx_.for_each_before_image(
         [&](const engine::Tx::RecordKey& k,
             const std::vector<std::uint8_t>& bytes) {
@@ -119,7 +136,6 @@ util::Result<void> Connection::rollback_tx() {
                 (void)drv->write_record_raw(k.recno, bytes.data(), bytes.size());
             }
         });
-    // Mark records appended in this tx as deleted.
     tx_.for_each_append([&](const engine::Tx::RecordKey& k) {
         auto it = tables_.find(static_cast<Handle>(k.table));
         if (it == tables_.end()) return;
@@ -131,17 +147,90 @@ util::Result<void> Connection::rollback_tx() {
         openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
         (void)drv->write_record_raw(k.recno, buf.data(), buf.size());
     });
+    if (auto r = tx_log_.append_abort(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         (void)h;
         holder->detach_tx();
         (void)holder->flush();
     }
     tx_.clear();
+    (void)tx_log_.truncate();
+    return {};
+}
+
+util::Result<void> Connection::recover_orphan_tx_() {
+    auto recs_r = tx_log_.read_all();
+    if (!recs_r) return recs_r.error();
+    auto recs = std::move(recs_r).value();
+    if (recs.empty()) return {};
+
+    // Group records by tx_id and find which transactions ended.
+    std::unordered_set<std::uint64_t> ended;
+    for (const auto& r : recs) {
+        if (r.type == engine::TxRecordType::Commit ||
+            r.type == engine::TxRecordType::Abort) {
+            ended.insert(r.tx_id);
+        }
+    }
+
+    // For each orphan tx, walk its UPDATEs in reverse and write back
+    // the before-image directly through the driver. Open each
+    // referenced table on demand.
+    std::unordered_map<std::string, std::unique_ptr<engine::Table>> opened;
+    auto open_for = [&](const std::string& path) -> engine::Table* {
+        auto it = opened.find(path);
+        if (it != opened.end()) return it->second.get();
+        std::filesystem::path full =
+            std::filesystem::path(data_dir_) / path;
+        auto resolved = platform::resolve_case_insensitive(full.string());
+        // Detect type by extension. For now any non-NTX is treated as CDX.
+        auto type = engine::TableType::Cdx;
+        if (resolved.size() >= 4 &&
+            (resolved.substr(resolved.size() - 4) == ".ntx")) {
+            type = engine::TableType::Ntx;
+        }
+        auto t = engine::Table::open(resolved, type, engine::OpenMode::Shared);
+        if (!t) return nullptr;
+        auto h = std::make_unique<engine::Table>(std::move(t).value());
+        engine::Table* raw = h.get();
+        opened.emplace(path, std::move(h));
+        return raw;
+    };
+
+    // Build list of orphan UPDATE records in reverse log order.
+    std::vector<const engine::TxRecord*> orphan_updates;
+    for (auto it = recs.rbegin(); it != recs.rend(); ++it) {
+        if (it->type == engine::TxRecordType::Update &&
+            ended.find(it->tx_id) == ended.end()) {
+            orphan_updates.push_back(&*it);
+        }
+    }
+    for (const engine::TxRecord* up : orphan_updates) {
+        engine::Table* t = open_for(up->update.table_path);
+        if (!t || !t->driver()) continue;
+        if (!up->update.before.empty()) {
+            (void)t->driver()->write_record_raw(
+                up->update.recno,
+                up->update.before.data(),
+                up->update.before.size());
+        }
+    }
+    // Append ABORT for each orphan tx so the log is well-formed.
+    std::unordered_set<std::uint64_t> orphan_ids;
+    for (const auto& r : recs) {
+        if (ended.find(r.tx_id) == ended.end()) orphan_ids.insert(r.tx_id);
+    }
+    for (auto id : orphan_ids) (void)tx_log_.append_abort(id);
+
+    // Flush any open tables and truncate the log.
+    for (auto& [_, t] : opened) (void)t->flush();
+    (void)tx_log_.truncate();
     return {};
 }
 
 void Connection::close_table(Handle h) {
     tables_.erase(h);
+    table_paths_.erase(h);
 }
 
 engine::Table* Connection::lookup_table(Handle h) {

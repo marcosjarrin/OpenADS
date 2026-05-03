@@ -20,7 +20,7 @@ TEST_CASE("TxLog: append BEGIN / UPDATE / COMMIT and read them back") {
         REQUIRE(log.append_begin(7).has_value());
         std::vector<std::uint8_t> before{1, 2, 3};
         std::vector<std::uint8_t> after {9, 8, 7};
-        REQUIRE(log.append_update(7, 42, 5, before, after).has_value());
+        REQUIRE(log.append_update(7, "data.dbf", 5, before, after).has_value());
         REQUIRE(log.append_commit(7).has_value());
     }
     {
@@ -32,8 +32,8 @@ TEST_CASE("TxLog: append BEGIN / UPDATE / COMMIT and read them back") {
         CHECK(recs.value()[0].type  == TxRecordType::Begin);
         CHECK(recs.value()[0].tx_id == 7);
         CHECK(recs.value()[1].type  == TxRecordType::Update);
-        CHECK(recs.value()[1].update.table_id == 42);
-        CHECK(recs.value()[1].update.recno    == 5);
+        CHECK(recs.value()[1].update.table_path == "data.dbf");
+        CHECK(recs.value()[1].update.recno      == 5);
         CHECK(recs.value()[1].update.before == std::vector<std::uint8_t>{1,2,3});
         CHECK(recs.value()[1].update.after  == std::vector<std::uint8_t>{9,8,7});
         CHECK(recs.value()[2].type  == TxRecordType::Commit);

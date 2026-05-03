@@ -72,7 +72,9 @@ util::Result<void> Table::writeback_record_() {
     if (tx_ && tx_->active()) {
         auto cur = driver_->read_record_raw(recno_);
         if (cur) {
-            tx_->note_before_image(tid_, recno_, std::move(cur).value());
+            std::vector<std::uint8_t> before = std::move(cur).value();
+            std::vector<std::uint8_t> after(record_buf_);
+            tx_->note_before_image(tid_, recno_, std::move(before), std::move(after));
         }
     }
     return driver_->write_record_raw(recno_, record_buf_.data(),

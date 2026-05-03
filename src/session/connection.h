@@ -2,6 +2,7 @@
 
 #include "engine/table.h"
 #include "engine/tx.h"
+#include "engine/tx_log.h"
 #include "session/handle_registry.h"
 #include "util/result.h"
 
@@ -34,17 +35,21 @@ public:
 
     const std::string& data_dir() const noexcept { return data_dir_; }
 
-    // Transaction surface (M5 in-memory).
+    // Transaction surface (M5 in-memory + persistent WAL).
     util::Result<void> begin_tx();
     util::Result<void> commit_tx();
     util::Result<void> rollback_tx();
     bool               in_tx() const noexcept { return tx_.active(); }
 
 private:
+    util::Result<void> recover_orphan_tx_();
+
     std::string                                                data_dir_;
     std::unordered_map<Handle, std::unique_ptr<engine::Table>> tables_;
+    std::unordered_map<Handle, std::string>                    table_paths_;
     Handle                                                     next_table_handle_ = 1;
 
+    engine::TxLog                                              tx_log_;
     engine::Tx                                                 tx_;
     std::uint64_t                                              next_tx_id_ = 1;
 };

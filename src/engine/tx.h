@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/tx_log.h"
 #include "util/result.h"
 
 #include <cstdint>
@@ -14,10 +15,9 @@ namespace openads::engine {
 // before-image keyed by (table_id, recno). On commit() the before-
 // images are dropped; on rollback() they are written back to disk.
 //
-// Persistent WAL with crash recovery is a follow-up (M5.x); this
-// in-memory variant gives the ABI surface (AdsBeginTransaction /
-// AdsCommitTransaction / AdsRollbackTransaction) usable semantics
-// for single-process workflows.
+// Persistent WAL is wired through `log_`: when set, every
+// note_before_image() also appends an UPDATE record so a crash before
+// commit/abort can be recovered on the next Connection::open.
 
 class Tx {
 public:
@@ -40,29 +40,36 @@ public:
 
     Tx() = default;
 
-    // Marks a record as touched and remembers its pre-write content.
-    // No-op if a before-image for this record already exists.
     void note_before_image(TableId table, Recno recno,
-                           std::vector<std::uint8_t> bytes);
+                           std::vector<std::uint8_t> before,
+                           std::vector<std::uint8_t> after);
 
-    // Note an append: the record was created during the tx, so a
-    // rollback must logically delete it (we mark it for deletion via
-    // the record's deletion byte rather than physically truncating).
     void note_append(TableId table, Recno recno);
 
     bool active() const noexcept { return active_; }
 
-    void activate(std::uint64_t id) noexcept {
-        active_ = true; tx_id_ = id; before_images_.clear();
-        appended_.clear();
+    void activate(std::uint64_t id, TxLog* log) noexcept {
+        active_ = true; tx_id_ = id; log_ = log;
+        before_images_.clear(); appended_.clear(); paths_.clear();
     }
     void clear() noexcept {
-        active_ = false; before_images_.clear(); appended_.clear();
+        active_ = false; log_ = nullptr;
+        before_images_.clear(); appended_.clear(); paths_.clear();
     }
+
+    void register_table(TableId id, std::string relative_path) {
+        paths_[id] = std::move(relative_path);
+    }
+    const std::string& path_for(TableId id) const {
+        static const std::string empty;
+        auto it = paths_.find(id);
+        return it == paths_.end() ? empty : it->second;
+    }
+
+    TxLog* log() noexcept { return log_; }
 
     std::uint64_t id() const noexcept { return tx_id_; }
 
-    // Iterate before-images / appends for rollback.
     template <class F>
     void for_each_before_image(F&& f) const {
         for (const auto& [k, v] : before_images_) f(k, v);
@@ -75,10 +82,12 @@ public:
 private:
     bool          active_  = false;
     std::uint64_t tx_id_   = 0;
+    TxLog*        log_     = nullptr;
 
     std::unordered_map<RecordKey, std::vector<std::uint8_t>,
                        RecordKeyHash> before_images_;
     std::unordered_map<RecordKey, bool, RecordKeyHash> appended_;
+    std::unordered_map<TableId, std::string>           paths_;
 };
 
 } // namespace openads::engine
