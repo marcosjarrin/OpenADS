@@ -65,25 +65,20 @@ openads::engine::TableType map_type(UNSIGNED16 t) {
 
 UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
     using openads::drivers::DbfFieldType;
-    // The numeric values must match whatever ACE field-type constants
-    // the prebuilt rddads.lib was compiled against — its adsOpen
-    // switch routes each value to a Clipper field type. Empirical
-    // probe (M8.3) showed:
-    //   1  -> rddads' ADS_LOGICAL  (Clipper 'L')
-    //   20 -> rddads' ADS_CISTRING (Clipper 'C', maps to HB_FT_STRING)
-    // Until OpenADS ships its own ace.h, returning 20 for Character
-    // keeps DBF C-fields readable end-to-end through Harbour.
+    // Constants verified empirically (M8.4) against
+    // c:\harbour\lib\win\msvc64\rddads.lib — see include/openads/ace.h
+    // for the full sweep table.
     switch (t) {
-        case DbfFieldType::Character: return 20;
+        case DbfFieldType::Character: return ADS_STRING;        //  4
         case DbfFieldType::Numeric:
-        case DbfFieldType::Float:     return ADS_FIELD_TYPE_NUMERIC;
-        case DbfFieldType::Logical:   return ADS_FIELD_TYPE_LOGICAL;
-        case DbfFieldType::Date:      return ADS_FIELD_TYPE_DATE;
-        case DbfFieldType::DateTime:  return ADS_FIELD_TYPE_DATETIME;
-        case DbfFieldType::Memo:      return ADS_FIELD_TYPE_MEMO;
-        case DbfFieldType::Integer:   return ADS_FIELD_TYPE_INTEGER;
-        case DbfFieldType::Currency:  return ADS_FIELD_TYPE_CURRENCY;
-        case DbfFieldType::Double:    return ADS_FIELD_TYPE_DOUBLE;
+        case DbfFieldType::Float:     return ADS_NUMERIC;       //  2
+        case DbfFieldType::Logical:   return ADS_LOGICAL;       //  1
+        case DbfFieldType::Date:      return ADS_DATE;          //  3
+        case DbfFieldType::DateTime:  return ADS_TIMESTAMP;     // 14
+        case DbfFieldType::Memo:      return ADS_MEMO;          //  5
+        case DbfFieldType::Integer:   return ADS_INTEGER;       // 11
+        case DbfFieldType::Currency:  return ADS_MONEY;         // 18
+        case DbfFieldType::Double:    return ADS_DOUBLE;        // 10
         case DbfFieldType::Unknown:   return ADS_FIELD_TYPE_UNKNOWN;
     }
     return ADS_FIELD_TYPE_UNKNOWN;

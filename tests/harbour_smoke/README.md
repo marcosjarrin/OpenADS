@@ -16,6 +16,17 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.4 — ACE field-type constants verified
+
+Empirical sweep against `c:\harbour\lib\win\msvc64\rddads.lib`: probe
+`AdsGetFieldType` returning each value 0..40, observe Harbour's
+`FieldType()`. Mapping captured in `include/openads/ace.h`. Notably,
+this Harbour build was compiled against an `ace.h` where
+`ADS_LOGICAL = 1` and `ADS_STRING = 4` — the inverse of the commonly
+cited public ACE SDK layout. `map_field_type` now returns 4 for
+`Character`; `Field 1 type` shows the canonical Clipper `'C'` (M8.3
+showed `'CICHARACTER'`, the case-insensitive alias at value 20).
+
 ## M8.3 — DBF walk via Harbour rddads
 
 The smoke now stages a 88-byte DBF (`make_data.ps1`), opens it through

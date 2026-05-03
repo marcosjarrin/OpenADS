@@ -185,19 +185,55 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_MEMO_TEXT      1
 #define ADS_MEMO_PICTURE   0
 
-// ACE field type constants. Values match the real Sybase/SAP ACE SDK
-// header so prebuilt rddads.lib (which switches on these values inside
-// adsOpen) routes each AdsGetFieldType return to the correct Clipper
-// field type.
-#define ADS_STRING                1
+// ACE field-type constants.
+//
+// Values empirically verified (M8.4) against the prebuilt
+// `c:\harbour\lib\win\msvc64\rddads.lib` by sweeping `AdsGetFieldType`'s
+// return through 0..40 and observing what Clipper field type the
+// `adsOpen` switch routes each value to. The probe shows that whichever
+// SAP/Sybase ACE.h Harbour was built against does not match the
+// commonly-cited "ADS_STRING = 1, ADS_LOGICAL = 4" layout — the values
+// below are what rddads.lib actually decodes.
+//
+//   value | rddads dbFieldInfo.uiType -> Clipper FieldType()
+//   ------+--------------------------------------------------
+//     1   | HB_FT_LOGICAL          'L'
+//     2   | HB_FT_LONG / numeric   'N'
+//     3   | HB_FT_DATE             'D'
+//     4   | HB_FT_STRING           'C'   <- standard char
+//     5   | HB_FT_MEMO             'M'
+//     6   | HB_FT_BLOB             'W'
+//     7   | HB_FT_IMAGE            'P'
+//     8   | HB_FT_VARLENGTH        'Q'
+//     9   | HB_FT_DATE             'D'   (compactdate)
+//    10   | HB_FT_DOUBLE           'B'
+//    11   | HB_FT_INTEGER          'I'
+//    12   | HB_FT_INTEGER          'I'   (shortint alias)
+//    13   | HB_FT_TIME             'T'
+//    14   | HB_FT_TIMESTAMP        '@'
+//    15   | HB_FT_AUTOINC          '+'
+//    16   | HB_FT_STRING           'C'   (alias)
+//    17   | HB_FT_CURDOUBLE        'Z'
+//    18   | HB_FT_CURRENCY         'Y'   (money)
+//    19   | HB_FT_INTEGER          'I'   (longlong)
+//    20   | HB_FT_STRING           'CICHARACTER'  (case-insensitive)
+//    21   | HB_FT_ROWVER           '^'
+//    22   | HB_FT_MODTIME          '='
+//    23   | HB_FT_VARLENGTH        'Q'   (varchar fox)
+//    24   | HB_FT_VARLENGTH        'Q'   (varbinary fox)
+//    26   | HB_FT_STRING           'C'   (nchar / unicode)
+//    27   | HB_FT_VARLENGTH        'Q'   (nvarchar)
+//    28   | HB_FT_MEMO             'M'   (nmemo)
+//    other| EDBF_CORRUPT (open fails)
+#define ADS_LOGICAL               1
 #define ADS_NUMERIC               2
 #define ADS_DATE                  3
-#define ADS_LOGICAL               4
+#define ADS_STRING                4
 #define ADS_MEMO                  5
 #define ADS_BINARY                6
 #define ADS_RAW                   6
 #define ADS_IMAGE                 7
-#define ADS_VARCHAR               8
+#define ADS_VARCHAR_FOX           8
 #define ADS_COMPACTDATE           9
 #define ADS_DOUBLE               10
 #define ADS_INTEGER              11
@@ -205,20 +241,18 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_TIME                 13
 #define ADS_TIMESTAMP            14
 #define ADS_AUTOINC              15
-#define ADS_RAW_BINARY            6
-#define ADS_LONGLONG             24
 #define ADS_CURDOUBLE            17
 #define ADS_MONEY                18
-#define ADS_MODTIME              19
-#define ADS_ROWVERSION           20
-#define ADS_VARCHAR_FOX          26
-#define ADS_VARBINARY_FOX        27
-#define ADS_NCHAR                28
-#define ADS_NVARCHAR             29
-#define ADS_NMEMO                30
-#define ADS_CISTRING             31
-// Legacy aliases kept for the OpenADS code that already references the
-// _FIELD_TYPE_* names.
+#define ADS_LONGLONG             19
+#define ADS_CISTRING             20
+#define ADS_ROWVERSION           21
+#define ADS_MODTIME              22
+#define ADS_VARBINARY_FOX        24
+#define ADS_NCHAR                26
+#define ADS_NVARCHAR             27
+#define ADS_NMEMO                28
+// Legacy ADS_FIELD_TYPE_* aliases kept for the engine-side code that
+// pre-dates the ace.h authoritative constants.
 #define ADS_FIELD_TYPE_CHAR       ADS_STRING
 #define ADS_FIELD_TYPE_NUMERIC    ADS_NUMERIC
 #define ADS_FIELD_TYPE_LOGICAL    ADS_LOGICAL
@@ -227,7 +261,7 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_FIELD_TYPE_MEMO       ADS_MEMO
 #define ADS_FIELD_TYPE_INTEGER    ADS_INTEGER
 #define ADS_FIELD_TYPE_DOUBLE     ADS_DOUBLE
-#define ADS_FIELD_TYPE_CURRENCY   ADS_CURDOUBLE
+#define ADS_FIELD_TYPE_CURRENCY   ADS_MONEY
 #define ADS_FIELD_TYPE_UNKNOWN    99
 
 #ifdef __cplusplus
