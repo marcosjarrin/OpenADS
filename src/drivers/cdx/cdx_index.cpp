@@ -52,6 +52,36 @@ std::uint8_t bits_for(std::uint32_t n) {
     return b == 0 ? 1 : b;
 }
 
+// FoxPro CDX leaf bit layout, mirrors Harbour hb_cdxPageLeafInitSpace
+// (src/rdd/dbfcdx/dbfcdx1.c lines 1927-1941). bBits is derived from
+// the key length; ReqByte / RNBits then fall out.
+struct LeafLayout {
+    std::uint8_t  req_byte;   // bytes per packed entry
+    std::uint8_t  rn_bits;    // bits for record number
+    std::uint8_t  dc_bits;    // bits for duplicate count (= bBits)
+    std::uint8_t  tc_bits;    // bits for trailing count  (= bBits)
+    std::uint32_t rn_mask;
+    std::uint32_t dc_mask;
+    std::uint32_t tc_mask;
+};
+
+LeafLayout compute_layout(std::uint16_t key_len) {
+    LeafLayout out{};
+    std::uint16_t v = key_len;
+    std::uint8_t  b_bits = 0;
+    while (v) { ++b_bits; v >>= 1; }
+    out.dc_bits  = b_bits;
+    out.tc_bits  = b_bits;
+    out.req_byte = (b_bits > 12) ? 5 : (b_bits > 8 ? 4 : 3);
+    out.rn_bits  = static_cast<std::uint8_t>(
+        (out.req_byte << 3) - (b_bits << 1));
+    out.dc_mask  = (b_bits >= 32) ? 0xFFFFFFFFu : ((1u << b_bits) - 1);
+    out.tc_mask  = out.dc_mask;
+    out.rn_mask  = (out.rn_bits >= 32) ? 0xFFFFFFFFu
+                                       : ((1u << out.rn_bits) - 1);
+    return out;
+}
+
 } // namespace
 
 util::Result<CdxIndex::Page*> CdxIndex::get_page_(std::uint32_t offset) {
@@ -139,7 +169,7 @@ CdxIndex::decode_leaf_(std::uint32_t page_off) {
     std::uint8_t  dup_bits  = p[21];
     std::uint8_t  trl_bits  = p[22];
     std::uint8_t  key_bytes = p[23];
-    (void)p[20]; // rec_bits — read for round-trip awareness, unused here
+    (void)p[20]; // rec_bits — implied by key_bytes / dup_bits / trl_bits
 
     std::vector<std::pair<std::string, std::uint32_t>> out;
     out.reserve(nkeys);
@@ -198,19 +228,15 @@ CdxIndex::encode_leaf_(std::uint32_t page_off,
     if (!page) return page.error();
     Page& p = *page.value();
 
-    // Pick bit widths. Use a generous 24-bit recno window (mask 0xFFFFFF)
-    // and 8 bits each for dup/trl which is plenty for key_size < 256.
-    constexpr std::uint32_t rec_mask = 0x00FFFFFFu;
-    constexpr std::uint8_t  rec_bits = 24;
-    constexpr std::uint8_t  dup_bits = 8;
-    constexpr std::uint8_t  trl_bits = 8;
-    constexpr std::uint8_t  dup_mask = 0xFF;
-    constexpr std::uint8_t  trl_mask = 0xFF;
-
-    constexpr std::uint8_t  total_bits = rec_bits + dup_bits + trl_bits;
-    constexpr std::uint8_t  key_bytes  =
-        (total_bits + 7) / 8 < 4 ? 4 : (total_bits + 7) / 8;
-    (void)rec_bits;
+    // FoxPro-derived layout (matches Harbour hb_cdxPageLeafInitSpace).
+    LeafLayout L = compute_layout(key_size_);
+    const std::uint32_t rec_mask = L.rn_mask;
+    const std::uint8_t  rec_bits = L.rn_bits;
+    const std::uint8_t  dup_bits = L.dc_bits;
+    const std::uint8_t  trl_bits = L.tc_bits;
+    const std::uint32_t dup_mask = L.dc_mask;
+    const std::uint32_t trl_mask = L.tc_mask;
+    const std::uint8_t  key_bytes = L.req_byte;
 
     std::fill(p.begin(), p.end(), std::uint8_t{0});
     write_u16_le(p.data() + 0, CDX_NODE_LEAF);
@@ -218,8 +244,8 @@ CdxIndex::encode_leaf_(std::uint32_t page_off,
     write_u32_le(p.data() + 4,  left_sib);
     write_u32_le(p.data() + 8,  right_sib);
     write_u32_le(p.data() + 14, rec_mask);
-    p[18] = dup_mask;
-    p[19] = trl_mask;
+    p[18] = static_cast<std::uint8_t>(dup_mask & 0xFFu);
+    p[19] = static_cast<std::uint8_t>(trl_mask & 0xFFu);
     p[20] = rec_bits;
     p[21] = dup_bits;
     p[22] = trl_bits;
@@ -253,25 +279,31 @@ CdxIndex::encode_leaf_(std::uint32_t page_off,
                         padded.data() + dup, suffix_len);
         }
 
-        // Pack entry.
+        // Pack entry — mirrors Harbour hb_cdxSetLeafRecord (dbfcdx1.c
+        // lines 1743-1761). Lay recno bytes LE across `key_bytes`,
+        // then OR dup+trl bits into the upper bytes such that decoded
+        // tmp = LE32(entry + key_bytes - 4) >> (32 - tc_bits - dc_bits)
+        // yields trl in the high portion and dup in the low portion.
         std::uint8_t* entry = p.data() + CDX_EXT_HEADSIZE + i * key_bytes;
         if (entry + key_bytes > p.data() + CDX_PAGE_LEN) {
             return util::Error{5000, 0, "CDX leaf entry overflow", ""};
         }
-        // Lower 4 bytes hold recno (with rec_mask). Upper portion holds
-        // dup+trl shifted into the high bits of the last 4 bytes.
-        std::array<std::uint8_t, 16> tmp_entry{};
-        write_u32_le(tmp_entry.data(), recno & rec_mask);
 
-        std::uint8_t shift = static_cast<std::uint8_t>(32 - dup_bits - trl_bits);
-        std::uint32_t high = ((dup & dup_mask) << trl_bits) | (trl & trl_mask);
-        std::uint32_t high_shifted = high << shift;
-        // OR the high_shifted into the last 4 bytes of the entry buffer.
-        std::uint32_t last_word = read_u32_le(tmp_entry.data() + key_bytes - 4);
-        last_word |= high_shifted;
-        write_u32_le(tmp_entry.data() + key_bytes - 4, last_word);
+        std::uint32_t bits = ((trl & trl_mask) << dup_bits) | (dup & dup_mask);
+        const int top_bytes = (trl_bits + dup_bits + 7) >> 3;
+        const int from_byte = key_bytes - top_bytes;
+        bits <<= ((top_bytes << 3) - trl_bits - dup_bits);
 
-        std::memcpy(entry, tmp_entry.data(), key_bytes);
+        std::uint32_t rec = recno & rec_mask;
+        for (int byte_i = 0; byte_i < key_bytes; ++byte_i) {
+            std::uint8_t b = static_cast<std::uint8_t>(rec & 0xFFu);
+            rec >>= 8;
+            if (byte_i >= from_byte) {
+                b = static_cast<std::uint8_t>(b | (bits & 0xFFu));
+                bits >>= 8;
+            }
+            entry[byte_i] = b;
+        }
 
         prev = padded;
     }
