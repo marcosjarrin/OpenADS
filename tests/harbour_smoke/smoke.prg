@@ -1,7 +1,8 @@
-/* OpenADS / Harbour rddads smoke test (M8.7).
+/* OpenADS / Harbour rddads smoke test (M8.9).
  *
- * Multi-field DBF + CDX. Walk + dbSeek + APPEND BLANK + write back +
- * close + reopen + verify the appended row is visible.
+ * Multi-tag CDX with two tags (NAME and AGE). Smoke walks records in
+ * each focus, exercises dbSeek through OrdSetFocus, and verifies the
+ * Order list reports both tags.
  */
 #include "ads.ch"
 
@@ -10,7 +11,7 @@ REQUEST ADS, ADSCDX, ADSNTX
 PROCEDURE Main()
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
-   ? "OpenADS smoke test (M8.7)"
+   ? "OpenADS smoke test (M8.9)"
    ? "ACE DLL reports:", AdsVersion()
 
    AdsSetFileType( ADS_CDX )
@@ -27,45 +28,42 @@ PROCEDURE Main()
       RETURN
    ENDIF
 
-   ? "Initial record count:", LastRec()
+   ? "Number of orders:", OrdCount()
+   ? "Default order :", OrdName()
 
-   ? "Append a fourth row..."
-   dbAppend()
-   FIELD->NAME   := "DELTA"
-   FIELD->AGE    := 99
-   FIELD->ACTIVE := .F.
-   FIELD->BORN   := SToD( "20260101" )
-   dbCommit()
-   ? "  appended at recno", RecNo()
-
-   ? "After append, record count:", LastRec()
-
-   ? "Walk in NAME order:"
+   ? ""
+   ? "=== Walk under NAME order ==="
+   OrdSetFocus( "NAME" )
+   ? "Active order:", OrdName(), "  key:", OrdKey()
    dbGoTop()
    DO WHILE ! Eof()
       ? "  rec", RecNo(), ;
         "NAME=[" + FIELD->NAME + "]", ;
-        "AGE=" + LTrim(Str(FIELD->AGE)), ;
-        "ACTIVE=" + iif(FIELD->ACTIVE, "T", "F"), ;
-        "BORN=" + DToS(FIELD->BORN)
+        "AGE=" + LTrim(Str(FIELD->AGE))
       dbSkip()
    ENDDO
 
-   USE
+   ? ""
+   ? "=== Walk under AGE order ==="
+   OrdSetFocus( "AGE" )
+   ? "Active order:", OrdName(), "  key:", OrdKey()
+   dbGoTop()
+   DO WHILE ! Eof()
+      ? "  rec", RecNo(), ;
+        "NAME=[" + FIELD->NAME + "]", ;
+        "AGE=" + LTrim(Str(FIELD->AGE))
+      dbSkip()
+   ENDDO
 
    ? ""
-   ? "Reopen and re-walk to verify durability..."
-   USE data INDEX data VIA "ADSCDX"
-   ? "Reopened record count:", LastRec()
-   dbSeek("DELTA")
-   ? "  Seek 'DELTA': Found=" + iif(Found(), "T", "F"), ;
+   ? "=== Seek by AGE ==="
+   dbSeek(" 77")
+   ? "  Seek ' 77': Found=" + iif(Found(), "T", "F"), ;
      "RecNo=" + LTrim(Str(RecNo())), ;
      "NAME=[" + FIELD->NAME + "]", ;
-     "AGE=" + LTrim(Str(FIELD->AGE)), ;
-     "ACTIVE=" + iif(FIELD->ACTIVE, "T", "F"), ;
-     "BORN=" + DToS(FIELD->BORN)
-   USE
+     "AGE=" + LTrim(Str(FIELD->AGE))
 
+   USE
    ? "Done."
    RETURN
 

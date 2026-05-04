@@ -24,6 +24,13 @@ public:
     drivers::IIndex* index() noexcept { return index_.get(); }
     const drivers::IIndex* index() const noexcept { return index_.get(); }
 
+    // Surrender ownership of the underlying index. After this call the
+    // Order is no longer usable for navigation; the caller is expected
+    // to drop the Order or re-arm it via assignment.
+    std::unique_ptr<drivers::IIndex> release() noexcept {
+        return std::move(index_);
+    }
+
     Scope&       scope()       noexcept { return scope_; }
     const Scope& scope() const noexcept { return scope_; }
 

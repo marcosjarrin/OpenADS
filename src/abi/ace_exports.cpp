@@ -122,6 +122,7 @@ bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
 // lookup_table_by_index — defined further down once IndexBinding is
 // known. Returns the Table bound to the given index handle, or null.
 Table* lookup_table_by_index(ADSHANDLE h);
+openads::util::Result<void> activate_binding(ADSHANDLE h);
 
 Table* get_table(ADSHANDLE h) {
     auto& s = state();
@@ -129,9 +130,15 @@ Table* get_table(ADSHANDLE h) {
     if (t != nullptr) return t;
     // Real ACE accepts an index handle anywhere a table handle is
     // expected — rddads' adsGoTop calls AdsGotoTop(hOrdCurrent) when
-    // an order is active. The index's bound Table is the same as the
-    // table's, so navigation works the same way.
-    return lookup_table_by_index(h);
+    // an order is active. The bound Table is the same as the table's
+    // own; we additionally swap the binding's parked IIndex into the
+    // Table's active order so navigation actually walks the requested
+    // tag (multi-tag CDX support, M8.9).
+    Table* via_idx = lookup_table_by_index(h);
+    if (via_idx != nullptr) {
+        (void)activate_binding(h);
+    }
+    return via_idx;
 }
 
 } // namespace
@@ -585,9 +592,25 @@ namespace {
 // since openads::engine::Table owns the active IIndex via Order. We keep a
 // per-process map so the L1 thunks can resolve the table from the index
 // handle.
-struct IndexBinding { Table* table; std::string tag_name; };
+// Binding for one open tag. Multi-tag CDX files create one binding
+// per tag. At most ONE binding per table is "live" — its `idx` has
+// been moved into Table::order_; the rest park their IIndex here so
+// OrdSetFocus / AdsGetIndexHandle can swap them in on demand.
+struct IndexBinding {
+    Table*                                  table = nullptr;
+    std::string                             tag_name;
+    std::unique_ptr<openads::drivers::IIndex> parked;  // nullptr when this is the active binding
+};
+
 std::unordered_map<ADSHANDLE, IndexBinding>& index_bindings() {
     static std::unordered_map<ADSHANDLE, IndexBinding> m;
+    return m;
+}
+
+// Records, per table, which binding handle currently owns the active
+// IIndex (i.e. the one moved into Table::order_).
+std::unordered_map<Table*, ADSHANDLE>& active_binding_for() {
+    static std::unordered_map<Table*, ADSHANDLE> m;
     return m;
 }
 
@@ -596,6 +619,39 @@ Table* lookup_table_by_index(ADSHANDLE h) {
     auto it = m.find(h);
     if (it == m.end()) return nullptr;
     return it->second.table;
+}
+
+// Make `h` the active order for its table. If another binding is
+// currently active, park its IIndex back into that binding before
+// stealing the requested one. No-op when `h` is already active.
+openads::util::Result<void> activate_binding(ADSHANDLE h) {
+    auto& m = index_bindings();
+    auto it = m.find(h);
+    if (it == m.end()) {
+        return openads::util::Error{
+            openads::AE_INTERNAL_ERROR, 0, "unknown index", ""};
+    }
+    Table* t = it->second.table;
+    auto& act = active_binding_for();
+    auto act_it = act.find(t);
+    if (act_it != act.end() && act_it->second == h) return {};   // already live
+
+    // Park the currently-active binding's index back into its slot.
+    if (act_it != act.end()) {
+        auto prev = m.find(act_it->second);
+        if (prev != m.end()) {
+            prev->second.parked = t->take_order();
+        } else {
+            t->clear_order();
+        }
+    }
+
+    // Move the parked IIndex from this binding into the table.
+    if (it->second.parked) {
+        t->set_order(std::move(it->second.parked));
+    }
+    act[t] = h;
+    return {};
 }
 
 ADSHANDLE next_index_handle() {
@@ -634,17 +690,17 @@ make_index_for(const std::string& path) {
 
 } // extern "C++"
 
+// Real-ACE 4-arg signature: opens an index FILE, registers one handle
+// per tag, and writes the handles into ahIndex[] / *pu16ArrayLen.
 UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
-                        ADSHANDLE* phIndex) {
+                        ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
     Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr) {
+    if (!t || ahIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
     auto raw = openads::abi::to_internal(pucName, 0);
     namespace fs = std::filesystem;
     fs::path p(raw);
-    // Resolve relative to the table's directory and auto-append the
-    // file-type extension when the caller passed a bare alias.
     if (!p.is_absolute()) {
         fs::path table_dir = fs::path(t->path()).parent_path();
         p = table_dir / p;
@@ -653,24 +709,68 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         p.replace_extension(".cdx");
     }
     auto path = p.string();
-    auto idx = make_index_for(path);
-    if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
-        return fail(r.error());
-    }
-    std::string tag_name = idx->name();
 
-    // Drop any prior bindings for this table — set_order destroys the
-    // previous order, which would leave older handles dangling.
-    auto& m = index_bindings();
+    // Drop any prior bindings for this table.
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
     for (auto it = m.begin(); it != m.end(); ) {
         if (it->second.table == t) it = m.erase(it);
         else                       ++it;
     }
+    act.erase(t);
+    t->clear_order();
 
-    t->set_order(std::move(idx));
-    ADSHANDLE h = next_index_handle();
-    m[h] = IndexBinding{t, tag_name};
-    *phIndex = h;
+    // Enumerate tags. CDX exposes list_tags; NTX has only its single
+    // tag, which open() reports via name().
+    std::vector<std::string> tags;
+    if (path_ends_with_ci(path, ".cdx")) {
+        auto r = openads::drivers::cdx::CdxIndex::list_tags(path);
+        if (!r) return fail(r.error());
+        tags = std::move(r).value();
+    }
+    if (tags.empty()) {
+        // NTX or empty CDX: open once via the legacy path.
+        auto idx = make_index_for(path);
+        if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
+            return fail(r.error());
+        }
+        std::string tag_name = idx->name();
+        t->set_order(std::move(idx));
+        ADSHANDLE h = next_index_handle();
+        m[h] = IndexBinding{t, tag_name, nullptr};
+        act[t] = h;
+        ahIndex[0] = h;
+        if (pu16ArrayLen != nullptr) *pu16ArrayLen = 1;
+        return ok();
+    }
+
+    // CDX with one or more tags: open each by name. The first tag's
+    // IIndex moves into Table::order_ (becomes default order); the
+    // rest stay parked in their bindings until activate_binding swaps
+    // them in.
+    UNSIGNED16 cap = (pu16ArrayLen != nullptr && *pu16ArrayLen > 0)
+                   ? *pu16ArrayLen : 1;
+    UNSIGNED16 count = 0;
+    for (const auto& name : tags) {
+        if (count >= cap) break;
+        auto sub = std::make_unique<openads::drivers::cdx::CdxIndex>();
+        if (auto r = sub->open_named(path,
+                          openads::drivers::IndexOpenMode::Shared,
+                          name); !r) {
+            return fail(r.error());
+        }
+        ADSHANDLE h = next_index_handle();
+        if (count == 0) {
+            // First tag becomes the active order on the table.
+            t->set_order(std::move(sub));
+            m[h] = IndexBinding{t, name, nullptr};
+            act[t] = h;
+        } else {
+            m[h] = IndexBinding{t, name, std::move(sub)};
+        }
+        ahIndex[count++] = h;
+    }
+    if (pu16ArrayLen != nullptr) *pu16ArrayLen = count;
     return ok();
 }
 
@@ -767,7 +867,11 @@ UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
     if (!t || pusCount == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
-    *pusCount = t->order() ? 1 : 0;
+    UNSIGNED16 n = 0;
+    for (auto& [_, b] : index_bindings()) {
+        if (b.table == t) ++n;
+    }
+    *pusCount = n;
     return ok();
 }
 
@@ -778,11 +882,17 @@ UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
     auto name = openads::abi::to_internal(pucName, 0);
+    // Strip trailing whitespace + nulls (rddads space-pads tag names
+    // up to ADS_MAX_TAG_NAME before passing them to us).
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\0')) {
+        name.pop_back();
+    }
     for (auto& [h, b] : index_bindings()) {
         if (b.table == t && b.tag_name == name) { *phIndex = h; return ok(); }
     }
     return fail(openads::AE_INTERNAL_ERROR, "index name not found");
 }
+
 
 UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 /*usOrder*/,
                                     ADSHANDLE* phIndex) {
@@ -798,23 +908,32 @@ UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 /*usOrder*/,
 
 UNSIGNED32 AdsGetIndexExpr(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
-    Table* t = table_for_index(hIndex);
-    if (!t || !t->order() || !t->order()->index()) {
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end()) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     }
-    openads::abi::copy_to_caller(pucBuf, pusBufLen,
-                                 t->order()->index()->expression());
+    // Pull the expression from whichever IIndex carries it: parked
+    // binding has its own; the active one's IIndex sits on the Table.
+    std::string expr;
+    if (it->second.parked) {
+        expr = it->second.parked->expression();
+    } else if (it->second.table && it->second.table->order()
+            && it->second.table->order()->index()) {
+        expr = it->second.table->order()->index()->expression();
+    }
+    openads::abi::copy_to_caller(pucBuf, pusBufLen, expr);
     return ok();
 }
 
 UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
-    Table* t = table_for_index(hIndex);
-    if (!t || !t->order() || !t->order()->index()) {
+    auto& m = index_bindings();
+    auto it = m.find(hIndex);
+    if (it == m.end()) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     }
-    openads::abi::copy_to_caller(pucBuf, pusBufLen,
-                                 t->order()->index()->name());
+    openads::abi::copy_to_caller(pucBuf, pusBufLen, it->second.tag_name);
     return ok();
 }
 

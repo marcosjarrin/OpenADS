@@ -456,6 +456,13 @@ void Table::clear_order() {
     order_.reset();
 }
 
+std::unique_ptr<drivers::IIndex> Table::take_order() {
+    if (!order_) return nullptr;
+    auto idx = order_->release();
+    order_.reset();
+    return idx;
+}
+
 util::Result<bool>
 Table::seek_key(const std::string& key, bool soft) {
     if (!order_ || !order_->index()) {

@@ -16,6 +16,55 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.9 — Multi-tag CDX + OrdSetFocus
+
+`make_cdx.exe` now lays down a CDX with two tags, NAME (key over the
+C(10) NAME column) and AGE (3-byte key over the N(3,0) AGE column).
+The smoke walks each focus in turn, exercising `OrdSetFocus` and
+`dbSeek`:
+
+```
+Number of orders: 2
+Default order: AGE
+=== Walk under NAME order ===
+Active order: NAME   key: NAME
+  rec 1 NAME=[ALPHA] AGE=30
+  rec 2 NAME=[BETA]  AGE=125
+  rec 3 NAME=[GAMMA] AGE=77
+=== Walk under AGE order ===
+Active order: AGE    key: AGE
+  rec 1 NAME=[ALPHA] AGE=30   ( 30)
+  rec 3 NAME=[GAMMA] AGE=77   ( 77)
+  rec 2 NAME=[BETA]  AGE=125  (125)
+=== Seek by AGE ===
+  Seek ' 77': Found=T RecNo=3 NAME=[GAMMA] AGE=77
+```
+
+ABI changes:
+
+- `AdsOpenIndex` widened to its real 4-arg signature
+  `(hTable, pucName, ahIndex[], &pu16ArrayLen)`. For a CDX file we
+  enumerate every tag through `CdxIndex::list_tags`, open each via
+  `open_named`, and write a binding handle per tag into `ahIndex[]`.
+  The first tag's IIndex moves into `Table::set_order` (becomes the
+  default order); the rest stay parked in their bindings until
+  `activate_binding` swaps them in.
+- `Table::take_order()` (new) surrenders the active index's
+  `unique_ptr<IIndex>` so the previous binding can park it on a
+  focus swap. `Order::release()` (new) is the underlying primitive.
+- `get_table` now calls `activate_binding(h)` whenever a navigation
+  call arrives with an index handle; combined with `take_order` this
+  means rddads' `pArea->hOrdCurrent` swaps drive the Table's active
+  order in lock-step.
+- `AdsGetIndexHandle` strips trailing whitespace / nulls from the
+  caller's tag name (rddads space-pads to ADS_MAX_TAG_NAME).
+- `AdsGetIndexName` and `AdsGetIndexExpr` now read from the binding's
+  own metadata instead of the Table's currently-active order, so
+  parked tags report their real name + expression even before they
+  become live.
+- `AdsGetNumIndexes` counts bindings for the table (was always 1
+  when an order was set).
+
 ## M8.8 — Active index auto-sync on dbAppend / FIELD-> := value
 
 The active CDX is now updated on every record mutation, so dbSeek

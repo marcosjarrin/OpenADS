@@ -96,6 +96,9 @@ public:
     // Order + scope surface (M3).
     void               set_order(std::unique_ptr<drivers::IIndex> idx);
     void               clear_order();
+    // Take ownership of the active index back from the Table, leaving
+    // it without an order. Returns nullptr if no order was set.
+    std::unique_ptr<drivers::IIndex> take_order();
     Order*             order() noexcept { return order_ ? &*order_ : nullptr; }
     const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
     util::Result<bool> seek_key(const std::string& key, bool soft);

@@ -89,7 +89,8 @@ UNSIGNED32 AdsUnlockTable   (ADSHANDLE hTable);
 UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable);
 
 UNSIGNED32 AdsOpenIndex     (ADSHANDLE hTable, UNSIGNED8* pucName,
-                              ADSHANDLE* phIndex);
+                              ADSHANDLE* ahIndex,
+                              UNSIGNED16* pu16ArrayLen);
 UNSIGNED32 AdsCloseIndex    (ADSHANDLE hIndex);
 UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable);
 UNSIGNED32 AdsCreateIndex   (ADSHANDLE hTable, UNSIGNED8* pucFile,
