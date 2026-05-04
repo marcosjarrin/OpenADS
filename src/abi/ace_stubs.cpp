@@ -66,7 +66,6 @@ uint32_t AdsClearRelation         () { return OK; }
 uint32_t AdsCustomizeAOF          () { return OK; }
 uint32_t AdsEvalAOF               () { return OK; }
 uint32_t AdsRefreshAOF            () { return OK; }
-uint32_t AdsRefreshRecord         () { return OK; }
 uint32_t AdsSetDateFormat         () { return OK; }
 uint32_t AdsSetDecimals           () { return OK; }
 uint32_t AdsSetDefault            () { return OK; }
@@ -207,7 +206,6 @@ uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
 uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
 uint32_t AdsDeleteCustomKey      () { return MISS; }
-uint32_t AdsExtractKey           () { return MISS; }
 uint32_t AdsFailedTransactionRecovery() { return MISS; }
 uint32_t AdsFindClose            () { return MISS; }
 uint32_t AdsFindFirstTable       () { return MISS; }

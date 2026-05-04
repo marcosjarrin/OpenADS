@@ -4,6 +4,7 @@
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
+#include "engine/index_expr.h"
 #include "engine/table.h"
 #include "session/connection.h"
 #include "session/handle_registry.h"
@@ -126,6 +127,7 @@ bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
 // lookup_table_by_index — defined further down once IndexBinding is
 // known. Returns the Table bound to the given index handle, or null.
 Table* lookup_table_by_index(ADSHANDLE h);
+openads::drivers::IIndex* iindex_for_handle(ADSHANDLE h);
 openads::util::Result<void> activate_binding(ADSHANDLE h);
 
 Table* get_table(ADSHANDLE h) {
@@ -427,6 +429,29 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                         ADS_CDX,    // table type
                         0, 0, 0, 1, // char/lock/checkrights/mode
                         phTable);
+}
+
+UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (t->eof() || t->bof() || t->recno() == 0) return ok();
+    auto r = t->goto_record(t->recno());
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                         UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null len");
+    Table* t = lookup_table_by_index(hIndex);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    openads::drivers::IIndex* idx = iindex_for_handle(hIndex);
+    if (!idx) return fail(openads::AE_INTERNAL_ERROR, "index not loaded");
+    auto k = openads::engine::evaluate_index_expr(*t, idx->expression(),
+                                                  idx->key_length());
+    if (!k) return fail(k.error());
+    openads::abi::copy_to_caller(pucBuf, pusLen, k.value());
+    return ok();
 }
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
@@ -976,6 +1001,16 @@ Table* lookup_table_by_index(ADSHANDLE h) {
     auto it = m.find(h);
     if (it == m.end()) return nullptr;
     return it->second.table;
+}
+
+openads::drivers::IIndex* iindex_for_handle(ADSHANDLE h) {
+    auto& m = index_bindings();
+    auto it = m.find(h);
+    if (it == m.end()) return nullptr;
+    if (it->second.parked) return it->second.parked.get();
+    Table* t = it->second.table;
+    if (t && t->order()) return t->order()->index();
+    return nullptr;
 }
 
 // Make `h` the active order for its table. If another binding is

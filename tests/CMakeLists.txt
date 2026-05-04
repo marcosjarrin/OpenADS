@@ -44,6 +44,7 @@ add_executable(openads_unit_tests
     unit/index_expr_test.cpp
     unit/abi_m92_real_test.cpp
     unit/abi_create_table_test.cpp
+    unit/abi_refresh_extract_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

@@ -55,6 +55,10 @@ UNSIGNED32 AdsDeleteFile    (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsCloseAllTables(ADSHANDLE  hConnect);
 UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen);
 
+UNSIGNED32 AdsRefreshRecord (ADSHANDLE hTable);
+UNSIGNED32 AdsExtractKey    (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
+                              UNSIGNED16* pusLen);
+
 UNSIGNED32 AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED8* pucAlias,
                               UNSIGNED16 usTableType, UNSIGNED16 usCharType,
