@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (27 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (28 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -244,13 +244,15 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.23-done`     | Misc MISS fillers — real `AdsGetLongLong`, `AdsSetFieldRaw`, `AdsVerifySQL`, `AdsFailedTransactionRecovery`, `AdsGetAllLocks`, `AdsSkipUnique`. |
 | `m9.24-done`     | Local-mode `AdsMg*` surface (15 calls). Synthetic mgmt handle, struct-shaped queries zero-fill caller buffers, list-shaped queries report empty count; apps see "everything quiescent" instead of `AE_FUNCTION_NOT_AVAILABLE`. |
 | `m9.25-done`     | Local-mode `AdsDD*` CRUD surface (14 calls). All 14 accept silently / zero-fill. 0.3.x will replace these no-ops with real persistence in the OpenADS DD format. |
-| **`m9.26-done`** | **`AdsRestructureTable` (ADD-fields path)** — rewrites the DBF with the original schema + `pucAddFields` appended, copies every record's old-field bytes verbatim and blank-pads the new fields. Atomic-ish replace via `<table>.dbf.restructure.tmp` + rename. `pucDeleteFields` / `pucChangeFields` (column drop / rename / type-change) return `AE_FUNCTION_NOT_AVAILABLE` and arrive with VFP / ADT structural extensions in 0.3.x. **The MISS list is now empty — every Harbour-reachable `Ads*` export resolves to a real impl, a local-mode silent-success, or a documented 0.3.x deferral.** |
+| `m9.26-done`     | `AdsRestructureTable` (ADD-fields path) — rewrites the DBF with the original schema + `pucAddFields` appended, copies every record's old-field bytes verbatim and blank-pads the new fields. The MISS list is now empty. |
+| **`m9.27-done`** | **CI matrix portability fix** — `legacy_crt_shims.cpp` (the `_dclass` / `_dsign` / `_wfsopen` / `_getch` / `_kbhit` / `_eof` re-exports for Harbour's MSVC2013-era libs) is now a no-op on POSIX builds. Combined with the pre-existing `if(WIN32)` guards on the def file + `platform/file_*` / `lock_*` / `mmap_*` sources, the engine compiles cleanly on Linux + macOS through the existing `.github/workflows/ci.yml` matrix (windows-2022 / ubuntu-22.04 / macos-13). |
 
 #### What's left for 0.2.0
 
-- **Linux / macOS / BSD builds.** The engine is portable C++17; only
-  the Harbour smoke harness is Windows-anchored today (it links
-  against `c:\harbour\…`). CI matrix + Linux Harbour install needed.
+- **Linux Harbour smoke install.** The engine builds + tests cleanly
+  on Linux + macOS through the CI matrix; what's still missing is a
+  Linux Harbour install so the smoke harness (`smoke.exe` →
+  `ace64.dll`) can run end-to-end on a non-Windows runner.
 - **`usPageSize` honoured beyond NTX/CDX.** `AdsCreateIndex61` /
   `AdsCreateFTSIndex` accept a `usPageSize` argument. NTX (1024)
   and FoxPro CDX (512) are fixed-size by their on-disk format —

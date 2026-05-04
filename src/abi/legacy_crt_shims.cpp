@@ -9,6 +9,11 @@
 // then aliases the legacy names (_dclass, _dsign, _wfsopen) onto these
 // implementations so the public DLL exports match what hbcommon.lib
 // expects.
+//
+// Whole file is Windows-only; on POSIX builds the DLL is built
+// without these shims (no Harbour-MSVC2013 link concern there).
+
+#ifdef _WIN32
 
 #include <cmath>
 #include <conio.h>
@@ -37,3 +42,5 @@ int openads_kbhit (void)            { return ::_kbhit(); }
 int openads_eof   (int fd)          { return ::_eof(fd); }
 
 } // extern "C"
+
+#endif // _WIN32
