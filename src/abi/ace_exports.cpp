@@ -4383,6 +4383,39 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 return Pred{[p = std::move(inner).value()]
                             (openads::engine::Table& t) { return !p(t); }};
             }
+            if (node.kind == Kind::Exists) {
+                // M10.17: uncorrelated EXISTS — open the subquery's
+                // table, walk all live rows, return constant true if
+                // at least one row exists. Subquery's optional WHERE
+                // is intentionally NOT compiled here yet (apps can
+                // use IN for filtered membership in the meantime).
+                if (!node.exists_subquery) {
+                    return openads::util::Error{
+                        openads::AE_PARSE_ERROR, 0,
+                        "EXISTS subquery missing", ""};
+                }
+                const auto& sq = *node.exists_subquery;
+                auto sh = c->open_table(sq.table,
+                                        openads::engine::TableType::Cdx,
+                                        openads::engine::OpenMode::Read);
+                if (!sh) return sh.error();
+                openads::engine::Table* stbl = c->lookup_table(sh.value());
+                if (stbl == nullptr) {
+                    return openads::util::Error{
+                        openads::AE_INTERNAL_ERROR, 0,
+                        "EXISTS post-open", ""};
+                }
+                bool any = false;
+                std::uint32_t srcount = stbl->record_count();
+                for (std::uint32_t r = 1; r <= srcount; ++r) {
+                    if (auto g = stbl->goto_record(r); !g) continue;
+                    if (stbl->is_deleted()) continue;
+                    any = true;
+                    break;
+                }
+                c->close_table(sh.value());
+                return Pred{[any](openads::engine::Table&) { return any; }};
+            }
             if (node.kind == Kind::In) {
                 // M10.15: materialise the IN set at compile time. For
                 // a literal list, just lift the strings in. For a

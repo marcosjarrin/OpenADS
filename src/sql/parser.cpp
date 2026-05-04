@@ -297,6 +297,39 @@ parse_primary(Cursor& c, const std::string& sql) {
         n->child = std::move(inner).value();
         return n;
     }
+    if (c.match_keyword("EXISTS")) {
+        if (!c.match_char('(')) {
+            return util::Error{7200, 0, "expected '(' after EXISTS", sql};
+        }
+        if (!c.match_keyword("SELECT")) {
+            return util::Error{7200, 0,
+                "expected SELECT inside EXISTS", sql};
+        }
+        std::string inner = "SELECT ";
+        int depth = 1;
+        while (depth > 0) {
+            if (c.eof()) {
+                return util::Error{7200, 0,
+                    "unterminated EXISTS subquery", sql};
+            }
+            char ch = c.consume_char();
+            if (ch == '(') { ++depth; inner.push_back('('); continue; }
+            if (ch == ')') {
+                --depth;
+                if (depth == 0) break;
+                inner.push_back(')');
+                continue;
+            }
+            inner.push_back(ch);
+        }
+        auto sub = parse_select(inner);
+        if (!sub) return sub.error();
+        auto n = std::make_unique<WhereExpr>();
+        n->kind = WhereExpr::Kind::Exists;
+        n->exists_subquery =
+            std::make_unique<SelectStmt>(std::move(sub).value());
+        return n;
+    }
     if (c.match_char('(')) {
         auto inner = parse_or_expr(c, sql);
         if (!inner) return inner.error();

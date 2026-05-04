@@ -40,12 +40,13 @@ struct InClause {
 
 struct WhereExpr {
     // Tagged tree node.
-    enum class Kind { Cmp, And, Or, Not, In };
+    enum class Kind { Cmp, And, Or, Not, In, Exists };
     Kind                       kind = Kind::Cmp;
     WhereCmp                   cmp;             // Kind::Cmp
     std::vector<std::unique_ptr<WhereExpr>> children; // And/Or
     std::unique_ptr<WhereExpr> child;           // Not
     InClause                   in_clause;       // Kind::In
+    std::unique_ptr<SelectStmt> exists_subquery; // Kind::Exists (M10.17)
 };
 
 struct OrderBy {
