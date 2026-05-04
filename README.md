@@ -113,7 +113,7 @@ Done.
 
 #### Tests
 
-- **153 doctest cases / 3186 assertions** passing on Windows / MSVC
+- **155 doctest cases / 3210 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -167,25 +167,46 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.7-done`      | `AdsCreateIndex61` with compound-expression support |
 | `m9.8-done`      | `AdsZapTable` + `AdsPackTable` |
 | `m9.9-done`      | `AdsReindex` — rebuild every bound index from current records |
-| **`m9.10-done`** | **NTX multi-level B+tree split (closes M3.7 limit)** |
+| `m9.10-done`     | NTX multi-level B+tree split (closes M3.7 limit) |
+| **`m9.11-done`** | **`AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable`** |
 
 #### What's left for 0.2.0
 
 - **Linux / macOS / BSD builds.** The engine is portable C++17; only
   the Harbour smoke harness is Windows-anchored today (it links
   against `c:\harbour\…`). CI matrix + Linux Harbour install needed.
-- **`AdsConvertTable` / `AdsCopyTable` / `AdsCopyTableContents`** —
-  table-level bulk operations.
-- **`AdsCreateFTSIndex`** — full-text search index.
-- **`AdsAddCustomKey` / `AdsDeleteCustomKey` / `AdsExtractKey` for
-  custom indexes.**
-- **`Find*Table` family** — server-style table directory iteration.
-- **`AdsGetBinary` / `AdsSetBinary`** — explicit binary memo
-  payloads (the smoke fixtures use plain text today).
-- **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`, ...)
-  — pair with M9.x compound-expression UTF-16 awareness.
-- **NTX multi-tag binding** — currently each NTX file is one tag;
-  the multi-tag refactor only landed for CDX in M3.10.
+- **`AdsCreateFTSIndex`** — full-text search index. Needs an inverted
+  posting list per tag, plus tokeniser + stop-word handling.
+- **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
+  entries (apps that pre-compute keys outside the engine and inject
+  them by recno). `AdsExtractKey` is already real (M9.6).
+- **`AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose`** —
+  server-style table directory iteration. For a local connection,
+  walks the data dir's `*.dbf` / `*.adt` entries.
+- **`AdsGetBinary` / `AdsSetBinary` / `AdsGetBinaryLength`** —
+  explicit binary memo / blob payloads. The smoke fixtures use plain
+  text memos today; binary memos write `type=2` (binary) in the FPT
+  block header.
+- **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`,
+  `AdsGetStringW`) — UTF-16 surface. Pairs with making the index-
+  expression evaluator (`engine/index_expr.cpp`) UTF-16 aware.
+- **NTX multi-tag binding.** Each NTX file is one tag; the multi-
+  tag refactor only landed for CDX in M3.10. Apps that bundle
+  multiple NTX files per `USE` need the same `add_tag` / `open_named`
+  / `list_tags` treatment.
+- **`AdsRollbackTransaction80(savepoint)`** — partial rollback to a
+  named savepoint via the WAL. Engine has the savepoint primitive
+  (M5.3); ABI plumbing is currently a stub.
+- **`AdsLockTable` / `AdsUnlockTable` / `AdsIsTableLocked` /
+  `AdsLockRecord` / `AdsUnlockRecord`** — already wired in M4 for
+  byte-range locks; missing the timeout / retry surface most
+  Clipper apps actually call.
+- **Compatible page-sized index pages.** `AdsCreateIndex61` accepts
+  a `usPageSize` parameter; today it's ignored (CDX uses 512, NTX
+  uses 1024). Apps that opt into 4 KiB or 8 KiB pages don't yet get
+  what they asked for.
+- **Real `AdsGetServerName` / `AdsGetServerTime`** — local-mode
+  values (host name, wall clock) instead of empty strings.
 
 ### 0.3.x — proprietary formats + advanced SQL (PLANNED)
 
