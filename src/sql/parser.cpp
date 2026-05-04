@@ -214,7 +214,8 @@ parse_cmp(Cursor& c, const std::string& sql) {
         }
         node->kind = WhereExpr::Kind::In;
         node->in_clause.column = node->cmp.column;
-        node->cmp = {};   // unused for In
+        // (cmp's other fields stay default-zeroed; the In branch
+        // ignores them.)
         if (c.match_keyword("SELECT")) {
             // Re-parse the nested SELECT — capture text up to the
             // matching ')'. consume_char (no whitespace skip) is the
@@ -275,6 +276,36 @@ parse_cmp(Cursor& c, const std::string& sql) {
         if (!lit) return lit.error();
         node->cmp.literal    = std::move(lit).value();
         node->cmp.is_numeric = false;
+    } else if (c.peek_char('(')) {
+        // M10.18: scalar subquery — `(SELECT <col> FROM <t>)`. The
+        // value is materialised at compile time and stored back in
+        // node->cmp.literal / number.
+        c.match_char('(');
+        if (!c.match_keyword("SELECT")) {
+            return util::Error{7200, 0,
+                "expected SELECT inside scalar subquery", sql};
+        }
+        std::string inner = "SELECT ";
+        int depth = 1;
+        while (depth > 0) {
+            if (c.eof()) {
+                return util::Error{7200, 0,
+                    "unterminated scalar subquery", sql};
+            }
+            char ch = c.consume_char();
+            if (ch == '(') { ++depth; inner.push_back('('); continue; }
+            if (ch == ')') {
+                --depth;
+                if (depth == 0) break;
+                inner.push_back(')');
+                continue;
+            }
+            inner.push_back(ch);
+        }
+        auto sub = parse_select(inner);
+        if (!sub) return sub.error();
+        node->cmp.subquery =
+            std::make_unique<SelectStmt>(std::move(sub).value());
     } else {
         auto n = c.read_numeric_literal();
         if (!n) return n.error();

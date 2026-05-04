@@ -4501,6 +4501,69 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             term.literal     = w.literal;
             term.is_numeric  = w.is_numeric;
             term.number      = w.number;
+            if (w.subquery) {
+                // M10.18: scalar subquery — materialise once at
+                // compile time. Open the subquery's table, walk for
+                // the first non-deleted record, read the projection's
+                // first column, and use that as the cmp literal.
+                const auto& sq = *w.subquery;
+                auto sh = c->open_table(sq.table,
+                                        openads::engine::TableType::Cdx,
+                                        openads::engine::OpenMode::Read);
+                if (!sh) return sh.error();
+                openads::engine::Table* stbl = c->lookup_table(sh.value());
+                if (stbl == nullptr) {
+                    return openads::util::Error{
+                        openads::AE_INTERNAL_ERROR, 0,
+                        "scalar subquery post-open", ""};
+                }
+                if (sq.projection.empty() || !sq.aggregates.empty()) {
+                    c->close_table(sh.value());
+                    return openads::util::Error{
+                        openads::AE_PARSE_ERROR, 0,
+                        "scalar subquery must project a single column "
+                        "(aggregates and SELECT * deferred)", ""};
+                }
+                std::int32_t scol = stbl->field_index(sq.projection[0]);
+                if (scol < 0) {
+                    c->close_table(sh.value());
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        sq.projection[0].c_str(), ""};
+                }
+                bool found = false;
+                std::uint32_t srcount = stbl->record_count();
+                // Mirror the compare semantics on the outer column's
+                // type — character outer columns compare by string,
+                // numeric outer columns by double.
+                bool outer_is_numeric =
+                    tbl->field_descriptor(static_cast<std::uint16_t>(fidx))
+                        .type != openads::drivers::DbfFieldType::Character;
+                for (std::uint32_t r = 1; r <= srcount; ++r) {
+                    if (auto g = stbl->goto_record(r); !g) continue;
+                    if (stbl->is_deleted()) continue;
+                    auto v = stbl->read_field(
+                        static_cast<std::uint16_t>(scol));
+                    if (!v) continue;
+                    term.literal    = v.value().as_string;
+                    term.is_numeric = outer_is_numeric;
+                    term.number     = v.value().as_double;
+                    // Trim trailing spaces on string compare to match
+                    // the natural read-back trim semantics.
+                    while (!term.literal.empty() &&
+                           term.literal.back() == ' ') {
+                        term.literal.pop_back();
+                    }
+                    found = true;
+                    break;
+                }
+                c->close_table(sh.value());
+                if (!found) {
+                    // No row → predicate matches nothing; encode as
+                    // a guaranteed-false comparison.
+                    return Pred{[](openads::engine::Table&) { return false; }};
+                }
+            }
             if (w.op == openads::sql::WhereOp::Contains) {
                 namespace fs = std::filesystem;
                 fs::path fts_path =

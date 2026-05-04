@@ -20,16 +20,21 @@ namespace openads::sql {
 
 enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge, Contains };
 
+// Forward declaration so WhereCmp + InClause + WhereExpr can hold
+// optional sub-SelectStmts without seeing the full struct yet.
+struct SelectStmt;
+
 struct WhereCmp {
     std::string column;
     WhereOp     op = WhereOp::Eq;
     std::string literal;       // raw string content, unquoted
     bool        is_numeric = false;
     double      number     = 0.0;
+    // M10.18: scalar subquery — `<col> op (SELECT <col> FROM <t>)`.
+    // When present, the literal / number fields are populated at
+    // compile time from the subquery's first projected value.
+    std::unique_ptr<SelectStmt> subquery;
 };
-
-// Forward declaration so WhereExpr::In can hold a sub-SelectStmt.
-struct SelectStmt;
 
 // M10.15 — `<col> IN (<lit>, <lit>, …)` or `<col> IN (<sub-SELECT>)`.
 struct InClause {
