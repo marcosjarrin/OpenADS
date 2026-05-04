@@ -217,7 +217,7 @@ on OpenADS without recompiling Harbour.
 
 #### Tests
 
-- **241 doctest cases / 4106 assertions** passing on Windows / MSVC
+- **244 doctest cases / 4139 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -321,6 +321,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.5-done` | SQL `INSERT INTO <t> (cols) VALUES (lits)` — string + numeric literals; AdsExecuteSQLDirect dispatches by leading keyword. |
 | `m10.6-done` | SQL `ORDER BY <col> [ASC|DESC]` — materialises matching recnos via the WHERE filter, sorts by the column's typed value (numeric vs string driven by field type), installs the result as the cursor's traversal sequence. |
 | `m10.7-done` | SQL `UPDATE <t> SET col=lit, … [WHERE …]` + `DELETE FROM <t> [WHERE …]` — bulk row mutation through AdsExecuteSQLDirect. DELETE follows Clipper convention (rows marked, not removed; AdsPackTable evicts later). |
+| `m10.8-done` | SQL projection lists — `SELECT col1, col2 FROM …`; cursor reports only the projected columns (in the listed order) via AdsGetNumFields / AdsGetFieldName / AdsGetFieldType / AdsGetFieldLength / AdsGetFieldDecimals / ADSFIELD(n). |
 
 #### Still planned for 0.3.x
 
@@ -334,11 +335,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — projection lists (`SELECT col1, col2`), joins,
-  aggregates, subqueries, `CREATE TABLE` / `CREATE INDEX`. The
-  earlier 0.3.x milestones already land boolean WHERE (`OR` /
-  `NOT` / parens, M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6), and
-  `UPDATE` / `DELETE` (M10.7).
+- **More SQL** — joins, aggregates, subqueries, `CREATE TABLE` /
+  `CREATE INDEX`. Earlier 0.3.x milestones already land boolean
+  WHERE (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6), `UPDATE` /
+  `DELETE` (M10.7), and projection lists (M10.8).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
