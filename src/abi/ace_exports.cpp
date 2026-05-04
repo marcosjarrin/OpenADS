@@ -15,8 +15,12 @@
 
 #include <algorithm>
 
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -233,6 +237,196 @@ UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
     if (t->driver() == nullptr) { *pulLen = 0; return ok(); }
     *pulLen = t->driver()->record_length();
     return ok();
+}
+
+extern "C++" {
+namespace {
+
+// Map an rddads type name (Character, Numeric, Date, ...) to the
+// DBF field-descriptor type byte plus a default length / decimals
+// when those aren't explicit in the field-def string.
+struct DbfTypeSpec {
+    char         type   = 'C';
+    std::uint8_t length = 0;
+    std::uint8_t dec    = 0;
+    bool         needs_memo = false;
+};
+
+DbfTypeSpec dbf_type_for(const std::string& name) {
+    auto eq = [&](const char* k) {
+        if (name.size() != std::strlen(k)) return false;
+        for (std::size_t i = 0; i < name.size(); ++i) {
+            char a = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(name[i])));
+            char b = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(k[i])));
+            if (a != b) return false;
+        }
+        return true;
+    };
+    if (eq("Character") || eq("Char") || eq("CICHARACTER"))
+        return {'C', 0, 0, false};
+    if (eq("Numeric") || eq("Long") || eq("Number"))
+        return {'N', 0, 0, false};
+    if (eq("Logical") || eq("Bool"))
+        return {'L', 1, 0, false};
+    if (eq("Date") || eq("ShortDate"))
+        return {'D', 8, 0, false};
+    if (eq("Memo") || eq("NMemo"))
+        return {'M', 10, 0, true};
+    if (eq("Binary") || eq("Image"))
+        return {'M', 10, 0, true};
+    if (eq("Integer") || eq("ShortInt") || eq("LongLong"))
+        return {'N', 0, 0, false};
+    if (eq("Double") || eq("Money") || eq("CurDouble"))
+        return {'N', 0, 0, false};
+    if (eq("Time") || eq("Timestamp") || eq("ModTime"))
+        return {'C', 23, 0, false};   // store as ISO-8601 string for now
+    return {'C', 0, 0, false};        // unknown -> Character
+}
+
+// Trim leading/trailing whitespace.
+std::string trim(std::string s) {
+    while (!s.empty() && std::isspace(
+                static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && std::isspace(
+                static_cast<unsigned char>(s.back())))  s.pop_back();
+    return s;
+}
+
+} // namespace
+} // extern "C++"
+
+UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
+                          UNSIGNED8*    pucName,
+                          UNSIGNED8*    /*pucAlias*/,
+                          UNSIGNED16    /*usTableType*/,
+                          UNSIGNED16    /*usCharType*/,
+                          UNSIGNED16    /*usLockType*/,
+                          UNSIGNED16    /*usCheckRights*/,
+                          UNSIGNED16    /*usMemoBlockSize*/,
+                          UNSIGNED8*    pucFields,
+                          ADSHANDLE*    phTable) {
+    if (pucName == nullptr || pucFields == nullptr || phTable == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null arg");
+    }
+    auto& s = state();
+    Connection* c = s.registry.lookup<Connection>(hConn,
+                            HandleKind::Connection);
+    if (c == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+
+    auto rel  = openads::abi::to_internal(pucName, 0);
+    auto defs = openads::abi::to_internal(pucFields, 0);
+
+    namespace fs = std::filesystem;
+    fs::path full = fs::path(c->data_dir()) / rel;
+    if (!full.has_extension()) full.replace_extension(".dbf");
+
+    // Parse `NAME,Type,Len,Dec;NAME,Type,...` into per-field structs.
+    struct FieldOut {
+        std::string  name;
+        char         type;
+        std::uint8_t length;
+        std::uint8_t dec;
+    };
+    std::vector<FieldOut> fields;
+    std::string buf;
+    for (std::size_t i = 0; i <= defs.size(); ++i) {
+        char ch = (i < defs.size()) ? defs[i] : ';';
+        if (ch == ';') {
+            if (!buf.empty()) {
+                std::vector<std::string> parts;
+                std::string p;
+                for (char c2 : buf) {
+                    if (c2 == ',') { parts.push_back(trim(p)); p.clear(); }
+                    else p.push_back(c2);
+                }
+                parts.push_back(trim(p));
+                if (parts.size() >= 2) {
+                    DbfTypeSpec ts = dbf_type_for(parts[1]);
+                    FieldOut f;
+                    f.name = parts[0];
+                    if (f.name.size() > 10) f.name.resize(10);
+                    f.type = ts.type;
+                    f.length = ts.length;
+                    f.dec    = ts.dec;
+                    if (parts.size() >= 3) {
+                        int n = std::atoi(parts[2].c_str());
+                        if (n > 0 && n < 256) f.length = static_cast<std::uint8_t>(n);
+                    }
+                    if (parts.size() >= 4) {
+                        int d = std::atoi(parts[3].c_str());
+                        if (d >= 0 && d < 256) f.dec = static_cast<std::uint8_t>(d);
+                    }
+                    if (f.length == 0) f.length = 10;     // sensible default
+                    fields.push_back(std::move(f));
+                }
+                buf.clear();
+            }
+        } else {
+            buf.push_back(ch);
+        }
+    }
+    if (fields.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "no fields");
+    }
+
+    // Compute header + record sizes.
+    std::uint16_t header_len = static_cast<std::uint16_t>(
+        32 + 32 * fields.size() + 1);
+    std::uint32_t rec_len = 1; // delete-flag byte
+    for (auto& f : fields) rec_len += f.length;
+    if (rec_len > 0xFFFF) {
+        return fail(openads::AE_INTERNAL_ERROR, "record too long");
+    }
+
+    std::vector<std::uint8_t> hdr(32, 0);
+    hdr[0]  = 0x03;                                            // dBASE III
+    hdr[4]  = 0; hdr[5] = 0; hdr[6] = 0; hdr[7] = 0;           // 0 records
+    hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+
+    std::vector<std::uint8_t> file = hdr;
+    for (auto& f : fields) {
+        std::vector<std::uint8_t> fd(32, 0);
+        std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+        std::memcpy(fd.data(), f.name.data(), n);
+        fd[11] = static_cast<std::uint8_t>(f.type);
+        fd[16] = f.length;
+        fd[17] = f.dec;
+        file.insert(file.end(), fd.begin(), fd.end());
+    }
+    file.push_back(0x0D);
+    file.push_back(0x1A);
+
+    // Atomic-ish write: just truncate-create.
+    {
+        std::error_code ec;
+        fs::remove(full, ec);
+    }
+    {
+        std::ofstream out(full, std::ios::binary);
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCreateTable: open for write failed");
+        out.write(reinterpret_cast<const char*>(file.data()),
+                  static_cast<std::streamsize>(file.size()));
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCreateTable: write failed");
+    }
+
+    // Open the freshly-created table through the regular path so the
+    // caller gets a usable handle.
+    UNSIGNED8 namebuf[260] = {0};
+    std::size_t nb = std::min<std::size_t>(rel.size(), sizeof(namebuf) - 1);
+    std::memcpy(namebuf, rel.data(), nb);
+    return AdsOpenTable(hConn, namebuf, namebuf,
+                        ADS_CDX,    // table type
+                        0, 0, 0, 1, // char/lock/checkrights/mode
+                        phTable);
 }
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {

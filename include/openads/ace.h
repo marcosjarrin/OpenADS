@@ -54,6 +54,14 @@ UNSIGNED32 AdsCheckExistence(ADSHANDLE  hConnect, UNSIGNED8* pucName,
 UNSIGNED32 AdsDeleteFile    (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsCloseAllTables(ADSHANDLE  hConnect);
 UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen);
+
+UNSIGNED32 AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED8* pucAlias,
+                              UNSIGNED16 usTableType, UNSIGNED16 usCharType,
+                              UNSIGNED16 usLockType, UNSIGNED16 usCheckRights,
+                              UNSIGNED16 usMemoBlockSize,
+                              UNSIGNED8* pucFields,
+                              ADSHANDLE* phTable);
 UNSIGNED32 AdsSkip          (ADSHANDLE hTable, SIGNED32 lRows);
 UNSIGNED32 AdsAtEOF         (ADSHANDLE hTable, UNSIGNED16* pbAtEnd);
 UNSIGNED32 AdsAtBOF         (ADSHANDLE hTable, UNSIGNED16* pbAtBegin);
