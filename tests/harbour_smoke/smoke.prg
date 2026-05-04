@@ -1,8 +1,7 @@
-/* OpenADS / Harbour rddads smoke test (M8.10).
+/* OpenADS / Harbour rddads smoke test (M8.11).
  *
- * Transaction surface: BEGIN + APPEND + ROLLBACK should leave the
- * table unchanged; BEGIN + APPEND + COMMIT should persist the new
- * row across close/reopen.
+ * Multi-field DBF + CDX + FPT memo. dbAppend with a memo payload,
+ * then close + reopen + verify the memo round-trips intact.
  */
 #include "ads.ch"
 
@@ -13,7 +12,7 @@ PROCEDURE Main()
 
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
-   ? "OpenADS smoke test (M8.10)"
+   ? "OpenADS smoke test (M8.11)"
    ? "ACE DLL reports:", AdsVersion()
 
    AdsSetFileType( ADS_CDX )
@@ -24,7 +23,6 @@ PROCEDURE Main()
       RETURN
    ENDIF
    nConn := AdsConnection()
-   ? "Connection handle:", nConn
 
    USE data INDEX data VIA "ADSCDX"
    IF NetErr()
@@ -33,57 +31,48 @@ PROCEDURE Main()
    ENDIF
    ? "Initial count:", LastRec()
 
-   /* === BEGIN + APPEND + ROLLBACK === */
-   ? ""
-   ? "=== Tx 1: append EPSILON, then rollback ==="
-   AdsBeginTransaction( nConn )
+   /* Append a row that includes a memo payload. */
+   ? "Appending row with memo..."
    dbAppend()
-   FIELD->NAME   := "EPSILON"
-   FIELD->AGE    := 50
-   FIELD->ACTIVE := .T.
-   FIELD->BORN   := SToD( "20300101" )
-   ? "  inside tx, count =", LastRec()
-   AdsRollback( nConn )
-   ? "  after rollback, count =", LastRec()
-
-   /* === BEGIN + APPEND + COMMIT === */
-   ? ""
-   ? "=== Tx 2: append ZETA, then commit ==="
-   AdsBeginTransaction( nConn )
-   dbAppend()
-   FIELD->NAME   := "ZETA"
-   FIELD->AGE    := 60
+   FIELD->NAME   := "DELTA"
+   FIELD->AGE    := 99
    FIELD->ACTIVE := .F.
-   FIELD->BORN   := SToD( "20300202" )
-   ? "  inside tx, count =", LastRec()
-   AdsCommitTransaction( nConn )
-   ? "  after commit, count =", LastRec()
+   FIELD->BORN   := SToD( "20260101" )
+   FIELD->NOTES  := "Hello memo from OpenADS smoke test (M8.11)."
+   ? "  appended at recno", RecNo()
+   ? "  in-memory NOTES len =", Len(FIELD->NOTES)
+
+   /* Append a second row with a longer memo. */
+   dbAppend()
+   FIELD->NAME   := "OMEGA"
+   FIELD->AGE    := 200
+   FIELD->ACTIVE := .T.
+   FIELD->BORN   := SToD( "20260202" )
+   FIELD->NOTES  := Replicate( "Lorem ipsum dolor sit amet. ", 10 )
+   ? "  appended at recno", RecNo()
+   ? "  in-memory NOTES len =", Len(FIELD->NOTES)
 
    USE
 
-   /* === Reopen + verify durability === */
+   /* Reopen and verify the memos. */
    ? ""
-   ? "=== Reopen + verify ==="
+   ? "=== Reopen + verify memo durability ==="
    USE data INDEX data VIA "ADSCDX"
    ? "Reopened count:", LastRec()
-
-   /* Default order is AGE (alphabetically first sub-tag); switch to
-    * NAME so dbSeek looks up by character key. */
    OrdSetFocus( "NAME" )
-   SET DELETED ON
 
-   dbSeek( "ZETA" )
-   ? "  Seek 'ZETA'   : Found=" + iif(Found(), "T", "F") + ;
-     "  RecNo=" + LTrim(Str(RecNo())) + ;
-     "  AGE="    + LTrim(Str(FIELD->AGE)) + ;
-     "  Deleted=" + iif(Deleted(),"T","F")
-   dbSeek( "EPSILON" )
-   ? "  Seek 'EPSILON': Found=" + iif(Found(), "T", "F") + ;
-     "  RecNo=" + LTrim(Str(RecNo())) + ;
-     "  AGE="    + LTrim(Str(FIELD->AGE)) + ;
-     "  Deleted=" + iif(Deleted(),"T","F")
+   dbSeek( "DELTA" )
+   ? "  Seek 'DELTA': Found=" + iif(Found(), "T", "F"), ;
+     "len=" + LTrim(Str(Len(FIELD->NOTES)))
+   ? "    NOTES = [" + FIELD->NOTES + "]"
+
+   dbSeek( "OMEGA" )
+   ? "  Seek 'OMEGA': Found=" + iif(Found(), "T", "F"), ;
+     "len=" + LTrim(Str(Len(FIELD->NOTES)))
+   ? "    NOTES first 60 = [" + Left(FIELD->NOTES, 60) + "]"
 
    USE
+   AdsDisconnect( nConn )
    ? "Done."
    RETURN
 

@@ -16,6 +16,42 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.11 — Memo M-fields (FPT) round-trip
+
+The fixture now declares a fifth column `NOTES M(10)` and the smoke
+appends two rows with memo payloads, closes, and reopens to verify
+the memo content survives:
+
+```
+Append row DELTA   NOTES = "Hello memo from OpenADS smoke test (M8.11)."
+Append row OMEGA   NOTES = Replicate("Lorem ipsum dolor sit amet. ", 10)
+=== Reopen + verify memo durability ===
+Reopened count: 5
+  Seek 'DELTA': Found=T len=43
+    NOTES = [Hello memo from OpenADS smoke test (M8.11).]
+  Seek 'OMEGA': Found=T len=280
+    NOTES first 60 = [Lorem ipsum dolor sit amet. Lorem ipsum dolor ...]
+```
+
+ABI changes:
+
+- `make_cdx.exe` now also stages an **empty data.fpt** alongside
+  data.cdx via `FptMemo::create(...)`, so `Connection::open_table`
+  finds a memo store to auto-attach when the DBF declares an M field.
+- `make_data.ps1` flips the DBF signature from 0x03 to 0x30
+  (FoxPro CDX with FPT memo file), declares a fifth `NOTES M(10)`
+  field, and updates header/record lengths (193 / 33).
+- `AdsGetMemoLength` / `AdsGetMemoDataType` / `AdsGetString` are now
+  real implementations sitting in `ace_exports.cpp` (M4 had earlier
+  versions; M8.11 normalised them to use `resolve_field_index` so
+  the rddads `ADSFIELD(n)` call form lands in the right column).
+- `AdsCloseTable` flushes the table before releasing the handle so
+  non-transactional appends reach disk on `USE` close. With an
+  explicit transaction, `commit_tx` already flushed and this call
+  is a no-op.
+- `ADS_MEMO_TEXT` / `ADS_MEMO_PICTURE` aliases now resolve to the
+  M8.4-verified `ADS_STRING` (4) and `ADS_IMAGE` (7) values.
+
 ## M8.10 — Transactions (BeginTransaction / Rollback / Commit)
 
 Real ARIES-style transactions through Harbour: BEGIN + APPEND +

@@ -107,7 +107,6 @@ uint32_t AdsGetRelKeyPos() { STUB_TRACE(AdsGetRelKeyPos); return 5004u; }
 uint32_t AdsGetSearchPath() { STUB_TRACE(AdsGetSearchPath); return 5004u; }
 uint32_t AdsGetServerName() { STUB_TRACE(AdsGetServerName); return 5004u; }
 uint32_t AdsGetServerTime() { STUB_TRACE(AdsGetServerTime); return 5004u; }
-uint32_t AdsGetString() { STUB_TRACE(AdsGetString); return 5004u; }
 uint32_t AdsGetStringW() { STUB_TRACE(AdsGetStringW); return 5004u; }
 uint32_t AdsGetTableAlias() { STUB_TRACE(AdsGetTableAlias); return 5004u; }
 uint32_t AdsGetTableCharType() { STUB_TRACE(AdsGetTableCharType); return 5004u; }

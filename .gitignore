@@ -29,6 +29,7 @@ tests/harbour_smoke/stubs.log
 tests/harbour_smoke/hb_out.log
 tests/harbour_smoke/data.dbf
 tests/harbour_smoke/data.cdx
+tests/harbour_smoke/data.fpt
 tests/harbour_smoke/trace.log
 tests/harbour_smoke/openads.txlog
 tests/harbour_smoke/openads.lsnmap*

@@ -199,6 +199,13 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     auto& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
+    // Flush the table (driver + active order + extra index views)
+    // before releasing the handle. Without an explicit transaction,
+    // this is the only point at which mutations made since open
+    // reach disk; with one, commit_tx already flushed and this is
+    // a no-op.
+    Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
+    if (t != nullptr) (void)t->flush();
     s.registry.release(hTable);
     return ok();
 }
@@ -519,6 +526,60 @@ void julian_to_ymd(SIGNED32 jd, int& y, int& m, int& d) {
 }
 
 } // namespace
+
+// Memo readers: rddads' adsGetValue routes HB_FT_MEMO fields through
+// AdsGetMemoDataType + AdsGetMemoLength + AdsGetString. The first
+// reports the memo's content type (text vs binary), the second the
+// payload length, and the third copies the bytes into the caller's
+// buffer. We resolve the field as before, fetch the memo block via
+// the attached IMemoStore, and answer in kind.
+UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
+                            UNSIGNED32* pulLen) {
+    Table* t = get_table(hTable);
+    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    *pulLen = static_cast<UNSIGNED32>(v.value().as_string.size());
+    return ok();
+}
+
+UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* /*pucField*/,
+                              UNSIGNED16* pusType) {
+    Table* t = get_table(hTable);
+    if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // Always report ADS_STRING — OpenADS' memo store is plain text;
+    // binary memos land when an FPT block carries a binary type tag.
+    *pusType = static_cast<UNSIGNED16>(ADS_STRING);
+    return ok();
+}
+
+UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
+                        UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                        UNSIGNED16 /*usOption*/) {
+    Table* t = get_table(hTable);
+    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    const std::string& s = v.value().as_string;
+    UNSIGNED32 cap = *pulLen;
+    UNSIGNED32 n   = cap > 0 ? std::min<UNSIGNED32>(cap - 1,
+                                static_cast<UNSIGNED32>(s.size()))
+                             : 0;
+    if (pucBuf != nullptr && cap > 0) {
+        if (n > 0) std::memcpy(pucBuf, s.data(), n);
+        pucBuf[n] = '\0';
+    }
+    *pulLen = static_cast<UNSIGNED32>(s.size());
+    return ok();
+}
 
 UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
                         SIGNED32 lDate) {
@@ -1058,32 +1119,6 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE /*hTable*/) {
 }
 
 // --- M4 memo + autoinc + encryption ----------------------------------------
-
-UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
-                            UNSIGNED32* pulLen) {
-    Table* t = get_table(hTable);
-    if (!t || pulLen == nullptr) {
-        return fail(openads::AE_INTERNAL_ERROR, "");
-    }
-    auto name = openads::abi::to_internal(pucField, 0);
-    std::int32_t idx = t->field_index(name);
-    if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
-    auto v = t->read_field(static_cast<std::uint16_t>(idx));
-    if (!v) return fail(v.error());
-    *pulLen = static_cast<UNSIGNED32>(v.value().as_string.size());
-    return ok();
-}
-
-UNSIGNED32 AdsGetMemoDataType(ADSHANDLE hTable, UNSIGNED8* /*pucField*/,
-                              UNSIGNED16* pusType) {
-    Table* t = get_table(hTable);
-    if (!t || pusType == nullptr) {
-        return fail(openads::AE_INTERNAL_ERROR, "");
-    }
-    // OpenADS memo stores currently treat all payloads as text.
-    *pusType = ADS_MEMO_TEXT;
-    return ok();
-}
 
 UNSIGNED32 AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED8* pucPath) {

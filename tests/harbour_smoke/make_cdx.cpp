@@ -1,12 +1,10 @@
-// Pre-stages data.cdx for the M8.6 Harbour smoke. Uses OpenADS'
-// CdxIndex::create + insert directly (no Harbour involvement) so the
-// smoke validates that rddads can read a CDX produced by OpenADS.
-//
-// Index layout: single tag "NAME" over the NAME C(10) column with
-// recno 1 -> "ALPHA", 2 -> "BETA", 3 -> "GAMMA". Order is the natural
-// sort order so dbSeek lands on the expected record.
+// Pre-stages data.cdx (and, since M8.11, an empty data.fpt) for the
+// Harbour smoke. Uses OpenADS' CdxIndex::create / FptMemo::create
+// directly so the smoke validates that rddads can read OpenADS-built
+// fixtures.
 
 #include "drivers/cdx/cdx_index.h"
+#include "drivers/fpt/fpt_memo.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -95,5 +93,19 @@ int main(int argc, char* argv[]) {
     }
 
     std::printf("[make_cdx] wrote %s with tags NAME, AGE\n", out.string().c_str());
+
+    // Side-stage: empty .fpt next to the .dbf so AdsOpenTable's
+    // auto-attach finds a memo store when the DBF declares an M field.
+    fs::path fpt = out;
+    fpt.replace_extension(".fpt");
+    fs::remove(fpt, ec);
+    auto fpt_r = openads::drivers::fpt::FptMemo::create(fpt.string());
+    if (!fpt_r) {
+        std::fprintf(stderr, "[make_cdx] FptMemo::create failed: %s\n",
+                     fpt_r.error().message.c_str());
+        return 7;
+    }
+    std::printf("[make_cdx] wrote %s (empty memo store)\n",
+                fpt.string().c_str());
     return 0;
 }

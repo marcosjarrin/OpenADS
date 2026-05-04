@@ -185,8 +185,11 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_BOTTOM         1
 #define ADS_SOFTSEEK       1
 #define ADS_OPTIMIZED_NONE 3
-#define ADS_MEMO_TEXT      1
-#define ADS_MEMO_PICTURE   0
+// Memo content kinds returned by AdsGetMemoDataType. Match the
+// numeric values rddads switches against in its HB_FT_MEMO branch.
+// (See ADS_BINARY / ADS_IMAGE further below for the binary kinds.)
+#define ADS_MEMO_TEXT      4   // alias for ADS_STRING; text memo
+#define ADS_MEMO_PICTURE   7   // alias for ADS_IMAGE; binary memo
 
 // ACE field-type constants.
 //
