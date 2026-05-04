@@ -5,6 +5,112 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 0.2.0 — 2026-05-04
+
+The 0.2.0 release closes the entire 226-symbol Harbour-reachable
+`Ads*` ABI surface — every export resolves to either a real
+implementation or a documented local-mode silent-success. No exports
+hard-fail with `AE_FUNCTION_NOT_AVAILABLE` at the function level any
+more. The release also relicensed the project from MIT to Apache
+License 2.0 and added a clean-room provenance / non-commercial /
+no-warranty disclaimer block + NOTICE file.
+
+### Highlights
+
+- **Compound CDX expression evaluator.** `UPPER`, `LOWER`,
+  `LTRIM` / `RTRIM` / `ALLTRIM`, `STR(n[,len[,dec]])`, `DTOS(date)`,
+  `SUBSTR(s,start[,len])`, and string concatenation with `+`. UPPER /
+  LOWER / SUBSTR walk UTF-8 codepoints (ASCII + Latin-1 supplement
+  case map, `ÿ↔Ÿ` pair); the Latin-1 case mapping table closes the
+  M9.17 `*W` Unicode surface.
+- **Real CRUD for tables and indexes.** `AdsCreateTable` parses the
+  rddads `NAME,Type,Len,Dec;…` field-def syntax; `AdsCreateIndex61` /
+  `AdsCreateIndex` build CDX or NTX bags compatible with FoxPro and
+  Clipper layouts. `AdsZapTable` / `AdsPackTable` / `AdsReindex`
+  match the Clipper bound-index lifecycle.
+- **Multi-file index binding.** Multiple `.ntx` files (or multiple
+  pre-built `.cdx` bags) coexist on a single Table; same-path reopen
+  refreshes; `AdsCloseIndex` drops the closed view without disturbing
+  the active order.
+- **Transactions + savepoints + WAL recovery.** `AdsBeginTransaction`
+  / `AdsCommitTransaction` / `AdsRollbackTransaction` /
+  `AdsCreateSavepoint` / `AdsRollbackTransaction80(savepoint)`. Mid-
+  tx crash + reopen replays the WAL and writes back before-images
+  for orphan transactions.
+- **Memo (DBT / FPT) read + write + binary type.** Text memos
+  round-trip through DBT and FPT; `AdsGetBinary` /
+  `AdsGetBinaryLength` / `AdsSetBinary` carry binary blobs through
+  FPT block-type tags (Text / Picture / Object); chunked
+  `AdsSetBinary` writes reassemble through a per-(table, field)
+  accumulator.
+- **Locking with retry policy.** `AdsLockTable` / `AdsLockRecord`
+  use non-blocking byte-range acquires (`LockFileEx
+  LOCKFILE_FAIL_IMMEDIATELY` on Windows, `fcntl F_SETLK` on POSIX);
+  `AdsSetLockCycle` / `AdsSetLockRetryCount` configure the retry
+  budget.
+- **Full-text search.** `AdsCreateFTSIndex` writes a clean-room
+  `# OpenADS FTS v0` text file per table; `AdsFTSSearch` and the
+  SQL `CONTAINS(<col>, '<query>')` predicate intersect per-token
+  recno lists with AND semantics.
+- **Server / dictionary surface.** `AdsMg*` (15 calls) report local-
+  mode "everything quiescent" responses; `AdsDD*` (14 advanced-DD
+  calls) accept silently and zero-fill property getters. Real
+  persistence in the OpenADS DD format lands with 0.3.x.
+- **Schema evolution.** `AdsRestructureTable` ADD-fields path
+  rewrites the DBF with extended schema and preserves every
+  record's original-field bytes; DELETE / CHANGE arguments still
+  surface AE_FUNCTION_NOT_AVAILABLE pending VFP / ADT structural
+  extensions.
+- **Misc.** Real `AdsGetServerName` / `AdsGetServerTime`,
+  `AdsGetLongLong`, `AdsSetFieldRaw`, `AdsVerifySQL`,
+  `AdsFailedTransactionRecovery`, `AdsGetAllLocks`, `AdsSkipUnique`,
+  `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose`,
+  `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable`,
+  `AdsAddCustomKey` / `AdsDeleteCustomKey`.
+
+### Project posture
+
+- License: relicensed **MIT → Apache License 2.0** (`LICENSE` +
+  `NOTICE`).
+- Independence + non-commercial purpose + clean-room provenance +
+  no-warranty + downstream responsibility — block added to the
+  README and mirrored to the NOTICE file (Apache 4(d) preservation).
+- Tests: **214** doctest cases, **3865** assertions, all green on
+  Windows / MSVC Release. CI matrix builds Windows + Linux + macOS
+  cleanly through `.github/workflows/ci.yml`.
+
+### Milestones
+
+| Tag | Milestone |
+|-----|-----------|
+| `m9.1`   | Compound CDX expression evaluator |
+| `m9.2`   | Stub batch reorganised into real / no-op / missing |
+| `m9.3`   | Compound expressions validated through Harbour |
+| `m9.4`   | `AdsGotoRecord` + table / file metadata |
+| `m9.5`   | `AdsCreateTable` |
+| `m9.6`   | `AdsRefreshRecord` + `AdsExtractKey` |
+| `m9.7`   | `AdsCreateIndex61` with compound expression |
+| `m9.8`   | `AdsZapTable` + `AdsPackTable` |
+| `m9.9`   | `AdsReindex` |
+| `m9.10`  | NTX multi-level B+tree split |
+| `m9.11`  | `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable` |
+| `m9.12`  | `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose` |
+| `m9.13`  | Binary memo (`AdsGetBinary` / `AdsSetBinary` / `AdsGetBinaryLength`) |
+| `m9.14`  | NTX multi-tag binding |
+| `m9.15`  | Real `AdsGetServerName` / `AdsGetServerTime` + binding-leak fix |
+| `m9.16`  | Chunked `AdsSetBinary` |
+| `m9.17`  | Unicode `*W` variants |
+| `m9.18`  | Lock retry / cycle policy |
+| `m9.19`  | `AdsCreateFTSIndex` |
+| `m9.20`  | `AdsAddCustomKey` / `AdsDeleteCustomKey` |
+| `m9.21`  | FTS search side (`AdsFTSSearch` + SQL `CONTAINS`) |
+| `m9.22`  | UTF-8 codepoint-aware index-expression evaluator |
+| `m9.23`  | Misc MISS fillers (LongLong / FieldRaw / VerifySQL / FailedTxRecovery / GetAllLocks / SkipUnique) |
+| `m9.24`  | Local-mode `AdsMg*` surface (15 calls) |
+| `m9.25`  | Local-mode `AdsDD*` CRUD surface (14 calls) |
+| `m9.26`  | `AdsRestructureTable` (ADD-fields path) |
+| `m9.27`  | CI matrix portability |
+
 ## 0.1.0 — 2026-05-04
 
 Final 0.1.0. The post-rc1 work below extends the Harbour smoke

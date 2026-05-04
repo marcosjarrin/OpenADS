@@ -57,8 +57,9 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (28 milestones merged on
-top of 0.1.0 — see the M9.x table below).
+**0.2.0 released** (2026-05-04). 27 M9.x milestones merged on top of
+0.1.0 — see the table below. The full Harbour-reachable `Ads*` ABI
+surface (~ 231 exports) is now coverable end-to-end.
 
 A real Harbour application, compiled against the standard
 `contrib/rddads` static library, opens a DBF, walks records, runs
@@ -215,7 +216,7 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m8.11`          | Memo M-fields (FPT) round-trip |
 | **`0.1.0`**      | **Final 0.1.0 release** |
 
-### 0.2.x — broaden the ABI surface, polish the engine (IN PROGRESS)
+### 0.2.x — broaden the ABI surface, polish the engine (DONE — 0.2.0 released)
 
 | Tag | Milestone |
 |-----|-----------|
