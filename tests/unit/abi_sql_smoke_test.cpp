@@ -150,6 +150,8 @@ TEST_CASE("ABI SQL: WHERE filter selects matching record") {
 }
 
 TEST_CASE("ABI SQL: parse error on unsupported syntax") {
+    // Projection lists are now supported (M10.8); use truly malformed
+    // SQL to exercise the parse-error path.
     const auto dir = fs::temp_directory_path() / "openads_m71_sql_err";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -163,7 +165,7 @@ TEST_CASE("ABI SQL: parse error on unsupported syntax") {
     ADSHANDLE hStmt = 0;
     REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
     ADSHANDLE hCursor = 0;
-    UNSIGNED8 sql[64] = "SELECT TAG FROM data.dbf";   // projection unsupported
+    UNSIGNED8 sql[64] = "GRANT SELECT ON x";   // unrecognised verb
     auto r = AdsExecuteSQLDirect(hStmt, sql, &hCursor);
     CHECK(r == openads::AE_PARSE_ERROR);
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);

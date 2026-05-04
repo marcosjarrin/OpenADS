@@ -40,10 +40,13 @@ TEST_CASE("parse_select tolerates trailing semicolon and whitespace") {
     CHECK(r.value().table == "data.dbf");
 }
 
-TEST_CASE("parse_select rejects projection lists") {
-    auto r = parse_select("SELECT name FROM x");
-    CHECK_FALSE(r.has_value());
-    CHECK(r.error().code == 7200);
+TEST_CASE("parse_select accepts projection lists (M10.8)") {
+    auto r = parse_select("SELECT name, age FROM x");
+    REQUIRE(r.has_value());
+    CHECK(r.value().table == "x");
+    REQUIRE(r.value().projection.size() == 2);
+    CHECK(r.value().projection[0] == "name");
+    CHECK(r.value().projection[1] == "age");
 }
 
 TEST_CASE("parse_select reports missing FROM") {

@@ -44,6 +44,9 @@ struct OrderBy {
 
 struct SelectStmt {
     std::string                table;
+    // Empty `projection` means `SELECT *` (every column visible);
+    // otherwise the cursor exposes only the listed columns in order.
+    std::vector<std::string>   projection;
     // Optional WHERE — tree form. nullptr means "no filter".
     std::unique_ptr<WhereExpr> where;
     // Optional ORDER BY — single column ascending or descending (M10.6).

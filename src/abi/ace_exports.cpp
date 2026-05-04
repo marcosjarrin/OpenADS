@@ -105,6 +105,47 @@ find_field(Table* tbl, const std::string& name) {
     return nullptr;
 }
 
+// Cursor projections (M10.8). When a SELECT carries a projection
+// list, the cursor handle's entry in this map holds the source-field
+// indices (in projection order) so AdsGetNumFields / AdsGetFieldName
+// / AdsGetField with ADSFIELD(n) report the projected schema instead
+// of the underlying table's full layout.
+std::unordered_map<ADSHANDLE, std::vector<std::uint16_t>>&
+cursor_projections() {
+    static std::unordered_map<ADSHANDLE, std::vector<std::uint16_t>> m;
+    return m;
+}
+
+const std::vector<std::uint16_t>*
+projection_for(ADSHANDLE h) {
+    auto& m = cursor_projections();
+    auto it = m.find(h);
+    if (it == m.end() || it->second.empty()) return nullptr;
+    return &it->second;
+}
+
+// Projection-aware variant. Called by Get* entry points that take
+// hTable + pucField; routes ADSFIELD(n) numeric handles through the
+// projection map (n = position within projection, translated to the
+// underlying field index). Bare-name lookups stay direct — rddads
+// only ever asks for projected names so the underlying schema's
+// extra columns aren't reachable through the cursor anyway.
+bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out);
+bool resolve_field_index_h(ADSHANDLE h, Table* tbl,
+                           UNSIGNED8* pucField, std::uint16_t* out) {
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
+    const auto* proj = projection_for(h);
+    if (proj != nullptr && p != 0 && p < 0x10000u) {
+        std::uint16_t one_based = static_cast<std::uint16_t>(p);
+        if (one_based >= 1 && one_based <= proj->size()) {
+            *out = (*proj)[one_based - 1];
+            return true;
+        }
+        return false;
+    }
+    return resolve_field_index(tbl, pucField, out);
+}
+
 // Resolve a pucField argument to a 0-based field index. Real ACE.h
 // defines `ADSFIELD(n)` as `((UNSIGNED8*)(UNSIGNED_PTR)(n))`, so
 // callers compiled against that header pass small integers cast to
@@ -804,6 +845,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
         purge_bindings_for_table(t);
         purge_pending_binaries_for_table(t);
     }
+    cursor_projections().erase(hTable);
     s.registry.release(hTable);
     return ok();
 }
@@ -849,7 +891,11 @@ UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
 UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
     Table* t = get_table(hTable);
     if (!t || pusFields == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    *pusFields = t->field_count();
+    if (auto* p = projection_for(hTable); p != nullptr) {
+        *pusFields = static_cast<UNSIGNED16>(p->size());
+    } else {
+        *pusFields = t->field_count();
+    }
     return ok();
 }
 
@@ -857,10 +903,20 @@ UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    if (usFieldNum == 0 || usFieldNum > t->field_count()) {
-        return fail(openads::AE_COLUMN_NOT_FOUND, "field index out of range");
+    auto* p = projection_for(hTable);
+    std::uint16_t src_idx = 0;
+    if (p != nullptr) {
+        if (usFieldNum == 0 || usFieldNum > p->size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        src_idx = (*p)[usFieldNum - 1];
+    } else {
+        if (usFieldNum == 0 || usFieldNum > t->field_count()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "field index out of range");
+        }
+        src_idx = static_cast<std::uint16_t>(usFieldNum - 1);
     }
-    const auto& f = t->field_descriptor(usFieldNum - 1);
+    const auto& f = t->field_descriptor(src_idx);
     openads::abi::copy_to_caller(pucBuf, pusLen, f.name);
     return ok();
 }
@@ -870,7 +926,7 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
     Table* t = get_table(hTable);
     if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pusType = map_field_type(t->field_descriptor(idx).type);
@@ -882,7 +938,7 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pulLen = t->field_descriptor(idx).length;
@@ -894,7 +950,7 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
     Table* t = get_table(hTable);
     if (!t || pusDec == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     *pusDec = t->field_descriptor(idx).decimals;
@@ -989,7 +1045,7 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
-    if (!resolve_field_index(t, pucField, &idx)) {
+    if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     auto v = t->read_field(idx);
@@ -3924,6 +3980,24 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     }
 
     ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
+
+    // M10.8: stash the projection (column → underlying field index)
+    // for this cursor handle. Empty projection means SELECT * — leave
+    // the entry absent so AdsGetNumFields / Name / Type fall through
+    // to the table's full schema.
+    if (!parsed.value().projection.empty()) {
+        std::vector<std::uint16_t> proj;
+        proj.reserve(parsed.value().projection.size());
+        for (const auto& col : parsed.value().projection) {
+            std::int32_t fidx = tbl->field_index(col);
+            if (fidx < 0) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, col.c_str());
+            }
+            proj.push_back(static_cast<std::uint16_t>(fidx));
+        }
+        cursor_projections()[gh] = std::move(proj);
+    }
+
     *phCursor = gh;
     return ok();
 }

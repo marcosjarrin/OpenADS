@@ -289,15 +289,26 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     if (!c.match_keyword("SELECT")) {
         return util::Error{7200, 0, "expected SELECT", sql};
     }
-    if (!c.match_char('*')) {
-        return util::Error{7200, 0,
-                           "M7.x only supports SELECT * (projection lists pending)",
-                           sql};
+    SelectStmt stmt;
+    if (c.match_char('*')) {
+        // SELECT * — projection stays empty (every column visible).
+    } else {
+        // Projection list (M10.8). One or more bare identifiers
+        // separated by commas.
+        for (;;) {
+            std::string col = c.read_identifier();
+            if (col.empty()) {
+                return util::Error{7200, 0,
+                    "expected '*' or column name in SELECT", sql};
+            }
+            stmt.projection.push_back(std::move(col));
+            if (c.match_char(',')) continue;
+            break;
+        }
     }
     if (!c.match_keyword("FROM")) {
         return util::Error{7200, 0, "expected FROM", sql};
     }
-    SelectStmt stmt;
     stmt.table = c.read_identifier_or_filename();
     if (stmt.table.empty()) {
         return util::Error{7200, 0, "expected table name", sql};
