@@ -3,14 +3,26 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace openads::abi {
 
 // Phase 1 placeholder: M1 treats input/output as already-correct byte
-// sequences. Real OEM/ANSI/UTF translation lands in M4 alongside the
-// `*W` entry-point variants.
+// sequences. Real OEM/ANSI/UTF translation lands alongside the `*W`
+// entry-point variants in M9.17.
 std::string to_internal(const std::uint8_t* p, std::size_t n);
 void copy_to_caller(std::uint8_t* dst, std::uint16_t* dst_len_inout,
                     const std::string& src) noexcept;
+
+// UTF-16LE <-> UTF-8 codecs (M9.17). The engine stores byte
+// sequences with no embedded codepage knowledge; the `*W` ABI
+// variants transcode at the boundary so callers can pass / receive
+// `WCHAR*` (UTF-16LE on Windows) directly.
+//
+// Decoder accepts unpaired surrogates and over-long inputs by
+// substituting U+FFFD; both directions never throw.
+std::string         utf16le_to_utf8(const std::uint16_t* in,
+                                    std::size_t units);
+std::vector<std::uint16_t> utf8_to_utf16le(const std::string& utf8);
 
 } // namespace openads::abi

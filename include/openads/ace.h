@@ -117,6 +117,14 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted);
 
 UNSIGNED32 AdsSetString     (ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED8* pucValue, UNSIGNED32 ulLen);
+UNSIGNED32 AdsSetStringW    (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+                              UNSIGNED16* pucValueW, UNSIGNED32 ulLen);
+UNSIGNED32 AdsGetStringW    (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+                              UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
+                              UNSIGNED16 usOption);
+UNSIGNED32 AdsGetFieldW     (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+                              UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
+                              UNSIGNED16 usOption);
 UNSIGNED32 AdsSetLogical    (ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED16 bValue);
 UNSIGNED32 AdsSetDouble     (ADSHANDLE hTable, UNSIGNED8* pucField,

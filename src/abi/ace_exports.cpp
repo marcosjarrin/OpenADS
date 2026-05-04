@@ -1001,6 +1001,107 @@ UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
+// --- M9.17 Unicode (*W) variants ------------------------------------------
+//
+// rddads' ADS_LIB_VERSION >= 1000 path routes UNICODE-flagged columns
+// through AdsSetStringW / AdsGetStringW / AdsGetFieldW with WCHAR*
+// buffers (UTF-16LE on Windows). The engine stores byte sequences
+// without a fixed codepage assumption, so the W variants transcode
+// at the boundary: UTF-16LE -> UTF-8 on the way in, UTF-8 -> UTF-16LE
+// on the way out. Field names are 7-bit ASCII inside the DBF, so the
+// pucFieldW name is dropped to ASCII via the same converter.
+
+namespace {
+
+// Resolve a UTF-16 / numeric `pucFieldW` to a 0-based field index.
+// Mirrors `resolve_field_index` for the ASCII path: small pointer
+// values are interpreted as a 1-based field number (rddads' ADSFIELD
+// macro), otherwise the value is a UTF-16LE NUL-terminated field
+// name that is transcoded to UTF-8 before the name lookup.
+bool resolve_field_index_w(Table* tbl, UNSIGNED16* pucFieldW,
+                           std::uint16_t* out) {
+    if (tbl == nullptr || out == nullptr) return false;
+    auto p = reinterpret_cast<std::uintptr_t>(pucFieldW);
+    if (p != 0 && p < 0x10000u) {
+        std::uint16_t one_based = static_cast<std::uint16_t>(p);
+        if (one_based >= 1 && one_based <= tbl->field_count()) {
+            *out = static_cast<std::uint16_t>(one_based - 1);
+            return true;
+        }
+        return false;
+    }
+    if (pucFieldW == nullptr) return false;
+    std::size_t n = 0;
+    while (pucFieldW[n] != 0) ++n;
+    auto name = openads::abi::utf16le_to_utf8(
+        reinterpret_cast<const std::uint16_t*>(pucFieldW), n);
+    for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
+        if (tbl->field_descriptor(i).name == name) { *out = i; return true; }
+    }
+    return false;
+}
+
+UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
+                      const std::string& utf8) {
+    if (pulLenW == nullptr) return openads::AE_INTERNAL_ERROR;
+    auto units = openads::abi::utf8_to_utf16le(utf8);
+    UNSIGNED32 cap = *pulLenW;
+    UNSIGNED32 n   = cap > 0
+        ? std::min<UNSIGNED32>(cap - 1,
+                               static_cast<UNSIGNED32>(units.size()))
+        : 0;
+    if (pucBufW != nullptr && cap > 0) {
+        if (n > 0) {
+            std::memcpy(pucBufW, units.data(),
+                        n * sizeof(std::uint16_t));
+        }
+        pucBufW[n] = 0;
+    }
+    *pulLenW = static_cast<UNSIGNED32>(units.size());
+    return openads::AE_SUCCESS;
+}
+
+}  // namespace
+
+UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+                         UNSIGNED16* pucValueW, UNSIGNED32 ulLen) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index_w(t, pucFieldW, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    std::size_t units = ulLen;
+    if (units == 0 && pucValueW != nullptr) {
+        while (pucValueW[units] != 0) ++units;
+    }
+    std::string utf8 = openads::abi::utf16le_to_utf8(
+        reinterpret_cast<const std::uint16_t*>(pucValueW), units);
+    auto r = t->set_field(idx, utf8);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+                         UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
+                         UNSIGNED16 /*usOption*/) {
+    Table* t = get_table(hTable);
+    if (!t || pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index_w(t, pucFieldW, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    return emit_utf16(pucBufW, pulLenW, v.value().as_string);
+}
+
+UNSIGNED32 AdsGetFieldW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+                        UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
+                        UNSIGNED16 /*usOption*/) {
+    return AdsGetStringW(hTable, pucFieldW, pucBufW, pulLenW, 0);
+}
+
 UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
                         SIGNED32 lDate) {
     Table* t = get_table(hTable);

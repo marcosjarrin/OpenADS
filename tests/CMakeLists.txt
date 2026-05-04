@@ -54,6 +54,7 @@ add_executable(openads_unit_tests
     unit/abi_binary_memo_test.cpp
     unit/abi_ntx_multitag_test.cpp
     unit/abi_server_info_test.cpp
+    unit/abi_unicode_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
