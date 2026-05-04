@@ -57,6 +57,11 @@ UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen);
 
 UNSIGNED32 AdsRefreshRecord (ADSHANDLE hTable);
 UNSIGNED32 AdsReindex       (ADSHANDLE hTable);
+UNSIGNED32 AdsCopyTable     (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
+                              UNSIGNED8* pucFile);
+UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst);
+UNSIGNED32 AdsConvertTable  (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
+                              UNSIGNED8* pucFile, UNSIGNED16 usTargetType);
 UNSIGNED32 AdsCreateIndex61 (ADSHANDLE  hTable, UNSIGNED8* pucFileName,
                               UNSIGNED8* pucIndexName, UNSIGNED8* pucExpr,
                               UNSIGNED8* pucCondition, UNSIGNED8* pucKeyFilter,

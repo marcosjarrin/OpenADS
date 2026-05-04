@@ -1550,6 +1550,124 @@ UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
+                        UNSIGNED16  /*usFilterOption*/,
+                        UNSIGNED8*  pucFile) {
+    if (pucFile == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null target");
+    }
+    Table* t = get_table(hHandle);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!t->driver()) return fail(openads::AE_INTERNAL_ERROR, "no driver");
+
+    namespace fs = std::filesystem;
+    auto raw  = openads::abi::to_internal(pucFile, 0);
+    fs::path dst(raw);
+    if (!dst.is_absolute()) {
+        fs::path src_dir = fs::path(t->path()).parent_path();
+        dst = src_dir / dst;
+    }
+    if (!dst.has_extension()) dst.replace_extension(".dbf");
+
+    // Build a new DBF that mirrors the source schema. Copy live
+    // records (deleted rows skipped — filter options beyond
+    // ADS_RESPECTFILTERS land later).
+    const auto& src_fields = t->driver()->fields();
+    if (src_fields.empty()) {
+        return fail(openads::AE_INTERNAL_ERROR, "source has no fields");
+    }
+    std::uint16_t header_len = static_cast<std::uint16_t>(
+        32 + 32 * src_fields.size() + 1);
+    std::uint16_t rec_len = t->driver()->record_length();
+
+    std::vector<std::uint8_t> file;
+    std::vector<std::uint8_t> hdr(32, 0);
+    hdr[0]  = 0x03;
+    hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+    file = hdr;
+    for (const auto& f : src_fields) {
+        std::vector<std::uint8_t> fd(32, 0);
+        std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+        std::memcpy(fd.data(), f.name.data(), n);
+        fd[11] = static_cast<std::uint8_t>(f.raw_type ? f.raw_type : 'C');
+        fd[16] = f.length;
+        fd[17] = f.decimals;
+        file.insert(file.end(), fd.begin(), fd.end());
+    }
+    file.push_back(0x0D);
+
+    // Walk source records, append live ones to the buffered file.
+    auto src_count = t->driver()->record_count();
+    std::uint32_t live = 0;
+    for (std::uint32_t r = 1; r <= src_count; ++r) {
+        auto rec = t->driver()->read_record_raw(r);
+        if (!rec) return fail(rec.error());
+        const auto& buf = rec.value();
+        if (!buf.empty() && buf[0] == '*') continue;   // deleted
+        ++live;
+        file.insert(file.end(), buf.begin(), buf.end());
+    }
+    file.push_back(0x1A);
+
+    // Patch the record count.
+    file[4] = static_cast<std::uint8_t>( live        & 0xFFu);
+    file[5] = static_cast<std::uint8_t>((live >>  8) & 0xFFu);
+    file[6] = static_cast<std::uint8_t>((live >> 16) & 0xFFu);
+    file[7] = static_cast<std::uint8_t>((live >> 24) & 0xFFu);
+
+    {
+        std::error_code ec;
+        fs::remove(dst, ec);
+    }
+    {
+        std::ofstream out(dst, std::ios::binary);
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCopyTable: open for write failed");
+        out.write(reinterpret_cast<const char*>(file.data()),
+                  static_cast<std::streamsize>(file.size()));
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCopyTable: write failed");
+    }
+    return ok();
+}
+
+UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst) {
+    Table* src = get_table(hSrc);
+    Table* dst = get_table(hDst);
+    if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!src->driver() || !dst->driver()) {
+        return fail(openads::AE_INTERNAL_ERROR, "no driver");
+    }
+    if (src->driver()->record_length() != dst->driver()->record_length()) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "record length mismatch between src and dst");
+    }
+    auto src_count = src->driver()->record_count();
+    for (std::uint32_t r = 1; r <= src_count; ++r) {
+        auto rec = src->driver()->read_record_raw(r);
+        if (!rec) return fail(rec.error());
+        const auto& buf = rec.value();
+        if (!buf.empty() && buf[0] == '*') continue;
+        auto a = dst->driver()->append_record_raw(buf.data(), buf.size());
+        if (!a) return fail(a.error());
+    }
+    if (auto fl = dst->flush(); !fl) return fail(fl.error());
+    return ok();
+}
+
+UNSIGNED32 AdsConvertTable(ADSHANDLE   hHandle,
+                           UNSIGNED16  usFilterOption,
+                           UNSIGNED8*  pucFile,
+                           UNSIGNED16  /*usTargetType*/) {
+    // Single-format engine for now (CDX-flavoured DBF). Convert is a
+    // copy that mirrors the source format; once ADT / VFP land the
+    // target type will pick a different writer.
+    return AdsCopyTable(hHandle, usFilterOption, pucFile);
+}
+
 UNSIGNED32 AdsReindex(ADSHANDLE hTable) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");

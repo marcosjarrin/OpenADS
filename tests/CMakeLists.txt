@@ -49,6 +49,7 @@ add_executable(openads_unit_tests
     unit/abi_zap_pack_test.cpp
     unit/abi_reindex_test.cpp
     unit/ntx_multilevel_test.cpp
+    unit/abi_copy_table_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
