@@ -315,4 +315,82 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     return stmt;
 }
 
+bool sql_is_insert(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("INSERT");
+}
+
+util::Result<InsertStmt> parse_insert(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("INSERT")) {
+        return util::Error{7200, 0, "expected INSERT", sql};
+    }
+    if (!c.match_keyword("INTO")) {
+        return util::Error{7200, 0, "expected INTO after INSERT", sql};
+    }
+    InsertStmt stmt;
+    stmt.table = c.read_identifier_or_filename();
+    if (stmt.table.empty()) {
+        return util::Error{7200, 0, "expected table name", sql};
+    }
+
+    // Optional column list. Older xBase apps omit it (column order
+    // matches table definition); we require it for clarity.
+    if (!c.match_char('(')) {
+        return util::Error{7200, 0,
+            "expected '(' to open INSERT column list", sql};
+    }
+    for (;;) {
+        std::string col = c.read_identifier();
+        if (col.empty()) {
+            return util::Error{7200, 0,
+                "expected column name in INSERT list", sql};
+        }
+        stmt.columns.push_back(std::move(col));
+        if (c.match_char(',')) continue;
+        break;
+    }
+    if (!c.match_char(')')) {
+        return util::Error{7200, 0,
+            "expected ')' to close INSERT column list", sql};
+    }
+
+    if (!c.match_keyword("VALUES")) {
+        return util::Error{7200, 0, "expected VALUES", sql};
+    }
+    if (!c.match_char('(')) {
+        return util::Error{7200, 0,
+            "expected '(' to open VALUES list", sql};
+    }
+    for (;;) {
+        InsertLiteral lit;
+        if (c.peek_char('\'')) {
+            auto s = c.read_string_literal();
+            if (!s) return s.error();
+            lit.is_numeric = false;
+            lit.text       = std::move(s).value();
+        } else {
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            lit.is_numeric = true;
+            lit.number     = n.value();
+        }
+        stmt.values.push_back(std::move(lit));
+        if (c.match_char(',')) continue;
+        break;
+    }
+    if (!c.match_char(')')) {
+        return util::Error{7200, 0,
+            "expected ')' to close VALUES list", sql};
+    }
+
+    if (stmt.columns.size() != stmt.values.size()) {
+        return util::Error{7200, 0,
+            "INSERT column count must match VALUES count", sql};
+    }
+
+    c.match_char(';');
+    return stmt;
+}
+
 } // namespace openads::sql

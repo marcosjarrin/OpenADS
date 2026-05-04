@@ -69,6 +69,7 @@ add_executable(openads_unit_tests
     unit/dbf_vfp_test.cpp
     unit/abi_sql_or_test.cpp
     unit/abi_index_direction_test.cpp
+    unit/abi_sql_insert_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

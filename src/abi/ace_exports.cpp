@@ -3457,6 +3457,43 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
+
+    // M10.5: dispatch on the leading keyword. INSERT writes a row +
+    // returns no cursor (phCursor → 0); SELECT keeps the M9.21 path.
+    if (openads::sql::sql_is_insert(sql)) {
+        auto ins = openads::sql::parse_insert(sql);
+        if (!ins) return fail(ins.error());
+        auto th = c->open_table(ins.value().table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Shared);
+        if (!th) return fail(th.error());
+        openads::engine::Table* tbl = c->lookup_table(th.value());
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        if (auto r = tbl->append_record(); !r) return fail(r.error());
+        for (std::size_t i = 0; i < ins.value().columns.size(); ++i) {
+            std::int32_t fidx =
+                tbl->field_index(ins.value().columns[i]);
+            if (fidx < 0) {
+                return fail(openads::AE_COLUMN_NOT_FOUND,
+                            ins.value().columns[i].c_str());
+            }
+            const auto& v = ins.value().values[i];
+            if (v.is_numeric) {
+                auto wr = tbl->set_field(static_cast<std::uint16_t>(fidx),
+                                         v.number);
+                if (!wr) return fail(wr.error());
+            } else {
+                auto wr = tbl->set_field(static_cast<std::uint16_t>(fidx),
+                                         v.text);
+                if (!wr) return fail(wr.error());
+            }
+        }
+        if (auto fl = tbl->flush(); !fl) return fail(fl.error());
+        c->close_table(th.value());
+        *phCursor = 0;
+        return ok();
+    }
+
     auto parsed = openads::sql::parse_select(sql);
     if (!parsed) return fail(parsed.error());
 

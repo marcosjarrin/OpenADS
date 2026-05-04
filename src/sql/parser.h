@@ -45,4 +45,23 @@ struct SelectStmt {
 
 util::Result<SelectStmt> parse_select(const std::string& sql);
 
+// M10.5 — `INSERT INTO <table> (<col>, …) VALUES (<lit>, …)`.
+struct InsertLiteral {
+    bool        is_numeric = false;
+    std::string text;          // raw string content if !is_numeric
+    double      number     = 0.0;
+};
+
+struct InsertStmt {
+    std::string                  table;
+    std::vector<std::string>     columns;
+    std::vector<InsertLiteral>   values;
+};
+
+util::Result<InsertStmt> parse_insert(const std::string& sql);
+
+// Returns true when `sql`'s first non-whitespace keyword is INSERT.
+// Used by AdsExecuteSQLDirect to pick the right parser.
+bool sql_is_insert(const std::string& sql);
+
 } // namespace openads::sql
