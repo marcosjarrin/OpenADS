@@ -92,7 +92,49 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::printf("[make_cdx] wrote %s with tags NAME, AGE\n", out.string().c_str());
+    // Tag 3: UPPER_NAME with key expression UPPER(NAME). Existing
+    // records already store NAME upper-cased; the keys here are the
+    // same bytes as the NAME tag's. The point is that subsequent
+    // mutations (dbAppend in the smoke) must run through OpenADS'
+    // M9.1 compound-expression evaluator to keep this tag in sync,
+    // and rddads must be able to seek through it via OrdSetFocus.
+    auto added2 = CdxIndex::add_tag(out.string(), "UPPER_NAME",
+                                    "UPPER(NAME)",
+                                    /*key_size*/ 10,
+                                    /*unique*/   false,
+                                    /*descend*/  false);
+    if (!added2) {
+        std::fprintf(stderr, "[make_cdx] add_tag(UPPER_NAME) failed: %s\n",
+                     added2.error().message.c_str());
+        return 8;
+    }
+    {
+        CdxIndex ix = std::move(added2).value();
+        struct Row { std::uint32_t recno; const char* name; };
+        Row rows[] = {
+            { 1, "ALPHA" },
+            { 2, "BETA"  },
+            { 3, "GAMMA" },
+        };
+        for (const Row& r : rows) {
+            std::string padded = r.name;
+            if (padded.size() < 10) padded.append(10 - padded.size(), ' ');
+            if (auto e = ix.insert(r.recno, padded); !e) {
+                std::fprintf(stderr,
+                    "[make_cdx] UPPER_NAME insert(%u, '%s') failed: %s\n",
+                    r.recno, r.name, e.error().message.c_str());
+                return 9;
+            }
+        }
+        if (auto e = ix.flush(); !e) {
+            std::fprintf(stderr, "[make_cdx] UPPER_NAME flush failed: %s\n",
+                         e.error().message.c_str());
+            return 10;
+        }
+    }
+
+    std::printf("[make_cdx] wrote %s with tags NAME, AGE, UPPER_NAME\n",
+                out.string().c_str());
 
     // Side-stage: empty .fpt next to the .dbf so AdsOpenTable's
     // auto-attach finds a memo store when the DBF declares an M field.
