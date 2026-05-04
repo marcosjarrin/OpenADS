@@ -50,6 +50,13 @@ struct Aggregate {
     std::string   column;   // empty for CountStar
 };
 
+// M10.13 — `INNER JOIN <table> ON <left_col> = <right_col>`.
+struct JoinClause {
+    std::string  table;
+    std::string  left_column;
+    std::string  right_column;
+};
+
 struct SelectStmt {
     std::string                table;
     // Empty `projection` means `SELECT *` (every column visible);
@@ -58,6 +65,8 @@ struct SelectStmt {
     // Aggregate calls in the projection (M10.10). Mutually exclusive
     // with `projection` — apps either select columns or aggregate.
     std::vector<Aggregate>     aggregates;
+    // Optional INNER JOIN (M10.13). Single equality predicate.
+    std::optional<JoinClause>  inner_join;
     // Optional WHERE — tree form. nullptr means "no filter".
     std::unique_ptr<WhereExpr> where;
     // Optional ORDER BY — single column ascending or descending (M10.6).

@@ -3916,6 +3916,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     auto parsed = openads::sql::parse_select(sql);
     if (!parsed) return fail(parsed.error());
 
+    if (parsed.value().inner_join) {
+        // M10.13 lands the parser; the materialised executor follows
+        // in a later milestone.
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "INNER JOIN parser is real but execution lands "
+                    "in a follow-up milestone");
+    }
+
     auto th = c->open_table(parsed.value().table,
                             openads::engine::TableType::Cdx,
                             openads::engine::OpenMode::Read);

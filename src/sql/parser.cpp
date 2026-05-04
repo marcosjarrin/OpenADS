@@ -374,6 +374,38 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected FROM", sql};
     }
     stmt.table = c.read_identifier_or_filename();
+    if (c.match_keyword("INNER")) {
+        if (!c.match_keyword("JOIN")) {
+            return util::Error{7200, 0, "expected JOIN after INNER", sql};
+        }
+        JoinClause j;
+        j.table = c.read_identifier_or_filename();
+        if (j.table.empty()) {
+            return util::Error{7200, 0,
+                "expected table name after INNER JOIN", sql};
+        }
+        if (!c.match_keyword("ON")) {
+            return util::Error{7200, 0,
+                "expected ON for INNER JOIN", sql};
+        }
+        // Parse `<lcol> = <rcol>`. Both columns are bare identifiers
+        // — qualified `tbl.col` syntax lands in a later milestone.
+        j.left_column = c.read_identifier();
+        if (j.left_column.empty()) {
+            return util::Error{7200, 0,
+                "expected left join column", sql};
+        }
+        if (!c.match_char('=')) {
+            return util::Error{7200, 0,
+                "expected '=' in JOIN ON clause", sql};
+        }
+        j.right_column = c.read_identifier();
+        if (j.right_column.empty()) {
+            return util::Error{7200, 0,
+                "expected right join column", sql};
+        }
+        stmt.inner_join = std::move(j);
+    }
     if (stmt.table.empty()) {
         return util::Error{7200, 0, "expected table name", sql};
     }
