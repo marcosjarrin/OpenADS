@@ -16,6 +16,9 @@
 #include "sql/parser.h"
 
 #include <algorithm>
+#include <chrono>
+#include <functional>
+#include <thread>
 
 #include <cctype>
 #include <cstdio>
@@ -1124,12 +1127,79 @@ UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
+// --- M9.18 lock retry policy ----------------------------------------------
+//
+// Real ACE exposes a per-connection (cycle_ms, retry_count) tuple that
+// callers tune via AdsSetLockCycle / AdsSetLockRetryCount; AdsLockTable
+// and AdsLockRecord then re-attempt a contended lock up to that limit
+// before reporting AE_LOCK_FAILED. OpenADS keeps a process-global
+// policy (the hConnect arg is accepted for ABI compat but the value is
+// shared across connections in this build); the retry loop sleeps
+// `cycle_ms` between attempts and gives up after `retry_count` cycles.
+
+namespace {
+
+struct LockPolicy {
+    UNSIGNED32 cycle_ms    = 100;   // ACE default
+    UNSIGNED16 retry_count = 10;
+};
+
+LockPolicy& lock_policy() {
+    static LockPolicy p;
+    return p;
+}
+
+UNSIGNED32 lock_with_retry(std::function<openads::util::Result<void>()> fn) {
+    LockPolicy p = lock_policy();
+    for (UNSIGNED16 i = 0; ; ++i) {
+        auto r = fn();
+        if (r) return openads::AE_SUCCESS;
+        if (i >= p.retry_count) return fail(r.error());
+        if (p.cycle_ms > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(p.cycle_ms));
+        }
+    }
+}
+
+}  // namespace
+
+UNSIGNED32 AdsSetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32 ulCycle) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    lock_policy().cycle_ms = ulCycle;
+    return ok();
+}
+
+UNSIGNED32 AdsGetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32* pulCycle) {
+    if (pulCycle == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    *pulCycle = lock_policy().cycle_ms;
+    return ok();
+}
+
+UNSIGNED32 AdsSetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16 usRetryCount) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    lock_policy().retry_count = usRetryCount;
+    return ok();
+}
+
+UNSIGNED32 AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCount) {
+    if (pusRetryCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    *pusRetryCount = lock_policy().retry_count;
+    return ok();
+}
+
 UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto r = t->lock_record_excl(ulRecord);
-    if (!r) return fail(r.error());
-    return ok();
+    return lock_with_retry([t, ulRecord]() {
+        return t->try_lock_record_excl(ulRecord);
+    });
 }
 
 UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
@@ -1143,9 +1213,7 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
 UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto r = t->lock_table_excl();
-    if (!r) return fail(r.error());
-    return ok();
+    return lock_with_retry([t]() { return t->try_lock_table_excl(); });
 }
 
 UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {

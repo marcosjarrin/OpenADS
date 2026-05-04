@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (18 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (19 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -168,7 +168,7 @@ Done.
 
 #### Tests
 
-- **175 doctest cases / 3440 assertions** passing on Windows / MSVC
+- **179 doctest cases / 3473 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -229,7 +229,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.14-done`     | NTX multi-tag binding — multiple `.ntx` files coexist on one Table (`AdsOpenIndex` / `AdsCreateIndex61` / legacy `AdsCreateIndex` are all additive; same-path reopen refreshes; `AdsCloseIndex` releases extra views without disturbing the active order) |
 | `m9.15-done`     | Real `AdsGetServerName` / `AdsGetServerTime` — local host name + ISO date / `HH:MM:SS` time + ms-of-day, plus the 6-arg `AdsGetServerTime` shape rddads' `ADSGETSERVERTIME` actually expects (the previous 2-arg stub left rddads' on-stack date/time bufs uninitialised). Also fixes a latent index-binding leak: `AdsCloseTable` / `AdsCloseAllTables` / `AdsDisconnect` now purge the global binding map so a future Table allocation at the same heap address can't inherit stale entries. |
 | `m9.16-done`     | Chunked `AdsSetBinary` — per-`(table, field)` accumulator lets rddads deliver an oversized `ADS_BINARY` / `ADS_IMAGE` payload across several calls (`ulOffset != 0`, `ulBytes < ulTotalBytes`); the field only lands in the memo store once every byte arrives. Mid-write chunks that would run past the announced total fail; pending state is dropped at table teardown. |
-| **`m9.17-done`** | **Unicode `*W` variants** — `AdsSetStringW` / `AdsGetStringW` / `AdsGetFieldW`. UTF-16LE ↔ UTF-8 transcoding at the ABI boundary; field names accept both UTF-16 NUL-terminated strings and `ADSFIELD(n)`-style numeric indices (low-pointer encoded). Engine continues to store byte sequences without a fixed codepage assumption. |
+| `m9.17-done`     | Unicode `*W` variants — `AdsSetStringW` / `AdsGetStringW` / `AdsGetFieldW`. UTF-16LE ↔ UTF-8 transcoding at the ABI boundary; field names accept both UTF-16 NUL-terminated strings and `ADSFIELD(n)`-style numeric indices (low-pointer encoded). Engine continues to store byte sequences without a fixed codepage assumption. |
+| **`m9.18-done`** | **Lock retry / cycle policy** — `AdsSetLockCycle` / `AdsGetLockCycle` / `AdsSetLockRetryCount` / `AdsGetLockRetryCount` (ms between attempts + retry count, defaults 100 ms / 10 retries). `AdsLockTable` / `AdsLockRecord` switched to non-blocking byte-range acquires (`LockMgr::try_lock_*` / `LockFileEx LOCKFILE_FAIL_IMMEDIATELY` / `fcntl F_SETLK`) and re-attempt up to the configured budget before reporting `AE_LOCKED`. |
 
 #### What's left for 0.2.0
 
@@ -246,10 +247,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   UPPER(name)` tag will normalise wide-character keys correctly.
   M9.17 wired the `*W` ABI surface; the evaluator step is the
   follow-up.
-- **`AdsLockTable` / `AdsUnlockTable` / `AdsIsTableLocked` /
-  `AdsLockRecord` / `AdsUnlockRecord`** — already wired in M4 for
-  byte-range locks; missing the timeout / retry surface most
-  Clipper apps actually call.
 - **Compatible page-sized index pages.** `AdsCreateIndex61` accepts
   a `usPageSize` parameter; today it's ignored (CDX uses 512, NTX
   uses 1024). Apps that opt into 4 KiB or 8 KiB pages don't yet get

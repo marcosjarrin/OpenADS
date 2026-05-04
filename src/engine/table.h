@@ -104,6 +104,12 @@ public:
     util::Result<void> lock_table_excl();
     util::Result<void> unlock_table();
 
+    // Non-blocking variants (M9.18). Used by the ABI retry loop so an
+    // already-locked range surfaces as AE_LOCKED instead of blocking
+    // the calling thread on the kernel.
+    util::Result<void> try_lock_record_excl(std::uint32_t recno);
+    util::Result<void> try_lock_table_excl ();
+
     // Memo surface (M4).
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
     drivers::IMemoStore* memo() noexcept { return memo_.get(); }

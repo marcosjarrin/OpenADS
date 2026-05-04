@@ -85,4 +85,38 @@ LockMgr::lock_record_shared(platform::File& f, TableTypeForLock t, LockingMode m
     return LockHandle{std::move(bl).value(), off, 1};
 }
 
+util::Result<LockHandle>
+LockMgr::try_lock_table_excl(platform::File& f, TableTypeForLock t, LockingMode m) {
+    std::uint64_t off = file_lock_offset(t, m);
+    std::uint64_t len = (t == TableTypeForLock::Adt) ? ADT_FILE_LEN : 1ULL;
+    Key k{&f, off};
+    auto it = held_.find(k);
+    if (it != held_.end()) {
+        ++it->second;
+        return LockHandle{platform::ByteLock{}, off, len};
+    }
+    auto bl = platform::ByteLock::try_acquire(f, off, len,
+                                              platform::LockKind::Exclusive);
+    if (!bl) return bl.error();
+    held_[k] = 1;
+    return LockHandle{std::move(bl).value(), off, len};
+}
+
+util::Result<LockHandle>
+LockMgr::try_lock_record_excl(platform::File& f, TableTypeForLock t, LockingMode m,
+                              std::uint32_t recno) {
+    std::uint64_t off = record_lock_offset(t, m, recno);
+    Key k{&f, off};
+    auto it = held_.find(k);
+    if (it != held_.end()) {
+        ++it->second;
+        return LockHandle{platform::ByteLock{}, off, 1};
+    }
+    auto bl = platform::ByteLock::try_acquire(f, off, 1,
+                                              platform::LockKind::Exclusive);
+    if (!bl) return bl.error();
+    held_[k] = 1;
+    return LockHandle{std::move(bl).value(), off, 1};
+}
+
 } // namespace openads::engine

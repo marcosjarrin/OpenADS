@@ -624,6 +624,15 @@ util::Result<void> Table::lock_record_excl(std::uint32_t recno) {
     return {};
 }
 
+util::Result<void> Table::try_lock_record_excl(std::uint32_t recno) {
+    if (mode_ == OpenMode::Read) return {};
+    auto h = locks_.try_lock_record_excl(driver_->file(), to_lock_type_(),
+                                         locking_, recno);
+    if (!h) return h.error();
+    recno_locks_.emplace(recno, std::move(h).value());
+    return {};
+}
+
 util::Result<void> Table::unlock_record(std::uint32_t recno) {
     auto it = recno_locks_.find(recno);
     if (it != recno_locks_.end()) {
@@ -636,6 +645,15 @@ util::Result<void> Table::unlock_record(std::uint32_t recno) {
 util::Result<void> Table::lock_table_excl() {
     if (mode_ == OpenMode::Read) return {};
     auto h = locks_.lock_table_excl(driver_->file(), to_lock_type_(), locking_);
+    if (!h) return h.error();
+    table_lock_ = std::move(h).value();
+    return {};
+}
+
+util::Result<void> Table::try_lock_table_excl() {
+    if (mode_ == OpenMode::Read) return {};
+    auto h = locks_.try_lock_table_excl(driver_->file(), to_lock_type_(),
+                                        locking_);
     if (!h) return h.error();
     table_lock_ = std::move(h).value();
     return {};

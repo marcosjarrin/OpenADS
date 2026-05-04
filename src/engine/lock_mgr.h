@@ -50,6 +50,19 @@ public:
                            TableTypeForLock t, LockingMode m,
                            std::uint32_t recno);
 
+    // Non-blocking variants (M9.18). Return AE_LOCKED when the OS-level
+    // byte-range lock is held by another owner; the caller (typically
+    // the ABI retry loop) decides whether to back off and try again
+    // instead of blocking on the kernel.
+    util::Result<LockHandle>
+        try_lock_table_excl(platform::File& f,
+                            TableTypeForLock t, LockingMode m);
+
+    util::Result<LockHandle>
+        try_lock_record_excl(platform::File& f,
+                             TableTypeForLock t, LockingMode m,
+                             std::uint32_t recno);
+
     static std::uint64_t file_lock_offset(TableTypeForLock t, LockingMode m);
     static std::uint64_t record_lock_offset(TableTypeForLock t, LockingMode m,
                                             std::uint32_t recno);

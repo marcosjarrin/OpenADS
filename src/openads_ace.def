@@ -35,6 +35,10 @@ EXPORTS
     AdsUnlockRecord
     AdsLockTable
     AdsUnlockTable
+    AdsSetLockCycle
+    AdsGetLockCycle
+    AdsSetLockRetryCount
+    AdsGetLockRetryCount
     AdsFlushFileBuffers
     AdsOpenIndex
     AdsCloseIndex

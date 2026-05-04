@@ -135,6 +135,11 @@ UNSIGNED32 AdsUnlockRecord  (ADSHANDLE hTable, UNSIGNED32 ulRecord);
 UNSIGNED32 AdsLockTable     (ADSHANDLE hTable);
 UNSIGNED32 AdsUnlockTable   (ADSHANDLE hTable);
 
+UNSIGNED32 AdsSetLockCycle      (ADSHANDLE hConnect, UNSIGNED32 ulCycle);
+UNSIGNED32 AdsGetLockCycle      (ADSHANDLE hConnect, UNSIGNED32* pulCycle);
+UNSIGNED32 AdsSetLockRetryCount (ADSHANDLE hConnect, UNSIGNED16 usRetryCount);
+UNSIGNED32 AdsGetLockRetryCount (ADSHANDLE hConnect, UNSIGNED16* pusRetryCount);
+
 UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable);
 
 UNSIGNED32 AdsOpenIndex     (ADSHANDLE hTable, UNSIGNED8* pucName,
