@@ -4,9 +4,37 @@ A free and open-source implementation compatible with Advantage Database Server 
 
 The goal is to provide a *drop-in* replacement for the Advantage Client Engine (`ace32.dll` / `ace64.dll` / `libace.so`) so existing applications — particularly Harbour/Clipper apps using `contrib/rddads` — keep working without recompilation.
 
+### Independence, provenance, and trademarks
+
+- **Independent implementation.** OpenADS is an independent
+  open-source project. It is not affiliated with, sponsored by, or
+  endorsed by SAP SE. "Advantage Database Server", "ADS", and any
+  related marks, logos, and product names are the property of their
+  respective owners and are referenced here solely to describe
+  compatibility — their use does not imply any affiliation or
+  endorsement.
+- **No SAP-owned binaries required.** The OpenADS DLL is a
+  drop-in replacement; running an application against
+  `ace32.dll` / `ace64.dll` / `libace.so` produced by this project
+  does **not** require any DLL, `.so`, or other binary owned by SAP.
+  The only runtime dependencies are the host operating system's
+  standard libraries (e.g. `KERNEL32.dll` and the Microsoft Visual
+  C++ / Universal CRT runtime on Windows; `libc` / `libstdc++` on
+  Linux).
+- **Provenance — clean-room.** This codebase is written from
+  publicly observable behavior of the original Advantage Client
+  Engine and from the **public** Harbour `contrib/rddads` source
+  (which is the call site OpenADS targets). It is **not** derived
+  from leaked internal manuals or from disassembly / reverse
+  engineering of SAP-owned binaries that would violate the
+  Advantage SDK / ACE EULA. The implementation has been generated
+  by an AI assistant (Anthropic Claude) under direct human
+  supervision; every milestone is reviewed, tested, and committed
+  by a human maintainer.
+
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (16 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (17 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -117,7 +145,7 @@ Done.
 
 #### Tests
 
-- **170 doctest cases / 3383 assertions** passing on Windows / MSVC
+- **171 doctest cases / 3401 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -176,7 +204,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.12-done`     | `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose` (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
 | `m9.13-done`     | `AdsGetBinaryLength` / `AdsGetBinary` / `AdsSetBinary` + real `AdsGetMemoDataType` (FPT block-type tag round-trip; `ADS_BINARY` → `Object`, `ADS_IMAGE` → `Picture`, text → `Text`; offset-based chunked reads) |
 | `m9.14-done`     | NTX multi-tag binding — multiple `.ntx` files coexist on one Table (`AdsOpenIndex` / `AdsCreateIndex61` / legacy `AdsCreateIndex` are all additive; same-path reopen refreshes; `AdsCloseIndex` releases extra views without disturbing the active order) |
-| **`m9.15-done`** | **Real `AdsGetServerName` / `AdsGetServerTime`** — local host name + ISO date / `HH:MM:SS` time + ms-of-day, plus the 6-arg `AdsGetServerTime` shape rddads' `ADSGETSERVERTIME` actually expects (the previous 2-arg stub left rddads' on-stack date/time bufs uninitialised). Also fixes a latent index-binding leak: `AdsCloseTable` / `AdsCloseAllTables` / `AdsDisconnect` now purge the global binding map so a future Table allocation at the same heap address can't inherit stale entries. |
+| `m9.15-done`     | Real `AdsGetServerName` / `AdsGetServerTime` — local host name + ISO date / `HH:MM:SS` time + ms-of-day, plus the 6-arg `AdsGetServerTime` shape rddads' `ADSGETSERVERTIME` actually expects (the previous 2-arg stub left rddads' on-stack date/time bufs uninitialised). Also fixes a latent index-binding leak: `AdsCloseTable` / `AdsCloseAllTables` / `AdsDisconnect` now purge the global binding map so a future Table allocation at the same heap address can't inherit stale entries. |
+| **`m9.16-done`** | **Chunked `AdsSetBinary`** — per-`(table, field)` accumulator lets rddads deliver an oversized `ADS_BINARY` / `ADS_IMAGE` payload across several calls (`ulOffset != 0`, `ulBytes < ulTotalBytes`); the field only lands in the memo store once every byte arrives. Mid-write chunks that would run past the announced total fail; pending state is dropped at table teardown. |
 
 #### What's left for 0.2.0
 
@@ -188,11 +217,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 - **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
   entries (apps that pre-compute keys outside the engine and inject
   them by recno). `AdsExtractKey` is already real (M9.6).
-- **`AdsSetBinary` chunked writes** — current impl only accepts
-  single-shot writes (`ulOffset == 0` and `ulBytes == ulTotalBytes`).
-  Chunked rddads paths (offset != 0 or partial buffer) need a per-
-  (table, field) accumulator; today they return
-  `AE_FUNCTION_NOT_AVAILABLE`.
 - **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`,
   `AdsGetStringW`) — UTF-16 surface. Pairs with making the index-
   expression evaluator (`engine/index_expr.cpp`) UTF-16 aware.

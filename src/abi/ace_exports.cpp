@@ -151,6 +151,11 @@ Table* get_table(ADSHANDLE h) {
 
 } // namespace
 
+// M9.16: chunked AdsSetBinary keeps a per-(table, field) accumulator;
+// table teardown drains it. Forward-declared here so the close /
+// disconnect paths above can call it before the definition arrives.
+void purge_pending_binaries_for_table(openads::engine::Table* t);
+
 extern "C" {
 
 UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
@@ -193,7 +198,10 @@ UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
             // stale residue is per-table.
             to_purge.push_back(tp);
         });
-        for (Table* tp : to_purge) purge_bindings_for_table(tp);
+        for (Table* tp : to_purge) {
+            purge_bindings_for_table(tp);
+            purge_pending_binaries_for_table(tp);
+        }
     }
     s.registry.release(hConnect);
     s.conns.erase(hConnect);
@@ -537,6 +545,7 @@ UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
         if (t) {
             (void)t->flush();
             purge_bindings_for_table(t);
+            purge_pending_binaries_for_table(t);
         }
         s.registry.release(h);
     }
@@ -557,6 +566,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     if (t != nullptr) {
         (void)t->flush();
         purge_bindings_for_table(t);
+        purge_pending_binaries_for_table(t);
     }
     s.registry.release(hTable);
     return ok();
@@ -1997,35 +2007,135 @@ UNSIGNED32 AdsGetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     return ok();
 }
 
+// M9.16: chunked AdsSetBinary writes. The accumulator below holds
+// pending bytes per (Table*, field_idx) pair until the caller has
+// delivered every byte of `ulTotalBytes`; only then does the payload
+// land in the memo store via set_field_binary. Stale accumulators are
+// scrubbed when the table closes (purge_pending_binaries_for_table).
+
+namespace {
+
+struct PendingBinaryKey {
+    Table*        table;
+    std::uint16_t field;
+    bool operator==(const PendingBinaryKey& o) const noexcept {
+        return table == o.table && field == o.field;
+    }
+};
+struct PendingBinaryHash {
+    std::size_t operator()(const PendingBinaryKey& k) const noexcept {
+        return std::hash<void*>{}(k.table) ^
+               (static_cast<std::size_t>(k.field) << 1);
+    }
+};
+struct PendingBinary {
+    std::string                   payload;
+    std::uint32_t                 total = 0;
+    openads::drivers::MemoBlockType type =
+        openads::drivers::MemoBlockType::Object;
+};
+
+std::unordered_map<PendingBinaryKey, PendingBinary, PendingBinaryHash>&
+pending_binaries() {
+    static std::unordered_map<PendingBinaryKey, PendingBinary,
+                              PendingBinaryHash> m;
+    return m;
+}
+
+openads::drivers::MemoBlockType
+map_binary_type(UNSIGNED16 usBinaryType) {
+    if (usBinaryType == ADS_IMAGE) {
+        return openads::drivers::MemoBlockType::Picture;
+    }
+    if (usBinaryType == ADS_STRING || usBinaryType == ADS_MEMO) {
+        return openads::drivers::MemoBlockType::Text;
+    }
+    return openads::drivers::MemoBlockType::Object;
+}
+
+}  // namespace
+
+}  // extern "C"
+
+void purge_pending_binaries_for_table(openads::engine::Table* t) {
+    using openads::engine::Table;
+    auto& m = pending_binaries();
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->first.table == t) it = m.erase(it);
+        else                      ++it;
+    }
+}
+
+extern "C" {
+
 UNSIGNED32 AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED16 usBinaryType,
                         UNSIGNED32 ulTotalBytes, UNSIGNED32 ulOffset,
                         UNSIGNED8* pucBuf, UNSIGNED32 ulBytes) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
-    if (ulOffset != 0 || ulBytes != ulTotalBytes) {
-        // Chunked writes (offset != 0 or partial buffer) need a per-
-        // (table, field) accumulator. The 99% case rddads emits is a
-        // single shot with offset=0 and ulBytes==ulTotalBytes.
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "chunked AdsSetBinary not yet supported");
-    }
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
-    std::string payload;
+    auto type = map_binary_type(usBinaryType);
+
+    // Single-shot fast path. No accumulator state is created when the
+    // caller delivers the whole payload in one go.
+    if (ulOffset == 0 && ulBytes == ulTotalBytes) {
+        // Drop any stale accumulator from a prior aborted chunked write.
+        pending_binaries().erase(PendingBinaryKey{t, idx});
+        std::string payload;
+        if (pucBuf != nullptr && ulBytes > 0) {
+            payload.assign(reinterpret_cast<const char*>(pucBuf), ulBytes);
+        }
+        auto r = t->set_field_binary(idx, payload, type);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+
+    // Chunked path. Accumulate at the caller's offset; flush when the
+    // payload reaches the announced total.
+    auto& m = pending_binaries();
+    PendingBinaryKey key{t, idx};
+    auto it = m.find(key);
+    if (ulOffset == 0) {
+        // First chunk — reset (or create) the accumulator and lock in
+        // the announced total + binary type.
+        if (it != m.end()) it->second = PendingBinary{};
+        else               it = m.emplace(key, PendingBinary{}).first;
+        it->second.total = ulTotalBytes;
+        it->second.type  = type;
+        it->second.payload.assign(static_cast<std::size_t>(ulTotalBytes),
+                                  '\0');
+    } else {
+        if (it == m.end()) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "chunked AdsSetBinary: no pending payload");
+        }
+        if (ulTotalBytes != it->second.total) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "chunked AdsSetBinary: total bytes changed mid-write");
+        }
+    }
+    if (static_cast<std::uint64_t>(ulOffset) +
+        static_cast<std::uint64_t>(ulBytes) >
+        static_cast<std::uint64_t>(it->second.total)) {
+        m.erase(it);
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "chunked AdsSetBinary: chunk runs past total");
+    }
     if (pucBuf != nullptr && ulBytes > 0) {
-        payload.assign(reinterpret_cast<const char*>(pucBuf), ulBytes);
+        std::memcpy(it->second.payload.data() + ulOffset, pucBuf, ulBytes);
     }
-    auto type = openads::drivers::MemoBlockType::Object;
-    if (usBinaryType == ADS_IMAGE) {
-        type = openads::drivers::MemoBlockType::Picture;
-    } else if (usBinaryType == ADS_STRING || usBinaryType == ADS_MEMO) {
-        type = openads::drivers::MemoBlockType::Text;
+
+    if (ulOffset + ulBytes == it->second.total) {
+        std::string payload = std::move(it->second.payload);
+        auto pending_type = it->second.type;
+        m.erase(it);
+        auto r = t->set_field_binary(idx, payload, pending_type);
+        if (!r) return fail(r.error());
     }
-    auto r = t->set_field_binary(idx, payload, type);
-    if (!r) return fail(r.error());
     return ok();
 }
 
