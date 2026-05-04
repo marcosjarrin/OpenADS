@@ -3394,35 +3394,77 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     openads::engine::Table* tbl = c->lookup_table(th.value());
     if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
-    // Compile WHERE clauses (AND-joined) into a row predicate. M9.21
-    // adds the CONTAINS(<col>, '<query>') leg: the FTS lookup runs
-    // once at compile time and the predicate just probes the resulting
-    // recno set on each row, instead of re-tokenising per record.
-    if (!parsed.value().where.empty()) {
-        struct Term {
+    // Compile the WHERE expression tree into a row-predicate closure
+    // (M10.3). CONTAINS captures a precomputed recno set at compile
+    // time; AND / OR / NOT short-circuit during evaluation.
+    if (parsed.value().where) {
+        // Compiled term per Cmp leaf.
+        struct CmpTerm {
             std::uint16_t                       field_index = 0;
             openads::sql::WhereOp               op = openads::sql::WhereOp::Eq;
             std::string                         literal;
+            bool                                is_numeric = false;
+            double                              number = 0.0;
             std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
         };
-        std::vector<Term> terms;
-        terms.reserve(parsed.value().where.size());
-        for (const auto& w : parsed.value().where) {
+
+        // Compile the AST into a Predicate functor.
+        using Pred = std::function<bool(openads::engine::Table&)>;
+        std::function<openads::util::Result<Pred>(
+            const openads::sql::WhereExpr&)> compile;
+        compile = [&](const openads::sql::WhereExpr& node)
+                  -> openads::util::Result<Pred> {
+            using Kind = openads::sql::WhereExpr::Kind;
+            if (node.kind == Kind::And) {
+                std::vector<Pred> kids;
+                for (auto& c : node.children) {
+                    auto r = compile(*c);
+                    if (!r) return r.error();
+                    kids.push_back(std::move(r).value());
+                }
+                return Pred{[kids = std::move(kids)](openads::engine::Table& t) {
+                    for (auto& k : kids) if (!k(t)) return false;
+                    return true;
+                }};
+            }
+            if (node.kind == Kind::Or) {
+                std::vector<Pred> kids;
+                for (auto& c : node.children) {
+                    auto r = compile(*c);
+                    if (!r) return r.error();
+                    kids.push_back(std::move(r).value());
+                }
+                return Pred{[kids = std::move(kids)](openads::engine::Table& t) {
+                    for (auto& k : kids) if (k(t)) return true;
+                    return false;
+                }};
+            }
+            if (node.kind == Kind::Not) {
+                auto inner = compile(*node.child);
+                if (!inner) return inner.error();
+                return Pred{[p = std::move(inner).value()]
+                            (openads::engine::Table& t) { return !p(t); }};
+            }
+            // Cmp leaf.
+            const auto& w = node.cmp;
             std::int32_t fidx = tbl->field_index(w.column);
             if (fidx < 0) {
-                return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
+                return openads::util::Error{
+                    openads::AE_COLUMN_NOT_FOUND, 0,
+                    w.column.c_str(), ""};
             }
-            Term term;
+            CmpTerm term;
             term.field_index = static_cast<std::uint16_t>(fidx);
             term.op          = w.op;
             term.literal     = w.literal;
-
+            term.is_numeric  = w.is_numeric;
+            term.number      = w.number;
             if (w.op == openads::sql::WhereOp::Contains) {
                 namespace fs = std::filesystem;
                 fs::path fts_path =
                     fs::path(tbl->path()).replace_extension(".fts");
                 auto loaded = openads::engine::Fts::load(fts_path.string());
-                if (!loaded) return fail(loaded.error());
+                if (!loaded) return loaded.error();
                 openads::engine::FtsOptions opts;
                 auto hits = openads::engine::Fts::search(
                     loaded.value(), w.literal, opts);
@@ -3430,35 +3472,38 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     std::make_shared<std::unordered_set<std::uint32_t>>(
                         hits.begin(), hits.end());
             }
-            terms.push_back(std::move(term));
-        }
-        tbl->set_filter([terms = std::move(terms)](openads::engine::Table& t) {
-            for (const auto& term : terms) {
+            return Pred{[term](openads::engine::Table& t) {
                 if (term.op == openads::sql::WhereOp::Contains) {
                     if (!term.contains_hits) return false;
-                    if (term.contains_hits->find(t.recno()) ==
-                        term.contains_hits->end()) {
-                        return false;
-                    }
-                    continue;
+                    return term.contains_hits->find(t.recno()) !=
+                           term.contains_hits->end();
                 }
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
-                int cmp = v.value().as_string.compare(term.literal);
-                bool ok = false;
-                switch (term.op) {
-                    case openads::sql::WhereOp::Eq: ok = (cmp == 0); break;
-                    case openads::sql::WhereOp::Ne: ok = (cmp != 0); break;
-                    case openads::sql::WhereOp::Lt: ok = (cmp <  0); break;
-                    case openads::sql::WhereOp::Gt: ok = (cmp >  0); break;
-                    case openads::sql::WhereOp::Le: ok = (cmp <= 0); break;
-                    case openads::sql::WhereOp::Ge: ok = (cmp >= 0); break;
-                    case openads::sql::WhereOp::Contains: ok = true; break;
+                int cmp = 0;
+                if (term.is_numeric) {
+                    double d = v.value().as_double;
+                    if      (d < term.number) cmp = -1;
+                    else if (d > term.number) cmp =  1;
+                } else {
+                    cmp = v.value().as_string.compare(term.literal);
                 }
-                if (!ok) return false;
-            }
-            return true;
-        });
+                switch (term.op) {
+                    case openads::sql::WhereOp::Eq: return cmp == 0;
+                    case openads::sql::WhereOp::Ne: return cmp != 0;
+                    case openads::sql::WhereOp::Lt: return cmp <  0;
+                    case openads::sql::WhereOp::Gt: return cmp >  0;
+                    case openads::sql::WhereOp::Le: return cmp <= 0;
+                    case openads::sql::WhereOp::Ge: return cmp >= 0;
+                    case openads::sql::WhereOp::Contains: return true;
+                }
+                return false;
+            }};
+        };
+
+        auto compiled = compile(*parsed.value().where);
+        if (!compiled) return fail(compiled.error());
+        tbl->set_filter(std::move(compiled).value());
     }
 
     ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);

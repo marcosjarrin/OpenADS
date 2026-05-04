@@ -2,6 +2,25 @@
 #include "sql/parser.h"
 
 using openads::sql::parse_select;
+using openads::sql::WhereExpr;
+using openads::sql::WhereOp;
+
+namespace {
+
+// Walk a left-skewed AND tree and flatten it to its Cmp leaves so the
+// tests can assert against indexed positions (matching the old vector
+// shape).
+void collect_and_leaves(const WhereExpr* node,
+                        std::vector<const openads::sql::WhereCmp*>& out) {
+    if (node == nullptr) return;
+    if (node->kind == WhereExpr::Kind::And) {
+        for (auto& c : node->children) collect_and_leaves(c.get(), out);
+    } else if (node->kind == WhereExpr::Kind::Cmp) {
+        out.push_back(&node->cmp);
+    }
+}
+
+}  // namespace
 
 TEST_CASE("parse_select recognises SELECT * FROM <table>") {
     auto r = parse_select("SELECT * FROM clientes");
@@ -21,7 +40,7 @@ TEST_CASE("parse_select tolerates trailing semicolon and whitespace") {
     CHECK(r.value().table == "data.dbf");
 }
 
-TEST_CASE("parse_select rejects projection lists in M7.1") {
+TEST_CASE("parse_select rejects projection lists") {
     auto r = parse_select("SELECT name FROM x");
     CHECK_FALSE(r.has_value());
     CHECK(r.error().code == 7200);
@@ -37,34 +56,37 @@ TEST_CASE("parse_select recognises a single-equality WHERE clause") {
     auto r = parse_select("SELECT * FROM data.dbf WHERE TAG = 'BAR'");
     REQUIRE(r.has_value());
     CHECK(r.value().table == "data.dbf");
-    REQUIRE(r.value().where.size() == 1);
-    CHECK(r.value().where[0].column  == "TAG");
-    CHECK(r.value().where[0].literal == "BAR");
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column  == "TAG");
+    CHECK(r.value().where->cmp.literal == "BAR");
 }
 
 TEST_CASE("parse_select WHERE accepts case-insensitive keyword and tight whitespace") {
     auto r = parse_select("select * from x where  Name='Anna'");
     REQUIRE(r.has_value());
-    REQUIRE(r.value().where.size() == 1);
-    CHECK(r.value().where[0].column  == "Name");
-    CHECK(r.value().where[0].literal == "Anna");
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.column  == "Name");
+    CHECK(r.value().where->cmp.literal == "Anna");
 }
 
 TEST_CASE("parse_select WHERE supports AND-joined comparisons") {
     auto r = parse_select(
         "SELECT * FROM x WHERE A = 'foo' AND B != 'bar' AND C >= 'z'");
     REQUIRE(r.has_value());
-    REQUIRE(r.value().where.size() == 3);
-    CHECK(r.value().where[0].column  == "A");
-    CHECK(r.value().where[0].op      == openads::sql::WhereOp::Eq);
-    CHECK(r.value().where[1].column  == "B");
-    CHECK(r.value().where[1].op      == openads::sql::WhereOp::Ne);
-    CHECK(r.value().where[2].column  == "C");
-    CHECK(r.value().where[2].op      == openads::sql::WhereOp::Ge);
+    std::vector<const openads::sql::WhereCmp*> leaves;
+    collect_and_leaves(r.value().where.get(), leaves);
+    REQUIRE(leaves.size() == 3);
+    CHECK(leaves[0]->column == "A");
+    CHECK(leaves[0]->op     == WhereOp::Eq);
+    CHECK(leaves[1]->column == "B");
+    CHECK(leaves[1]->op     == WhereOp::Ne);
+    CHECK(leaves[2]->column == "C");
+    CHECK(leaves[2]->op     == WhereOp::Ge);
 }
 
 TEST_CASE("parse_select WHERE accepts each comparison operator") {
-    using openads::sql::WhereOp;
     struct Case { const char* op; WhereOp expected; };
     Case cases[] = {
         {"=",  WhereOp::Eq},
@@ -79,8 +101,9 @@ TEST_CASE("parse_select WHERE accepts each comparison operator") {
         std::string sql = std::string("SELECT * FROM x WHERE TAG ") + tc.op + " 'A'";
         auto r = parse_select(sql);
         REQUIRE(r.has_value());
-        REQUIRE(r.value().where.size() == 1);
-        CHECK(r.value().where[0].op == tc.expected);
+        REQUIRE(r.value().where != nullptr);
+        REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+        CHECK(r.value().where->cmp.op == tc.expected);
     }
 }
 
@@ -88,4 +111,31 @@ TEST_CASE("parse_select WHERE rejects unterminated string literal") {
     auto r = parse_select("SELECT * FROM x WHERE TAG = 'oops");
     CHECK_FALSE(r.has_value());
     CHECK(r.error().code == 7200);
+}
+
+TEST_CASE("M10.3 parse_select WHERE supports OR + parens") {
+    auto r = parse_select(
+        "SELECT * FROM x WHERE (A = 'a' OR B = 'b') AND C = 'c'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::And);
+    REQUIRE(r.value().where->children.size() == 2);
+    CHECK(r.value().where->children[0]->kind == WhereExpr::Kind::Or);
+    CHECK(r.value().where->children[1]->kind == WhereExpr::Kind::Cmp);
+}
+
+TEST_CASE("M10.3 parse_select WHERE supports NOT") {
+    auto r = parse_select("SELECT * FROM x WHERE NOT TAG = 'a'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Not);
+    CHECK(r.value().where->child->kind == WhereExpr::Kind::Cmp);
+}
+
+TEST_CASE("M10.3 parse_select WHERE accepts numeric literals") {
+    auto r = parse_select("SELECT * FROM x WHERE AGE >= 18");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.is_numeric);
+    CHECK(r.value().where->cmp.number == doctest::Approx(18));
+    CHECK(r.value().where->cmp.op == WhereOp::Ge);
 }

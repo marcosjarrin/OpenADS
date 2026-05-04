@@ -1,6 +1,9 @@
 #include "sql/parser.h"
 
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <string>
 
 namespace openads::sql {
@@ -119,10 +122,165 @@ public:
         return out;
     }
 
+    // Decimal numeric literal — optional sign, digits, optional `.` +
+    // more digits. Returns the parsed double via stoul/stod. The
+    // integer-only branch (no decimal point) stays compatible with
+    // ASCII-numeric DBF columns.
+    util::Result<double> read_numeric_literal() {
+        skip_ws();
+        std::size_t start = pos_;
+        if (pos_ < s_.size() && (s_[pos_] == '+' || s_[pos_] == '-')) ++pos_;
+        bool any = false;
+        while (pos_ < s_.size() &&
+               std::isdigit(static_cast<unsigned char>(s_[pos_]))) {
+            ++pos_; any = true;
+        }
+        if (pos_ < s_.size() && s_[pos_] == '.') {
+            ++pos_;
+            while (pos_ < s_.size() &&
+                   std::isdigit(static_cast<unsigned char>(s_[pos_]))) {
+                ++pos_; any = true;
+            }
+        }
+        if (!any) {
+            pos_ = start;
+            return util::Error{7200, 0, "expected numeric literal", ""};
+        }
+        std::string tok(s_.substr(start, pos_ - start));
+        return std::strtod(tok.c_str(), nullptr);
+    }
+
+    bool peek_char(char c) {
+        skip_ws();
+        return pos_ < s_.size() && s_[pos_] == c;
+    }
+
 private:
     const std::string& s_;
     std::size_t        pos_ = 0;
 };
+
+util::Result<std::unique_ptr<WhereExpr>>
+parse_or_expr(Cursor& c, const std::string& sql);
+
+util::Result<std::unique_ptr<WhereExpr>>
+parse_cmp(Cursor& c, const std::string& sql) {
+    auto node = std::make_unique<WhereExpr>();
+    node->kind = WhereExpr::Kind::Cmp;
+
+    if (c.match_keyword("CONTAINS")) {
+        if (!c.match_char('(')) {
+            return util::Error{7200, 0, "expected '(' after CONTAINS", sql};
+        }
+        node->cmp.column = c.read_identifier();
+        if (node->cmp.column.empty()) {
+            return util::Error{7200, 0,
+                "expected column name in CONTAINS", sql};
+        }
+        if (!c.match_char(',')) {
+            return util::Error{7200, 0,
+                "expected ',' between CONTAINS column and query", sql};
+        }
+        auto lit = c.read_string_literal();
+        if (!lit) return lit.error();
+        node->cmp.literal = std::move(lit).value();
+        if (!c.match_char(')')) {
+            return util::Error{7200, 0, "expected ')' to close CONTAINS", sql};
+        }
+        node->cmp.op = WhereOp::Contains;
+        return node;
+    }
+
+    node->cmp.column = c.read_identifier();
+    if (node->cmp.column.empty()) {
+        return util::Error{7200, 0,
+            "expected column name in WHERE clause", sql};
+    }
+    c.skip_ws();
+    if      (c.match_seq("<=")) node->cmp.op = WhereOp::Le;
+    else if (c.match_seq(">=")) node->cmp.op = WhereOp::Ge;
+    else if (c.match_seq("<>")) node->cmp.op = WhereOp::Ne;
+    else if (c.match_seq("!=")) node->cmp.op = WhereOp::Ne;
+    else if (c.match_char('=')) node->cmp.op = WhereOp::Eq;
+    else if (c.match_char('<')) node->cmp.op = WhereOp::Lt;
+    else if (c.match_char('>')) node->cmp.op = WhereOp::Gt;
+    else {
+        return util::Error{7200, 0,
+            "expected =, !=, <>, <, >, <= or >= after column name", sql};
+    }
+
+    if (c.peek_char('\'')) {
+        auto lit = c.read_string_literal();
+        if (!lit) return lit.error();
+        node->cmp.literal    = std::move(lit).value();
+        node->cmp.is_numeric = false;
+    } else {
+        auto n = c.read_numeric_literal();
+        if (!n) return n.error();
+        node->cmp.is_numeric = true;
+        node->cmp.number     = n.value();
+        char tmp[64];
+        std::snprintf(tmp, sizeof(tmp), "%.17g", n.value());
+        node->cmp.literal    = tmp;
+    }
+    return node;
+}
+
+util::Result<std::unique_ptr<WhereExpr>>
+parse_primary(Cursor& c, const std::string& sql) {
+    if (c.match_keyword("NOT")) {
+        auto inner = parse_primary(c, sql);
+        if (!inner) return inner.error();
+        auto n = std::make_unique<WhereExpr>();
+        n->kind  = WhereExpr::Kind::Not;
+        n->child = std::move(inner).value();
+        return n;
+    }
+    if (c.match_char('(')) {
+        auto inner = parse_or_expr(c, sql);
+        if (!inner) return inner.error();
+        if (!c.match_char(')')) {
+            return util::Error{7200, 0,
+                "expected ')' to close grouped WHERE expression", sql};
+        }
+        return inner;
+    }
+    return parse_cmp(c, sql);
+}
+
+util::Result<std::unique_ptr<WhereExpr>>
+parse_and_expr(Cursor& c, const std::string& sql) {
+    auto first = parse_primary(c, sql);
+    if (!first) return first.error();
+    std::unique_ptr<WhereExpr> lhs = std::move(first).value();
+    while (c.match_keyword("AND")) {
+        auto rhs = parse_primary(c, sql);
+        if (!rhs) return rhs.error();
+        auto node = std::make_unique<WhereExpr>();
+        node->kind = WhereExpr::Kind::And;
+        node->children.push_back(std::move(lhs));
+        node->children.push_back(std::move(rhs).value());
+        lhs = std::move(node);
+    }
+    return lhs;
+}
+
+util::Result<std::unique_ptr<WhereExpr>>
+parse_or_expr(Cursor& c, const std::string& sql) {
+    auto first = parse_and_expr(c, sql);
+    if (!first) return first.error();
+    std::unique_ptr<WhereExpr> lhs = std::move(first).value();
+    while (c.match_keyword("OR")) {
+        auto rhs = parse_and_expr(c, sql);
+        if (!rhs) return rhs.error();
+        auto node = std::make_unique<WhereExpr>();
+        node->kind = WhereExpr::Kind::Or;
+        node->children.push_back(std::move(lhs));
+        node->children.push_back(std::move(rhs).value());
+        lhs = std::move(node);
+    }
+    return lhs;
+}
 
 } // namespace
 
@@ -145,66 +303,14 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected table name", sql};
     }
 
-    // Optional WHERE: one or more comparisons joined by AND. M9.21
-    // adds a `CONTAINS(<column>, '<query>')` predicate that lowers
-    // through the FTS search path; the rest stays infix `<col> op <lit>`.
+    // Optional WHERE — full boolean tree with AND / OR / NOT / parens
+    // and either string or numeric literals.
     if (c.match_keyword("WHERE")) {
-        for (;;) {
-            WhereCmp w;
-            if (c.match_keyword("CONTAINS")) {
-                if (!c.match_char('(')) {
-                    return util::Error{7200, 0,
-                        "expected '(' after CONTAINS", sql};
-                }
-                w.column = c.read_identifier();
-                if (w.column.empty()) {
-                    return util::Error{7200, 0,
-                        "expected column name in CONTAINS", sql};
-                }
-                if (!c.match_char(',')) {
-                    return util::Error{7200, 0,
-                        "expected ',' between CONTAINS column and query", sql};
-                }
-                auto lit = c.read_string_literal();
-                if (!lit) return lit.error();
-                w.literal = std::move(lit).value();
-                if (!c.match_char(')')) {
-                    return util::Error{7200, 0,
-                        "expected ')' to close CONTAINS", sql};
-                }
-                w.op = WhereOp::Contains;
-                stmt.where.push_back(std::move(w));
-                if (!c.match_keyword("AND")) break;
-                continue;
-            }
-
-            w.column = c.read_identifier();
-            if (w.column.empty()) {
-                return util::Error{7200, 0,
-                    "expected column name in WHERE clause", sql};
-            }
-            c.skip_ws();
-            if      (c.match_seq("<=")) w.op = WhereOp::Le;
-            else if (c.match_seq(">=")) w.op = WhereOp::Ge;
-            else if (c.match_seq("<>")) w.op = WhereOp::Ne;
-            else if (c.match_seq("!=")) w.op = WhereOp::Ne;
-            else if (c.match_char('=')) w.op = WhereOp::Eq;
-            else if (c.match_char('<')) w.op = WhereOp::Lt;
-            else if (c.match_char('>')) w.op = WhereOp::Gt;
-            else {
-                return util::Error{7200, 0,
-                    "expected =, !=, <>, <, >, <= or >= after column name", sql};
-            }
-            auto lit = c.read_string_literal();
-            if (!lit) return lit.error();
-            w.literal = std::move(lit).value();
-            stmt.where.push_back(std::move(w));
-
-            if (!c.match_keyword("AND")) break;
-        }
+        auto root = parse_or_expr(c, sql);
+        if (!root) return root.error();
+        stmt.where = std::move(root).value();
     }
 
-    // Optional trailing semicolon.
     c.match_char(';');
     return stmt;
 }
