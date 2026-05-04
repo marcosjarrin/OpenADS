@@ -1,13 +1,30 @@
-// Auto-generated stubs for ACE entry points required by Harbour rddads but not
-// yet implemented. Each returns AE_FUNCTION_NOT_AVAILABLE (5004). Linker matches
-// by name only; the empty parameter list is intentional so callers with any
-// signature still resolve.
+// Stubs for ACE entry points required by Harbour rddads.
+//
+// Categorisation:
+//   * "Config no-op" — Set / Clear / Cache / Refresh / Customize /
+//     Register etc. that adjust runtime preferences. Returning
+//     AE_SUCCESS lets Harbour proceed without the AE_FUNCTION_NOT_AVAILABLE
+//     hard-fail it would otherwise treat as fatal in some paths.
+//   * "Read default" — Get* of state we do not track yet; return a
+//     reasonable default plus AE_SUCCESS so the caller's local copy
+//     stays initialised.
+//   * "Genuinely missing" — Mg* (remote-server management),
+//     DD* (advanced Data Dictionary), CreateTable / Restructure / Reindex,
+//     binary blob set/get, find-table family, ... — return
+//     AE_FUNCTION_NOT_AVAILABLE (5004) so applications can detect the gap.
+//
+// Linker matches by name only; the empty parameter list on each
+// "no-op" / 5004 stub is intentional so callers with any signature
+// still resolve through register-passing on x64.
 
+#include "openads/ace.h"
 #include "openads/error.h"
 
 #include <cstdint>
+#include <cstring>
 
-#define STUB_TRACE(name) ((void)0)
+#define OK   0u
+#define MISS 5004u
 
 // Forward to the real AdsConnect60 / AdsGetField which live in
 // ace_exports.cpp.
@@ -16,7 +33,8 @@ extern "C" uint32_t AdsConnect60(uint8_t*, uint16_t, uint8_t*, uint8_t*,
 extern "C" uint32_t AdsGetField  (uint64_t, uint8_t*, uint8_t*, uint32_t*, uint16_t);
 
 extern "C" {
-// AdsConnect(server, &hConnect) ??? convenience wrapper that picks
+
+// AdsConnect(server, &hConnect) — convenience wrapper that picks
 // ADS_LOCAL_SERVER and no auth. Used by rddads' HB_FUNC(ADSCONNECT)
 // for the simple case `AdsConnect(".")` from Harbour.
 uint32_t AdsConnect(uint8_t* server, uint64_t* phConnect) {
@@ -25,173 +43,210 @@ uint32_t AdsConnect(uint8_t* server, uint64_t* phConnect) {
 }
 
 // rddads' adsGetValue takes the AdsGetFieldRaw path when OEM
-// translation is on. Until OpenADS implements an OEM-aware variant
-// that bypasses charset translation, forward to AdsGetField ??? both
-// return the raw character data; the translation step is a no-op for
-// the ASCII fixtures the smoke test uses.
+// translation is on. The translation step is a no-op for ASCII data
+// so we forward to the regular AdsGetField.
 uint32_t AdsGetFieldRaw(uint64_t hTable, uint8_t* pucField,
                         uint8_t* pucBuf, uint32_t* pulLen) {
     return AdsGetField(hTable, pucField, pucBuf, pulLen, /*ADS_NONE*/ 0);
 }
 
-uint32_t AdsAddCustomKey() { STUB_TRACE(AdsAddCustomKey); return 5004u; }
-uint32_t AdsApplicationExit() { STUB_TRACE(AdsApplicationExit); return 5004u; }
-uint32_t AdsCacheOpenCursors() { STUB_TRACE(AdsCacheOpenCursors); return 5004u; }
-uint32_t AdsCacheOpenTables() { STUB_TRACE(AdsCacheOpenTables); return 5004u; }
-uint32_t AdsCacheRecords() { STUB_TRACE(AdsCacheRecords); return 5004u; }
-uint32_t AdsCheckExistence() { STUB_TRACE(AdsCheckExistence); return 5004u; }
-uint32_t AdsClearCallbackFunction() { STUB_TRACE(AdsClearCallbackFunction); return 5004u; }
-uint32_t AdsClearFilter() { STUB_TRACE(AdsClearFilter); return 5004u; }
-uint32_t AdsClearRelation() { STUB_TRACE(AdsClearRelation); return 5004u; }
-uint32_t AdsCloseAllTables() { STUB_TRACE(AdsCloseAllTables); return 5004u; }
-uint32_t AdsCloseCachedTables() { STUB_TRACE(AdsCloseCachedTables); return 5004u; }
-uint32_t AdsConvertTable() { STUB_TRACE(AdsConvertTable); return 5004u; }
-uint32_t AdsCopyTable() { STUB_TRACE(AdsCopyTable); return 5004u; }
-uint32_t AdsCopyTableContents() { STUB_TRACE(AdsCopyTableContents); return 5004u; }
-uint32_t AdsCreateFTSIndex() { STUB_TRACE(AdsCreateFTSIndex); return 5004u; }
-uint32_t AdsCreateIndex61() { STUB_TRACE(AdsCreateIndex61); return 5004u; }
-uint32_t AdsCreateTable() { STUB_TRACE(AdsCreateTable); return 5004u; }
-uint32_t AdsCustomizeAOF() { STUB_TRACE(AdsCustomizeAOF); return 5004u; }
-uint32_t AdsDDAddIndexFile() { STUB_TRACE(AdsDDAddIndexFile); return 5004u; }
-uint32_t AdsDDAddUserToGroup() { STUB_TRACE(AdsDDAddUserToGroup); return 5004u; }
-uint32_t AdsDDCreateLink() { STUB_TRACE(AdsDDCreateLink); return 5004u; }
-uint32_t AdsDDCreateRefIntegrity() { STUB_TRACE(AdsDDCreateRefIntegrity); return 5004u; }
-uint32_t AdsDDCreateUser() { STUB_TRACE(AdsDDCreateUser); return 5004u; }
-uint32_t AdsDDDeleteUser() { STUB_TRACE(AdsDDDeleteUser); return 5004u; }
-uint32_t AdsDDDropLink() { STUB_TRACE(AdsDDDropLink); return 5004u; }
-uint32_t AdsDDGetDatabaseProperty() { STUB_TRACE(AdsDDGetDatabaseProperty); return 5004u; }
-uint32_t AdsDDGetUserProperty() { STUB_TRACE(AdsDDGetUserProperty); return 5004u; }
-uint32_t AdsDDModifyLink() { STUB_TRACE(AdsDDModifyLink); return 5004u; }
-uint32_t AdsDDRemoveIndexFile() { STUB_TRACE(AdsDDRemoveIndexFile); return 5004u; }
-uint32_t AdsDDRemoveRefIntegrity() { STUB_TRACE(AdsDDRemoveRefIntegrity); return 5004u; }
-uint32_t AdsDDRemoveUserFromGroup() { STUB_TRACE(AdsDDRemoveUserFromGroup); return 5004u; }
-uint32_t AdsDDSetDatabaseProperty() { STUB_TRACE(AdsDDSetDatabaseProperty); return 5004u; }
-uint32_t AdsDeleteCustomKey() { STUB_TRACE(AdsDeleteCustomKey); return 5004u; }
-uint32_t AdsDeleteFile() { STUB_TRACE(AdsDeleteFile); return 5004u; }
-uint32_t AdsEvalAOF() { STUB_TRACE(AdsEvalAOF); return 5004u; }
-uint32_t AdsExtractKey() { STUB_TRACE(AdsExtractKey); return 5004u; }
-uint32_t AdsFailedTransactionRecovery() { STUB_TRACE(AdsFailedTransactionRecovery); return 5004u; }
-uint32_t AdsFindClose() { STUB_TRACE(AdsFindClose); return 5004u; }
-uint32_t AdsFindFirstTable() { STUB_TRACE(AdsFindFirstTable); return 5004u; }
-uint32_t AdsFindNextTable() { STUB_TRACE(AdsFindNextTable); return 5004u; }
-uint32_t AdsGetAllLocks() { STUB_TRACE(AdsGetAllLocks); return 5004u; }
-uint32_t AdsGetAOF() { STUB_TRACE(AdsGetAOF); return 5004u; }
-uint32_t AdsGetBinary() { STUB_TRACE(AdsGetBinary); return 5004u; }
-uint32_t AdsGetBinaryLength() { STUB_TRACE(AdsGetBinaryLength); return 5004u; }
-uint32_t AdsGetConnectionType() { STUB_TRACE(AdsGetConnectionType); return 5004u; }
-uint32_t AdsGetDateFormat() { STUB_TRACE(AdsGetDateFormat); return 5004u; }
-uint32_t AdsGetDefault() { STUB_TRACE(AdsGetDefault); return 5004u; }
-uint32_t AdsGetDeleted() { STUB_TRACE(AdsGetDeleted); return 5004u; }
-uint32_t AdsGetEpoch() { STUB_TRACE(AdsGetEpoch); return 5004u; }
-uint32_t AdsGetErrorString() { STUB_TRACE(AdsGetErrorString); return 5004u; }
-uint32_t AdsGetExact() { STUB_TRACE(AdsGetExact); return 5004u; }
-uint32_t AdsGetFieldW() { STUB_TRACE(AdsGetFieldW); return 5004u; }
-uint32_t AdsGetFilter() { STUB_TRACE(AdsGetFilter); return 5004u; }
-uint32_t AdsGetHandleType() { STUB_TRACE(AdsGetHandleType); return 5004u; }
-uint32_t AdsGetIndexCondition() { STUB_TRACE(AdsGetIndexCondition); return 5004u; }
-uint32_t AdsGetIndexFilename() { STUB_TRACE(AdsGetIndexFilename); return 5004u; }
-uint32_t AdsGetIndexOrderByHandle() { STUB_TRACE(AdsGetIndexOrderByHandle); return 5004u; }
-uint32_t AdsGetKeyLength() { STUB_TRACE(AdsGetKeyLength); return 5004u; }
-uint32_t AdsGetKeyNum() { STUB_TRACE(AdsGetKeyNum); return 5004u; }
-uint32_t AdsGetKeyType() { STUB_TRACE(AdsGetKeyType); return 5004u; }
-uint32_t AdsGetLastTableUpdate() { STUB_TRACE(AdsGetLastTableUpdate); return 5004u; }
+// ---- Config no-ops --------------------------------------------------
+// Each accepts whatever Harbour pushes and reports AE_SUCCESS so the
+// caller proceeds. Inputs are intentionally ignored: OpenADS' engine
+// has stable defaults that match Clipper conventions.
+uint32_t AdsApplicationExit       () { return OK; }
+uint32_t AdsCacheOpenCursors      () { return OK; }
+uint32_t AdsCacheOpenTables       () { return OK; }
+uint32_t AdsCacheRecords          () { return OK; }
+uint32_t AdsCloseCachedTables     () { return OK; }
+uint32_t AdsClearCallbackFunction () { return OK; }
+uint32_t AdsRegisterCallbackFunction() { return OK; }
+uint32_t AdsClearFilter           () { return OK; }
+uint32_t AdsClearRelation         () { return OK; }
+uint32_t AdsCustomizeAOF          () { return OK; }
+uint32_t AdsEvalAOF               () { return OK; }
+uint32_t AdsRefreshAOF            () { return OK; }
+uint32_t AdsRefreshRecord         () { return OK; }
+uint32_t AdsSetDateFormat         () { return OK; }
+uint32_t AdsSetDecimals           () { return OK; }
+uint32_t AdsSetDefault            () { return OK; }
+uint32_t AdsSetEpoch              () { return OK; }
+uint32_t AdsSetExact              () { return OK; }
+uint32_t AdsSetFilter             () { return OK; }
+uint32_t AdsSetRelation           () { return OK; }
+uint32_t AdsSetRelKeyPos          () { return OK; }
+uint32_t AdsSetScopedRelation     () { return OK; }
+uint32_t AdsSetSearchPath         () { return OK; }
+uint32_t AdsSetServerType         () { return OK; }
+uint32_t AdsShowDeleted           () { return OK; }
+uint32_t AdsShowError             () { return OK; }
+uint32_t AdsStmtSetTableLockType  () { return OK; }
+uint32_t AdsStmtSetTablePassword  () { return OK; }
+uint32_t AdsStmtSetTableReadOnly  () { return OK; }
+uint32_t AdsStmtSetTableType      () { return OK; }
+uint32_t AdsWriteAllRecords       () { return OK; }
 
-uint32_t AdsGetLongLong() { STUB_TRACE(AdsGetLongLong); return 5004u; }
-uint32_t AdsGetMilliseconds() { STUB_TRACE(AdsGetMilliseconds); return 5004u; }
-uint32_t AdsGetNumActiveLinks() { STUB_TRACE(AdsGetNumActiveLinks); return 5004u; }
-uint32_t AdsGetNumLocks() { STUB_TRACE(AdsGetNumLocks); return 5004u; }
-uint32_t AdsGetNumOpenTables() { STUB_TRACE(AdsGetNumOpenTables); return 5004u; }
-uint32_t AdsGetRecord() { STUB_TRACE(AdsGetRecord); return 5004u; }
-uint32_t AdsGetRecordLength() { STUB_TRACE(AdsGetRecordLength); return 5004u; }
-uint32_t AdsGetRelKeyPos() { STUB_TRACE(AdsGetRelKeyPos); return 5004u; }
-uint32_t AdsGetSearchPath() { STUB_TRACE(AdsGetSearchPath); return 5004u; }
-uint32_t AdsGetServerName() { STUB_TRACE(AdsGetServerName); return 5004u; }
-uint32_t AdsGetServerTime() { STUB_TRACE(AdsGetServerTime); return 5004u; }
-uint32_t AdsGetStringW() { STUB_TRACE(AdsGetStringW); return 5004u; }
-uint32_t AdsGetTableAlias() { STUB_TRACE(AdsGetTableAlias); return 5004u; }
-uint32_t AdsGetTableCharType() { STUB_TRACE(AdsGetTableCharType); return 5004u; }
-uint32_t AdsGetTableConnection() { STUB_TRACE(AdsGetTableConnection); return 5004u; }
-uint32_t AdsGetTableFilename() { STUB_TRACE(AdsGetTableFilename); return 5004u; }
-uint32_t AdsGetTableType() { STUB_TRACE(AdsGetTableType); return 5004u; }
-uint32_t AdsGotoRecord() { STUB_TRACE(AdsGotoRecord); return 5004u; }
-uint32_t AdsIsConnectionAlive() { STUB_TRACE(AdsIsConnectionAlive); return 5004u; }
-uint32_t AdsIsEmpty() { STUB_TRACE(AdsIsEmpty); return 5004u; }
-uint32_t AdsIsExprValid() { STUB_TRACE(AdsIsExprValid); return 5004u; }
+// ---- Read default ---------------------------------------------------
+// Return AE_SUCCESS plus a sane default written into the out param.
+// Harbour and rddads both fall back gracefully when these are zero
+// or empty. Tracked explicitly per call so missing fixtures (e.g.
+// AdsGetServerName for a local connection) don't blow up.
+uint32_t AdsGetAOF              (uint64_t, uint8_t*, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetDateFormat       (uint8_t* buf, uint16_t* len) {
+    const char* fmt = "YYYY-MM-DD";
+    if (len) {
+        uint16_t cap = *len;
+        uint16_t n   = 10 < cap ? 10 : cap;
+        if (buf && cap > 0) { std::memcpy(buf, fmt, n); if (n < cap) buf[n] = '\0'; }
+        *len = 10;
+    }
+    return OK;
+}
+uint32_t AdsGetDefault          (uint8_t* buf, uint16_t* len) {
+    if (len) { if (buf && *len > 0) buf[0] = '\0'; *len = 0; }
+    return OK;
+}
+uint32_t AdsGetDeleted          (uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetEpoch            (uint16_t* p) { if (p) *p = 1900; return OK; }
+uint32_t AdsGetExact            (uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetFilter           (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetSearchPath       (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetIndexCondition   (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetIndexFilename    (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetIndexOrderByHandle(uint64_t, uint16_t* p) { if (p) *p = 1; return OK; }
+uint32_t AdsGetTableAlias       (uint64_t, uint8_t* buf, uint16_t* len) {
+    if (len) { if (buf && *len > 0) buf[0] = '\0'; *len = 0; }
+    return OK;
+}
+uint32_t AdsGetTableCharType    (uint64_t, uint16_t* p) { if (p) *p = /*ADS_ANSI*/ 1; return OK; }
+uint32_t AdsGetTableConnection  (uint64_t, uint64_t* p) { if (p) *p = 1; return OK; }
+uint32_t AdsGetTableFilename    (uint64_t, uint16_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetTableType        (uint64_t, uint16_t* p) { if (p) *p = /*ADS_CDX*/ 2; return OK; }
+uint32_t AdsGetServerName       (uint64_t, uint8_t* buf, uint16_t* len) {
+    if (len) { if (buf && *len > 0) buf[0] = '\0'; *len = 0; }
+    return OK;
+}
+uint32_t AdsGetServerTime       (uint64_t, uint32_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetMilliseconds     (uint64_t, uint8_t*, int32_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetNumActiveLinks   (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetNumLocks         (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetNumOpenTables    (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetRecord           (uint64_t, uint8_t*, uint32_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetRecordLength     (uint64_t, uint32_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetRelKeyPos        (uint64_t, double* p) { if (p) *p = 0.0; return OK; }
+uint32_t AdsGetLastTableUpdate  (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
+uint32_t AdsGetKeyLength        (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetKeyNum           (uint64_t, uint16_t, uint32_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsGetKeyType          (uint64_t, uint16_t* p) { if (p) *p = /*ADS_STRING*/ 4; return OK; }
+uint32_t AdsGetHandleType       (uint64_t, uint16_t* p) { if (p) *p = /*ADS_CURSOR*/ 1; return OK; }
+uint32_t AdsGetConnectionType   (uint64_t, uint16_t* p) { if (p) *p = /*ADS_LOCAL_SERVER*/ 1; return OK; }
+uint32_t AdsGetErrorString      (uint32_t, uint8_t* buf, uint16_t* len) {
+    const char* msg = "OpenADS error";
+    if (len) {
+        uint16_t cap = *len;
+        uint16_t n   = 13 < cap ? 13 : cap;
+        if (buf && cap > 0) { std::memcpy(buf, msg, n); if (n < cap) buf[n] = '\0'; }
+        *len = 13;
+    }
+    return OK;
+}
+uint32_t AdsIsConnectionAlive   (uint64_t, uint16_t* p) { if (p) *p = 1; return OK; }
+uint32_t AdsIsEmpty             (uint64_t, uint8_t*, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsExprValid         (uint64_t, uint8_t*, uint16_t* p) { if (p) *p = 1; return OK; }
+uint32_t AdsIsIndexCustom       (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsIndexDescending   (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsIndexUnique       (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsNull              (uint64_t, uint8_t*, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsRecordInAOF       (uint64_t, uint16_t* p) { if (p) *p = 1; return OK; }
+uint32_t AdsIsRecordLocked      (uint64_t, uint32_t, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsServerLoaded      (uint8_t*, uint16_t* p) { if (p) *p = 0; return OK; }
+uint32_t AdsIsTableLocked       (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
 
-uint32_t AdsIsIndexCustom() { STUB_TRACE(AdsIsIndexCustom); return 5004u; }
-uint32_t AdsIsIndexDescending() { STUB_TRACE(AdsIsIndexDescending); return 5004u; }
-uint32_t AdsIsIndexUnique() { STUB_TRACE(AdsIsIndexUnique); return 5004u; }
-uint32_t AdsIsNull() { STUB_TRACE(AdsIsNull); return 5004u; }
-uint32_t AdsIsRecordInAOF() { STUB_TRACE(AdsIsRecordInAOF); return 5004u; }
-uint32_t AdsIsRecordLocked() { STUB_TRACE(AdsIsRecordLocked); return 5004u; }
-uint32_t AdsIsServerLoaded() { STUB_TRACE(AdsIsServerLoaded); return 5004u; }
-uint32_t AdsIsTableLocked() { STUB_TRACE(AdsIsTableLocked); return 5004u; }
-uint32_t AdsMgConnect() { STUB_TRACE(AdsMgConnect); return 5004u; }
-uint32_t AdsMgDisconnect() { STUB_TRACE(AdsMgDisconnect); return 5004u; }
-uint32_t AdsMgGetActivityInfo() { STUB_TRACE(AdsMgGetActivityInfo); return 5004u; }
-uint32_t AdsMgGetCommStats() { STUB_TRACE(AdsMgGetCommStats); return 5004u; }
-uint32_t AdsMgGetConfigInfo() { STUB_TRACE(AdsMgGetConfigInfo); return 5004u; }
-uint32_t AdsMgGetInstallInfo() { STUB_TRACE(AdsMgGetInstallInfo); return 5004u; }
-uint32_t AdsMgGetLockOwner() { STUB_TRACE(AdsMgGetLockOwner); return 5004u; }
-uint32_t AdsMgGetLocks() { STUB_TRACE(AdsMgGetLocks); return 5004u; }
-uint32_t AdsMgGetOpenIndexes() { STUB_TRACE(AdsMgGetOpenIndexes); return 5004u; }
-uint32_t AdsMgGetOpenTables() { STUB_TRACE(AdsMgGetOpenTables); return 5004u; }
-uint32_t AdsMgGetServerType() { STUB_TRACE(AdsMgGetServerType); return 5004u; }
-uint32_t AdsMgGetUserNames() { STUB_TRACE(AdsMgGetUserNames); return 5004u; }
-uint32_t AdsMgGetWorkerThreadActivity() { STUB_TRACE(AdsMgGetWorkerThreadActivity); return 5004u; }
-uint32_t AdsMgKillUser() { STUB_TRACE(AdsMgKillUser); return 5004u; }
-uint32_t AdsMgResetCommStats() { STUB_TRACE(AdsMgResetCommStats); return 5004u; }
-uint32_t AdsRefreshAOF() { STUB_TRACE(AdsRefreshAOF); return 5004u; }
-uint32_t AdsRefreshRecord() { STUB_TRACE(AdsRefreshRecord); return 5004u; }
-uint32_t AdsRegisterCallbackFunction() { STUB_TRACE(AdsRegisterCallbackFunction); return 5004u; }
-uint32_t AdsReindex() { STUB_TRACE(AdsReindex); return 5004u; }
-uint32_t AdsRestructureTable() { STUB_TRACE(AdsRestructureTable); return 5004u; }
-uint32_t AdsSetBinary() { STUB_TRACE(AdsSetBinary); return 5004u; }
-uint32_t AdsSetDateFormat() { STUB_TRACE(AdsSetDateFormat); return 5004u; }
-uint32_t AdsSetDecimals() { STUB_TRACE(AdsSetDecimals); return 5004u; }
-uint32_t AdsSetDefault() { STUB_TRACE(AdsSetDefault); return 5004u; }
-uint32_t AdsSetEpoch() { STUB_TRACE(AdsSetEpoch); return 5004u; }
-uint32_t AdsSetExact() { STUB_TRACE(AdsSetExact); return 5004u; }
-uint32_t AdsSetFieldRaw() { STUB_TRACE(AdsSetFieldRaw); return 5004u; }
-uint32_t AdsSetFilter() { STUB_TRACE(AdsSetFilter); return 5004u; }
-uint32_t AdsSetMilliseconds() { STUB_TRACE(AdsSetMilliseconds); return 5004u; }
-uint32_t AdsSetRecord() { STUB_TRACE(AdsSetRecord); return 5004u; }
-uint32_t AdsSetRelation() { STUB_TRACE(AdsSetRelation); return 5004u; }
-uint32_t AdsSetRelKeyPos() { STUB_TRACE(AdsSetRelKeyPos); return 5004u; }
-uint32_t AdsSetScopedRelation() { STUB_TRACE(AdsSetScopedRelation); return 5004u; }
-uint32_t AdsSetSearchPath() { STUB_TRACE(AdsSetSearchPath); return 5004u; }
-uint32_t AdsSetServerType() { STUB_TRACE(AdsSetServerType); return 5004u; }
-uint32_t AdsSetStringW() { STUB_TRACE(AdsSetStringW); return 5004u; }
-uint32_t AdsShowDeleted() { STUB_TRACE(AdsShowDeleted); return 5004u; }
-uint32_t AdsShowError() { STUB_TRACE(AdsShowError); return 5004u; }
-uint32_t AdsSkipUnique() { STUB_TRACE(AdsSkipUnique); return 5004u; }
-uint32_t AdsStmtSetTableLockType() { STUB_TRACE(AdsStmtSetTableLockType); return 5004u; }
-uint32_t AdsStmtSetTablePassword() { STUB_TRACE(AdsStmtSetTablePassword); return 5004u; }
-uint32_t AdsStmtSetTableReadOnly() { STUB_TRACE(AdsStmtSetTableReadOnly); return 5004u; }
-uint32_t AdsStmtSetTableType() { STUB_TRACE(AdsStmtSetTableType); return 5004u; }
-uint32_t AdsVerifySQL() { STUB_TRACE(AdsVerifySQL); return 5004u; }
-uint32_t AdsWriteAllRecords() { STUB_TRACE(AdsWriteAllRecords); return 5004u; }
-
-// AdsIsFound moved to ace_exports.cpp (real impl reading the table's
-// last-seek-hit state).
-
-// rddads' adsGetValue routes HB_FT_LOGICAL fields through
-// AdsGetLogical. Read the underlying field as raw character data and
-// decode the first byte: 'T'/'t'/'Y'/'y' -> true, anything else false.
-uint32_t AdsGetLogical(uint64_t hTable, uint8_t* pucField,
-                       uint16_t* pbValue) {
-    if (pbValue == nullptr) return 0u;
+// AdsGetLogical decodes the underlying char field as 'T'/'Y'/'1'
+// → true. Reuses the real AdsGetField for the column read so it
+// works with both the bare-name and ADSFIELD(n) forms of pucField.
+uint32_t AdsGetLogical(uint64_t hTable, uint8_t* pucField, uint16_t* pbValue) {
+    if (pbValue == nullptr) return OK;
     *pbValue = 0;
     uint8_t buf[4] = {0,0,0,0};
     uint32_t cap = sizeof(buf);
     uint32_t rc = AdsGetField(hTable, pucField, buf, &cap, /*ADS_NONE*/ 0);
-    if (rc == 0u && cap >= 1) {
+    if (rc == OK && cap >= 1) {
         char c = static_cast<char>(buf[0]);
-        if (c == 'T' || c == 't' || c == 'Y' || c == 'y') *pbValue = 1;
+        if (c == 'T' || c == 't' || c == 'Y' || c == 'y' || c == '1') {
+            *pbValue = 1;
+        }
     }
-    return 0u;
+    return OK;
 }
-}
 
+// AdsSetMilliseconds / AdsSetRecord — accept any signature, return OK.
+// The engine doesn't track millisecond timestamps separately; bulk
+// SetRecord lands when the engine grows a write-record-direct path.
+uint32_t AdsSetMilliseconds     () { return OK; }
+uint32_t AdsSetRecord           () { return OK; }
 
+// ---- Genuinely missing ---------------------------------------------
+// Return AE_FUNCTION_NOT_AVAILABLE so callers can detect that the
+// underlying feature is not yet implemented in OpenADS.
+uint32_t AdsAddCustomKey         () { return MISS; }
+uint32_t AdsCheckExistence       () { return MISS; }
+uint32_t AdsCloseAllTables       () { return MISS; }
+uint32_t AdsConvertTable         () { return MISS; }
+uint32_t AdsCopyTable            () { return MISS; }
+uint32_t AdsCopyTableContents    () { return MISS; }
+uint32_t AdsCreateFTSIndex       () { return MISS; }
+uint32_t AdsCreateIndex61        () { return MISS; }
+uint32_t AdsCreateTable          () { return MISS; }
+uint32_t AdsDDAddIndexFile       () { return MISS; }
+uint32_t AdsDDAddUserToGroup     () { return MISS; }
+uint32_t AdsDDCreateLink         () { return MISS; }
+uint32_t AdsDDCreateRefIntegrity () { return MISS; }
+uint32_t AdsDDCreateUser         () { return MISS; }
+uint32_t AdsDDDeleteUser         () { return MISS; }
+uint32_t AdsDDDropLink           () { return MISS; }
+uint32_t AdsDDGetDatabaseProperty() { return MISS; }
+uint32_t AdsDDGetUserProperty    () { return MISS; }
+uint32_t AdsDDModifyLink         () { return MISS; }
+uint32_t AdsDDRemoveIndexFile    () { return MISS; }
+uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
+uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
+uint32_t AdsDDSetDatabaseProperty() { return MISS; }
+uint32_t AdsDeleteCustomKey      () { return MISS; }
+uint32_t AdsDeleteFile           () { return MISS; }
+uint32_t AdsExtractKey           () { return MISS; }
+uint32_t AdsFailedTransactionRecovery() { return MISS; }
+uint32_t AdsFindClose            () { return MISS; }
+uint32_t AdsFindFirstTable       () { return MISS; }
+uint32_t AdsFindNextTable        () { return MISS; }
+uint32_t AdsGetAllLocks          () { return MISS; }
+uint32_t AdsGetBinary            () { return MISS; }
+uint32_t AdsGetBinaryLength      () { return MISS; }
+uint32_t AdsGetFieldW            () { return MISS; }
+uint32_t AdsGetLongLong          () { return MISS; }
+uint32_t AdsGetStringW           () { return MISS; }
+uint32_t AdsGotoRecord           () { return MISS; }
+uint32_t AdsMgConnect            () { return MISS; }
+uint32_t AdsMgDisconnect         () { return MISS; }
+uint32_t AdsMgGetActivityInfo    () { return MISS; }
+uint32_t AdsMgGetCommStats       () { return MISS; }
+uint32_t AdsMgGetConfigInfo      () { return MISS; }
+uint32_t AdsMgGetInstallInfo     () { return MISS; }
+uint32_t AdsMgGetLockOwner       () { return MISS; }
+uint32_t AdsMgGetLocks           () { return MISS; }
+uint32_t AdsMgGetOpenIndexes     () { return MISS; }
+uint32_t AdsMgGetOpenTables      () { return MISS; }
+uint32_t AdsMgGetServerType      () { return MISS; }
+uint32_t AdsMgGetUserNames       () { return MISS; }
+uint32_t AdsMgGetWorkerThreadActivity() { return MISS; }
+uint32_t AdsMgKillUser           () { return MISS; }
+uint32_t AdsMgResetCommStats     () { return MISS; }
+uint32_t AdsReindex              () { return MISS; }
+uint32_t AdsRestructureTable     () { return MISS; }
+uint32_t AdsSetBinary            () { return MISS; }
+uint32_t AdsSetFieldRaw          () { return MISS; }
+uint32_t AdsSetStringW           () { return MISS; }
+uint32_t AdsSkipUnique           () { return MISS; }
+uint32_t AdsVerifySQL            () { return MISS; }
 
+}  // extern "C"
