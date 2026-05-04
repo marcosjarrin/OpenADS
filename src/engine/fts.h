@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -48,6 +49,29 @@ public:
     // Exposed for tests so the splitter can be exercised independently.
     static std::vector<std::string>
         tokenise(const std::string& s, const FtsOptions& opts);
+
+    // Load an OpenADS-native .fts file produced by `create` into an
+    // in-memory inverted map (M9.21). Returns the map keyed by token,
+    // mapping to the sorted recno list. Format errors and missing
+    // files surface as Errors; a missing file is the common case for
+    // first-call-after-AdsCreateFTSIndex apps and bubbles up so the
+    // ABI can map it to AE_TABLE_NOT_FOUND.
+    using Postings = std::unordered_map<std::string, std::vector<std::uint32_t>>;
+    static util::Result<Postings>
+        load(const std::string& path);
+
+    // Tokenise `query`, look each token up in `postings`, and return
+    // the intersection of their recno lists (AND semantics — every
+    // token must appear in the matching record). An empty query, or
+    // a query whose every token misses, returns an empty result.
+    // Tokens shorter than 1 char are skipped before lookup; the
+    // caller's `opts` (delim/min/max/noise) shape the same tokeniser
+    // used at build time so a `create` + `search` pair stays
+    // symmetric.
+    static std::vector<std::uint32_t>
+        search(const Postings&    postings,
+               const std::string& query,
+               const FtsOptions&  opts);
 };
 
 } // namespace openads::engine

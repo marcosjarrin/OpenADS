@@ -15,7 +15,7 @@ namespace openads::sql {
 // WHERE, AND/OR, ORDER BY, projection lists, joins, subqueries, and
 // aggregates land in subsequent milestones.
 
-enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge };
+enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge, Contains };
 
 struct WhereCmp {
     std::string column;

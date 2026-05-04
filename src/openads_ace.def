@@ -105,6 +105,7 @@ EXPORTS
     AdsCopyTable
     AdsCopyTableContents
     AdsCreateFTSIndex
+    AdsFTSSearch
     AdsCreateIndex61
     AdsCreateTable
     AdsCustomizeAOF

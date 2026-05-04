@@ -31,6 +31,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -1891,6 +1892,42 @@ build_fts_options(UNSIGNED32  ulMinWordLen, UNSIGNED32  ulMaxWordLen,
 
 extern "C" {
 
+// AdsFTSSearch is an OpenADS extension. The original ACE SDK doesn't
+// export an entry point with this exact shape that rddads' Harbour
+// surface ever reached (rddads is silent on FTS query semantics), so
+// OpenADS publishes a small clean-room API: load the .fts file at
+// `pucFile`, tokenise the query with the standard rules, intersect
+// the per-token recno lists, and write up to `*pulCount` recnos into
+// `paRecnos`. `*pulCount` is treated as in/out — the caller passes
+// the array capacity and reads back the total number of matches
+// (which may be larger than the buffer).
+UNSIGNED32 AdsFTSSearch(ADSHANDLE   /*hConnect*/,
+                        UNSIGNED8*  pucFile,
+                        UNSIGNED8*  pucQuery,
+                        UNSIGNED32* paRecnos,
+                        UNSIGNED32* pulCount) {
+    if (pucFile == nullptr || pucQuery == nullptr || pulCount == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "AdsFTSSearch: null arg");
+    }
+    auto path  = openads::abi::to_internal(pucFile,  0);
+    auto query = openads::abi::to_internal(pucQuery, 0);
+
+    auto loaded = openads::engine::Fts::load(path);
+    if (!loaded) return fail(loaded.error());
+
+    openads::engine::FtsOptions opts;
+    auto hits = openads::engine::Fts::search(loaded.value(), query, opts);
+
+    UNSIGNED32 cap = *pulCount;
+    UNSIGNED32 n   = static_cast<UNSIGNED32>(
+        std::min<std::size_t>(hits.size(), cap));
+    if (paRecnos != nullptr && n > 0) {
+        std::memcpy(paRecnos, hits.data(), n * sizeof(UNSIGNED32));
+    }
+    *pulCount = static_cast<UNSIGNED32>(hits.size());
+    return ok();
+}
+
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
                              UNSIGNED8*  pucFileName,
                              UNSIGNED8*  pucTag,
@@ -2873,12 +2910,16 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     openads::engine::Table* tbl = c->lookup_table(th.value());
     if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
-    // Compile WHERE clauses (AND-joined) into a row predicate.
+    // Compile WHERE clauses (AND-joined) into a row predicate. M9.21
+    // adds the CONTAINS(<col>, '<query>') leg: the FTS lookup runs
+    // once at compile time and the predicate just probes the resulting
+    // recno set on each row, instead of re-tokenising per record.
     if (!parsed.value().where.empty()) {
         struct Term {
-            std::uint16_t         field_index;
-            openads::sql::WhereOp op;
-            std::string           literal;
+            std::uint16_t                       field_index = 0;
+            openads::sql::WhereOp               op = openads::sql::WhereOp::Eq;
+            std::string                         literal;
+            std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
         };
         std::vector<Term> terms;
         terms.reserve(parsed.value().where.size());
@@ -2887,10 +2928,36 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (fidx < 0) {
                 return fail(openads::AE_COLUMN_NOT_FOUND, w.column.c_str());
             }
-            terms.push_back({static_cast<std::uint16_t>(fidx), w.op, w.literal});
+            Term term;
+            term.field_index = static_cast<std::uint16_t>(fidx);
+            term.op          = w.op;
+            term.literal     = w.literal;
+
+            if (w.op == openads::sql::WhereOp::Contains) {
+                namespace fs = std::filesystem;
+                fs::path fts_path =
+                    fs::path(tbl->path()).replace_extension(".fts");
+                auto loaded = openads::engine::Fts::load(fts_path.string());
+                if (!loaded) return fail(loaded.error());
+                openads::engine::FtsOptions opts;
+                auto hits = openads::engine::Fts::search(
+                    loaded.value(), w.literal, opts);
+                term.contains_hits =
+                    std::make_shared<std::unordered_set<std::uint32_t>>(
+                        hits.begin(), hits.end());
+            }
+            terms.push_back(std::move(term));
         }
         tbl->set_filter([terms = std::move(terms)](openads::engine::Table& t) {
             for (const auto& term : terms) {
+                if (term.op == openads::sql::WhereOp::Contains) {
+                    if (!term.contains_hits) return false;
+                    if (term.contains_hits->find(t.recno()) ==
+                        term.contains_hits->end()) {
+                        return false;
+                    }
+                    continue;
+                }
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
                 int cmp = v.value().as_string.compare(term.literal);
@@ -2902,6 +2969,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     case openads::sql::WhereOp::Gt: ok = (cmp >  0); break;
                     case openads::sql::WhereOp::Le: ok = (cmp <= 0); break;
                     case openads::sql::WhereOp::Ge: ok = (cmp >= 0); break;
+                    case openads::sql::WhereOp::Contains: ok = true; break;
                 }
                 if (!ok) return false;
             }

@@ -62,6 +62,12 @@ UNSIGNED32 AdsCopyTable     (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
 UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst);
 UNSIGNED32 AdsConvertTable  (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
                               UNSIGNED8* pucFile, UNSIGNED16 usTargetType);
+UNSIGNED32 AdsFTSSearch     (ADSHANDLE   hConnect,
+                              UNSIGNED8*  pucFile,
+                              UNSIGNED8*  pucQuery,
+                              UNSIGNED32* paRecnos,
+                              UNSIGNED32* pulCount);
+
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
                               UNSIGNED8*  pucFileName,
                               UNSIGNED8*  pucTag,

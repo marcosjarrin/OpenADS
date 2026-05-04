@@ -1,0 +1,177 @@
+#include "doctest.h"
+#include "openads/ace.h"
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+fs::path stage_dbf(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto p = dir / "data.dbf";
+    fs::remove(p);
+    std::vector<std::uint8_t> file;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        file.insert(file.end(), b, b + n);
+    };
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = 4;
+    hdr[8]  = 32 + 32 + 1;
+    hdr[10] = 1 + 50;
+    push(hdr.data(), hdr.size());
+    std::array<std::uint8_t, 32> fd{};
+    std::strncpy(reinterpret_cast<char*>(fd.data()), "NOTES", 11);
+    fd[11] = 'C'; fd[16] = 50;
+    push(fd.data(), fd.size());
+    file.push_back(0x0D);
+    auto rec = [&](const char* s) {
+        file.push_back(' ');
+        for (int i = 0; i < 50; ++i)
+            file.push_back(i < (int)std::strlen(s)
+                           ? static_cast<std::uint8_t>(s[i]) : ' ');
+    };
+    rec("Quick brown fox jumps over lazy dog");
+    rec("Lazy dog sleeps in sun");
+    rec("Quick fox returns to den at dusk");
+    rec("Brown bear eats honey from hive");
+    file.push_back(0x1A);
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+
+void make_fts(ADSHANDLE hConn) {
+    UNSIGNED8 leaf[16] = "data";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED8 file[64]   = "data.fts";
+    UNSIGNED8 tag[16]    = "T";
+    UNSIGNED8 field[16]  = "NOTES";
+    UNSIGNED8 nullbuf[2] = {0, 0};
+    REQUIRE(AdsCreateFTSIndex(hTable, file, tag, field,
+                              0, 3, 30,
+                              1, nullbuf, 1, nullbuf, 1, nullbuf,
+                              1, nullbuf, nullbuf, nullbuf, 0) == 0);
+    REQUIRE(AdsCloseTable(hTable) == 0);
+}
+
+}  // namespace
+
+TEST_CASE("M9.21 SQL CONTAINS lowers through FTS hit set") {
+    auto dir = fs::temp_directory_path() / "openads_m9_21_sql_contains";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    make_fts(hConn);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // SELECT * FROM data WHERE CONTAINS(NOTES, 'fox') — recnos 1 and 3.
+    UNSIGNED8 sql[128] = "SELECT * FROM data WHERE CONTAINS(NOTES, 'fox')";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    // Walk the cursor and collect recnos.
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    std::set<UNSIGNED32> got;
+    while (true) {
+        UNSIGNED16 atend = 0;
+        REQUIRE(AdsAtEOF(hCur, &atend) == 0);
+        if (atend) break;
+        UNSIGNED32 r = 0;
+        REQUIRE(AdsGetRecordNum(hCur, 0, &r) == 0);
+        got.insert(r);
+        REQUIRE(AdsSkip(hCur, 1) == 0);
+    }
+    CHECK(got == std::set<UNSIGNED32>{1, 3});
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M9.21 SQL CONTAINS combines with regular AND clause") {
+    auto dir = fs::temp_directory_path() / "openads_m9_21_sql_contains_and";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    make_fts(hConn);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Both predicates must match. CONTAINS('lazy dog') hits {1,2}; the
+    // second clause keeps only NOTES values that sort before 'M', so
+    // "Lazy dog…" stays (rec 2) and "Quick brown…" drops (rec 1).
+    UNSIGNED8 sql[160] =
+        "SELECT * FROM data WHERE CONTAINS(NOTES, 'lazy dog')"
+        " AND NOTES <= 'M'";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    std::set<UNSIGNED32> got;
+    while (true) {
+        UNSIGNED16 atend = 0;
+        REQUIRE(AdsAtEOF(hCur, &atend) == 0);
+        if (atend) break;
+        UNSIGNED32 r = 0;
+        REQUIRE(AdsGetRecordNum(hCur, 0, &r) == 0);
+        got.insert(r);
+        REQUIRE(AdsSkip(hCur, 1) == 0);
+    }
+    CHECK(got == std::set<UNSIGNED32>{2});
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M9.21 SQL CONTAINS without prebuilt .fts errors out") {
+    auto dir = fs::temp_directory_path() / "openads_m9_21_sql_contains_missing";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+    UNSIGNED8 sql[128] = "SELECT * FROM data WHERE CONTAINS(NOTES, 'fox')";
+    ADSHANDLE hCur = 0;
+    UNSIGNED32 rc = AdsExecuteSQLDirect(hStmt, sql, &hCur);
+    CHECK(rc != 0);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

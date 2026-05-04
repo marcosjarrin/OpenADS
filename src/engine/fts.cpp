@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <set>
@@ -102,6 +104,74 @@ Fts::create(Table& table, const std::string& path,
         return util::Error{5000, 0, "FTS file write failed", path};
     }
     return {};
+}
+
+util::Result<Fts::Postings>
+Fts::load(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return util::Error{5066, 0, "FTS file not found", path};
+    }
+    Postings out;
+    std::string line;
+    bool saw_header = false;
+    while (std::getline(in, line)) {
+        // Strip trailing CR if the file was written with CRLF line endings.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            saw_header = true;
+            continue;
+        }
+        auto tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string token = line.substr(0, tab);
+        std::string list  = line.substr(tab + 1);
+        std::vector<std::uint32_t>& vec = out[token];
+        std::size_t i = 0;
+        while (i < list.size()) {
+            std::size_t j = list.find(',', i);
+            if (j == std::string::npos) j = list.size();
+            if (j > i) {
+                std::uint32_t r = static_cast<std::uint32_t>(
+                    std::strtoul(list.c_str() + i, nullptr, 10));
+                vec.push_back(r);
+            }
+            i = j + 1;
+        }
+    }
+    if (!saw_header) {
+        return util::Error{5103, 0, "FTS file missing header", path};
+    }
+    return out;
+}
+
+std::vector<std::uint32_t>
+Fts::search(const Postings& postings, const std::string& query,
+            const FtsOptions& opts) {
+    auto tokens = tokenise(query, opts);
+    if (tokens.empty()) return {};
+
+    // Bootstrap the result with the first token's recno list so the
+    // intersection loop can shrink it from there.
+    std::vector<std::uint32_t> result;
+    bool first = true;
+    for (auto& tok : tokens) {
+        auto it = postings.find(tok);
+        if (it == postings.end()) return {};
+        if (first) {
+            result = it->second;
+            first  = false;
+        } else {
+            std::vector<std::uint32_t> next;
+            std::set_intersection(result.begin(), result.end(),
+                                  it->second.begin(), it->second.end(),
+                                  std::back_inserter(next));
+            result = std::move(next);
+            if (result.empty()) return result;
+        }
+    }
+    return result;
 }
 
 } // namespace openads::engine

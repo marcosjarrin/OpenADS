@@ -145,10 +145,39 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected table name", sql};
     }
 
-    // Optional WHERE: one or more comparisons joined by AND.
+    // Optional WHERE: one or more comparisons joined by AND. M9.21
+    // adds a `CONTAINS(<column>, '<query>')` predicate that lowers
+    // through the FTS search path; the rest stays infix `<col> op <lit>`.
     if (c.match_keyword("WHERE")) {
         for (;;) {
             WhereCmp w;
+            if (c.match_keyword("CONTAINS")) {
+                if (!c.match_char('(')) {
+                    return util::Error{7200, 0,
+                        "expected '(' after CONTAINS", sql};
+                }
+                w.column = c.read_identifier();
+                if (w.column.empty()) {
+                    return util::Error{7200, 0,
+                        "expected column name in CONTAINS", sql};
+                }
+                if (!c.match_char(',')) {
+                    return util::Error{7200, 0,
+                        "expected ',' between CONTAINS column and query", sql};
+                }
+                auto lit = c.read_string_literal();
+                if (!lit) return lit.error();
+                w.literal = std::move(lit).value();
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' to close CONTAINS", sql};
+                }
+                w.op = WhereOp::Contains;
+                stmt.where.push_back(std::move(w));
+                if (!c.match_keyword("AND")) break;
+                continue;
+            }
+
             w.column = c.read_identifier();
             if (w.column.empty()) {
                 return util::Error{7200, 0,
