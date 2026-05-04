@@ -996,6 +996,7 @@ struct IndexBinding {
     Table*                                  table = nullptr;
     std::string                             tag_name;
     std::unique_ptr<openads::drivers::IIndex> parked;  // nullptr when this is the active binding
+    std::string                             path;     // resolved index file path (M9.14)
 };
 
 std::unordered_map<ADSHANDLE, IndexBinding>& index_bindings() {
@@ -1114,8 +1115,49 @@ make_index_for(const std::string& path) {
 
 } // extern "C++"
 
+// Compare two filesystem paths for the "is this the same on-disk
+// file?" question. Falls back to a case-insensitive lexical compare
+// when canonical resolution fails (e.g. file doesn't exist yet).
+namespace {
+bool same_index_path(const std::string& a, const std::string& b) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    auto ca = fs::weakly_canonical(fs::path(a), ec);
+    auto cb = fs::weakly_canonical(fs::path(b), ec);
+    auto sa = ec ? a : ca.string();
+    auto sb = ec ? b : cb.string();
+    if (sa.size() != sb.size()) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            char ca2 = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(a[i])));
+            char cb2 = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(b[i])));
+            if (ca2 != cb2) return false;
+        }
+        return true;
+    }
+    for (std::size_t i = 0; i < sa.size(); ++i) {
+        char ca2 = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(sa[i])));
+        char cb2 = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(sb[i])));
+        if (ca2 != cb2) return false;
+    }
+    return true;
+}
+}  // namespace
+
 // Real-ACE 4-arg signature: opens an index FILE, registers one handle
 // per tag, and writes the handles into ahIndex[] / *pu16ArrayLen.
+//
+// M9.14 made this additive: a second AdsOpenIndex against a different
+// file path no longer wipes the prior bindings. Instead, the new
+// indices land as parked extra views (their writes still sync) and
+// the first one only steals Table::order_ when no active order is
+// currently bound. Repeated calls with the SAME path drop the prior
+// bindings for that path (refresh semantics) so reopening the same
+// .ntx / .cdx leaves at most one binding per tag.
 UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                         ADSHANDLE* ahIndex, UNSIGNED16* pu16ArrayLen) {
     Table* t = get_table(hTable);
@@ -1134,15 +1176,32 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     }
     auto path = p.string();
 
-    // Drop any prior bindings for this table.
     auto& m   = index_bindings();
     auto& act = active_binding_for();
+
+    // Refresh: drop any prior bindings for this Table that came from
+    // the same file path. If the active binding was among them, also
+    // surrender Table::order_; the caller's reopen will repopulate it.
+    bool active_dropped = false;
+    auto act_it = act.find(t);
+    ADSHANDLE active_h = act_it != act.end() ? act_it->second : 0;
     for (auto it = m.begin(); it != m.end(); ) {
-        if (it->second.table == t) it = m.erase(it);
-        else                       ++it;
+        if (it->second.table == t && same_index_path(it->second.path, path)) {
+            if (it->first == active_h) {
+                active_dropped = true;
+            } else if (it->second.parked) {
+                t->unregister_extra_index_view(it->second.parked.get());
+            }
+            it = m.erase(it);
+        } else {
+            ++it;
+        }
     }
-    act.erase(t);
-    t->clear_order();
+    if (active_dropped) {
+        act.erase(t);
+        t->clear_order();
+    }
+    bool table_has_active = act.find(t) != act.end();
 
     // Enumerate tags. CDX exposes list_tags; NTX has only its single
     // tag, which open() reports via name().
@@ -1153,29 +1212,37 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         tags = std::move(r).value();
     }
     if (tags.empty()) {
-        // NTX or empty CDX: open once via the legacy path.
+        // NTX or empty CDX: open once via the legacy path. M9.14 lets
+        // multiple NTX files coexist on the same Table — when the
+        // table already has an active order, the new NTX parks as an
+        // extra view instead of replacing it.
         auto idx = make_index_for(path);
         if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
             return fail(r.error());
         }
         std::string tag_name = idx->name();
-        t->set_order(std::move(idx));
         ADSHANDLE h = next_index_handle();
-        m[h] = IndexBinding{t, tag_name, nullptr};
-        act[t] = h;
+        if (!table_has_active) {
+            t->set_order(std::move(idx));
+            m[h] = IndexBinding{t, tag_name, nullptr, path};
+            act[t] = h;
+        } else {
+            openads::drivers::IIndex* raw = idx.get();
+            m[h] = IndexBinding{t, tag_name, std::move(idx), path};
+            t->register_extra_index_view(raw);
+        }
         ahIndex[0] = h;
         if (pu16ArrayLen != nullptr) *pu16ArrayLen = 1;
         return ok();
     }
 
     // CDX with one or more tags: open each by name. The first tag's
-    // IIndex moves into Table::order_ (becomes default order); the
-    // rest stay parked in their bindings until activate_binding swaps
-    // them in.
+    // IIndex moves into Table::order_ (becomes default order) only
+    // when the table doesn't already have an active order; the rest
+    // (and the first tag in the additive case) park as extra views.
     UNSIGNED16 cap = (pu16ArrayLen != nullptr && *pu16ArrayLen > 0)
                    ? *pu16ArrayLen : 1;
     UNSIGNED16 count = 0;
-    t->clear_extra_index_views();
     for (const auto& name : tags) {
         if (count >= cap) break;
         auto sub = std::make_unique<openads::drivers::cdx::CdxIndex>();
@@ -1185,16 +1252,14 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             return fail(r.error());
         }
         ADSHANDLE h = next_index_handle();
-        if (count == 0) {
-            // First tag becomes the active order on the table.
+        if (!table_has_active) {
             t->set_order(std::move(sub));
-            m[h] = IndexBinding{t, name, nullptr};
+            m[h] = IndexBinding{t, name, nullptr, path};
             act[t] = h;
+            table_has_active = true;
         } else {
-            // Parked: register as an extra view so set_field syncs it
-            // even when it isn't the active order.
             openads::drivers::IIndex* raw = sub.get();
-            m[h] = IndexBinding{t, name, std::move(sub)};
+            m[h] = IndexBinding{t, name, std::move(sub), path};
             t->register_extra_index_view(raw);
         }
         ahIndex[count++] = h;
@@ -1205,9 +1270,19 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
 
 UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
     auto& m = index_bindings();
+    auto& act = active_binding_for();
     auto it = m.find(hIndex);
     if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
-    if (it->second.table) it->second.table->clear_order();
+    Table* t = it->second.table;
+    if (t != nullptr) {
+        auto act_it = act.find(t);
+        if (act_it != act.end() && act_it->second == hIndex) {
+            t->clear_order();
+            act.erase(act_it);
+        } else if (it->second.parked) {
+            t->unregister_extra_index_view(it->second.parked.get());
+        }
+    }
     m.erase(it);
     return ok();
 }
@@ -1216,11 +1291,20 @@ UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto& m = index_bindings();
+    auto& act = active_binding_for();
     for (auto it = m.begin(); it != m.end(); ) {
-        if (it->second.table == t) it = m.erase(it);
-        else                       ++it;
+        if (it->second.table == t) {
+            if (it->second.parked) {
+                t->unregister_extra_index_view(it->second.parked.get());
+            }
+            it = m.erase(it);
+        } else {
+            ++it;
+        }
     }
+    act.erase(t);
     t->clear_order();
+    t->clear_extra_index_views();
     return ok();
 }
 
@@ -1320,11 +1404,11 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     ADSHANDLE h = next_index_handle();
     if (!table_has_active) {
         t->set_order(std::move(idx_owner));
-        m[h] = IndexBinding{t, tag, nullptr};
+        m[h] = IndexBinding{t, tag, nullptr, p.string()};
         act[t] = h;
     } else {
         t->register_extra_index_view(idx_view);
-        m[h] = IndexBinding{t, tag, std::move(idx_owner)};
+        m[h] = IndexBinding{t, tag, std::move(idx_owner), p.string()};
     }
     *phIndex = h;
     return ok();
@@ -1381,14 +1465,19 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     }
     if (auto fl = idx->flush(); !fl) return fail(fl.error());
 
-    auto& m = index_bindings();
-    for (auto it = m.begin(); it != m.end(); ) {
-        if (it->second.table == t) it = m.erase(it);
-        else                       ++it;
-    }
-    t->set_order(std::move(idx));
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
+    bool table_has_active = act.find(t) != act.end();
     ADSHANDLE h = next_index_handle();
-    m[h] = IndexBinding{t, tag};
+    if (!table_has_active) {
+        t->set_order(std::move(idx));
+        m[h] = IndexBinding{t, tag, nullptr, file};
+        act[t] = h;
+    } else {
+        openads::drivers::IIndex* raw = idx.get();
+        m[h] = IndexBinding{t, tag, std::move(idx), file};
+        t->register_extra_index_view(raw);
+    }
     *phIndex = h;
     return ok();
 }

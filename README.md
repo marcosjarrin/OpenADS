@@ -6,7 +6,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (14 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (15 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -62,7 +62,9 @@ Done.
 - **NTX index** — Clipper layout, multi-level B+tree split (M9.10
   closed the M3.7 single-level limitation), cache-based in-order
   traversal for `next` / `prev` over multi-level trees, dynamic
-  creation via `AdsCreateIndex61`.
+  creation via `AdsCreateIndex61`, multi-file binding (M9.14 — apps
+  can bundle several `.ntx` files on a single `USE` and swap focus
+  between them without losing the parked tags' write sync).
 - **Compound key expressions** — `UPPER(field)`, `LOWER(field)`,
   `LTRIM` / `RTRIM` / `ALLTRIM`, `STR(n)` / `STR(n,len)` /
   `STR(n,len,dec)`, `DTOS(date)`, `SUBSTR(s,start[,len])`,
@@ -115,7 +117,7 @@ Done.
 
 #### Tests
 
-- **164 doctest cases / 3297 assertions** passing on Windows / MSVC
+- **167 doctest cases / 3364 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -172,7 +174,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.10-done`     | NTX multi-level B+tree split (closes M3.7 limit) |
 | `m9.11-done`     | `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable` |
 | `m9.12-done`     | `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose` (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
-| **`m9.13-done`** | **`AdsGetBinaryLength` / `AdsGetBinary` / `AdsSetBinary`** + real `AdsGetMemoDataType` (FPT block-type tag round-trip; `ADS_BINARY` → `Object`, `ADS_IMAGE` → `Picture`, text → `Text`; offset-based chunked reads) |
+| `m9.13-done`     | `AdsGetBinaryLength` / `AdsGetBinary` / `AdsSetBinary` + real `AdsGetMemoDataType` (FPT block-type tag round-trip; `ADS_BINARY` → `Object`, `ADS_IMAGE` → `Picture`, text → `Text`; offset-based chunked reads) |
+| **`m9.14-done`** | **NTX multi-tag binding** — multiple `.ntx` files coexist on one Table (`AdsOpenIndex` / `AdsCreateIndex61` / legacy `AdsCreateIndex` are all additive; same-path reopen refreshes; `AdsCloseIndex` releases extra views without disturbing the active order) |
 
 #### What's left for 0.2.0
 
@@ -192,10 +195,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 - **`*W` Unicode variants** (`AdsGetFieldW`, `AdsSetStringW`,
   `AdsGetStringW`) — UTF-16 surface. Pairs with making the index-
   expression evaluator (`engine/index_expr.cpp`) UTF-16 aware.
-- **NTX multi-tag binding.** Each NTX file is one tag; the multi-
-  tag refactor only landed for CDX in M3.10. Apps that bundle
-  multiple NTX files per `USE` need the same `add_tag` / `open_named`
-  / `list_tags` treatment.
 - **`AdsLockTable` / `AdsUnlockTable` / `AdsIsTableLocked` /
   `AdsLockRecord` / `AdsUnlockRecord`** — already wired in M4 for
   byte-range locks; missing the timeout / retry surface most
