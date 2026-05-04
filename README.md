@@ -88,7 +88,25 @@ Reopen + Seek 'DELTA' (upper) : Found=T RecNo=4 NAME=[delta]
 Done.
 ```
 
-### What works today (0.2.0-dev)
+### Quick start
+
+Building OpenADS produces `ace64.dll` (or `ace32.dll` on x86; on
+POSIX, `libace.so` / `libace.dylib`):
+
+```sh
+git clone https://github.com/FiveTechSoft/OpenADS
+cd OpenADS
+cmake --preset default
+cmake --build build/default --config Release
+ctest --test-dir build/default --output-on-failure -C Release
+```
+
+Drop the resulting `ace64.dll` (under
+`build/default/src/Release/`) onto a Harbour app's `PATH` ahead of
+any SAP-shipped copy and the standard `contrib/rddads` calls land
+on OpenADS without recompiling Harbour.
+
+### What works today (0.2.0)
 
 #### Engine
 
@@ -120,9 +138,17 @@ Done.
 - **Compound key expressions** — `UPPER(field)`, `LOWER(field)`,
   `LTRIM` / `RTRIM` / `ALLTRIM`, `STR(n)` / `STR(n,len)` /
   `STR(n,len,dec)`, `DTOS(date)`, `SUBSTR(s,start[,len])`,
-  string concatenation with `+`. The evaluator runs at index sync
-  time, so an `INDEX ON UPPER(NAME)` tag normalises every key as
-  the app writes records.
+  string concatenation with `+`. `UPPER` / `LOWER` / `SUBSTR` walk
+  UTF-8 codepoints (ASCII + Latin-1 supplement case map, including
+  `ÿ↔Ÿ`); the evaluator runs at index sync time, so an
+  `INDEX ON UPPER(name)` tag normalises every key as the app writes
+  records, including non-ASCII rows produced by `AdsSetStringW`.
+- **Full-text search** — `AdsCreateFTSIndex` writes a clean-room
+  `# OpenADS FTS v0` text file (sorted token + recno-list per row);
+  `AdsFTSSearch` and the SQL `CONTAINS(<col>, '<query>')` predicate
+  intersect per-token recno lists with AND semantics. Tokeniser
+  honours `ulMinWordLen` / `ulMaxWordLen`, custom delimiter +
+  noise-word arrays, and an English stop-word seed.
 - **WAL recovery** — append-only log with CRC-32C records,
   group-commit primitive (`sync_to(lsn)`), per-record LSN, idempotent
   recovery via the `openads.lsnmap` sidecar.
@@ -142,7 +168,11 @@ Done.
 - **Data Dictionary** — `.add` alias resolution; `Connection::open(<.add>)`
   resolves member tables on every `AdsOpenTable`.
 - **Locking** — OS byte-range locks with the same ranges as the
-  original ACE so installs can coexist during migration.
+  original ACE so installs can coexist during migration. Lock
+  acquires are non-blocking (`LockFileEx LOCKFILE_FAIL_IMMEDIATELY`
+  on Windows, `fcntl F_SETLK` on POSIX) and re-attempt up to a
+  configurable retry budget (`AdsSetLockCycle` /
+  `AdsSetLockRetryCount`, defaults 100 ms / 10 retries).
 
 #### ABI
 
@@ -168,10 +198,16 @@ Done.
 
 #### SQL
 
-- Minimal `SELECT * FROM <table> [WHERE col op 'lit' [AND ...]]` —
-  six comparison operators, multi-clause `WHERE` joined by implicit
-  `AND`, compiled to a `Table::RowPredicate` closure used by
-  `AdsExecuteSQLDirect`.
+- `SELECT * FROM <table> [WHERE <pred> [AND <pred>]*]` where each
+  `<pred>` is either an infix comparison `<col> op '<lit>'` (six
+  operators: `=`, `!=` / `<>`, `<`, `>`, `<=`, `>=`) or
+  `CONTAINS(<col>, '<query>')` against a prebuilt `.fts` file. The
+  parser lowers each WHERE term into a row-predicate closure used
+  by `AdsExecuteSQLDirect`; CONTAINS captures a precomputed
+  recno-set so the FTS lookup runs once per query, not per row.
+  Projection lists, `OR` / `NOT` / parens, joins, aggregates,
+  subqueries, `ORDER BY`, and `INSERT` / `UPDATE` / `DELETE` are
+  scheduled for 0.3.x.
 
 #### Tests
 
@@ -246,9 +282,10 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.24-done`     | Local-mode `AdsMg*` surface (15 calls). Synthetic mgmt handle, struct-shaped queries zero-fill caller buffers, list-shaped queries report empty count; apps see "everything quiescent" instead of `AE_FUNCTION_NOT_AVAILABLE`. |
 | `m9.25-done`     | Local-mode `AdsDD*` CRUD surface (14 calls). All 14 accept silently / zero-fill. 0.3.x will replace these no-ops with real persistence in the OpenADS DD format. |
 | `m9.26-done`     | `AdsRestructureTable` (ADD-fields path) — rewrites the DBF with the original schema + `pucAddFields` appended, copies every record's old-field bytes verbatim and blank-pads the new fields. The MISS list is now empty. |
-| **`m9.27-done`** | **CI matrix portability fix** — `legacy_crt_shims.cpp` (the `_dclass` / `_dsign` / `_wfsopen` / `_getch` / `_kbhit` / `_eof` re-exports for Harbour's MSVC2013-era libs) is now a no-op on POSIX builds. Combined with the pre-existing `if(WIN32)` guards on the def file + `platform/file_*` / `lock_*` / `mmap_*` sources, the engine compiles cleanly on Linux + macOS through the existing `.github/workflows/ci.yml` matrix (windows-2022 / ubuntu-22.04 / macos-13). |
+| `m9.27-done`     | CI matrix portability fix — `legacy_crt_shims.cpp` is now a no-op on POSIX builds; the engine compiles cleanly on Linux + macOS through `.github/workflows/ci.yml` (windows-2022 / ubuntu-22.04 / macos-13). |
+| **`v0.2.0`**     | **Final 0.2.0 release** (2026-05-04) |
 
-#### What's left for 0.2.0
+#### Post-0.2.0 polish (rolled into 0.3.x)
 
 - **Linux Harbour smoke install.** The engine builds + tests cleanly
   on Linux + macOS through the CI matrix; what's still missing is a
