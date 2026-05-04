@@ -274,7 +274,7 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | Platforms | Windows (x86 + x64), Linux, macOS, BSD. |
 | Language / build | C++17 with `extern "C"` external ABI. CMake + GitHub Actions. |
 | i18n | OEM ↔ ANSI ↔ UTF-8 ↔ UTF-16 (the API's `*W` variants). |
-| License | MIT. |
+| License | Apache License 2.0. |
 
 ## Architecture
 
@@ -352,7 +352,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 OpenADS/
 ├── CMakeLists.txt              # top-level build, presets per platform
 ├── CMakePresets.json
-├── LICENSE                     # MIT
+├── LICENSE                     # Apache License 2.0
+├── NOTICE                      # attribution + trademark notice
 ├── README.md
 ├── docs/
 │   ├── architecture.md
@@ -363,10 +364,10 @@ OpenADS/
 │   └── sql-grammar.md          # Advantage SQL EBNF + diffs
 │
 ├── third_party/                # vendored deps
-│   ├── tinyaes/                # AES-128/256 (MIT)
-│   ├── utf8.h/                 # UTF conversion (MIT)
+│   ├── tinyaes/                # AES-128/256 (Unlicense)
+│   ├── utf8.h/                 # UTF conversion (Unlicense)
 │   ├── doctest/                # unit test framework (MIT)
-│   └── ace-headers/            # ace.h, adscd.h (Sybase, redistribution OK)
+│   └── ace-headers/            # OpenADS-authored ace.h compatibility surface
 │
 ├── include/openads/            # public C++ headers (consumed by L1)
 │   ├── engine.h
@@ -1271,4 +1272,14 @@ Other presets: `debug`, `msvc-x64`, `ninja-clang` — see `CMakePresets.json`.
 
 ## License
 
-MIT.
+Apache License 2.0. See [`LICENSE`](LICENSE) for the full text and
+[`NOTICE`](NOTICE) for attribution metadata.
+
+Bundled third-party components keep their own licenses:
+
+- `third_party/tinyaes/` — tiny-AES-c by kokke, released into the public
+  domain under the Unlicense (https://unlicense.org/).
+- `third_party/doctest/` — doctest by onqtam, released under the MIT
+  License.
+- `third_party/utf8.h/` — utf8.h by sheredom, released under the
+  Unlicense.
