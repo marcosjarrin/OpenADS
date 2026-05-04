@@ -6,14 +6,16 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0-rc1** — drop-in replacement validated end-to-end.
+**0.1.0** — drop-in replacement validated end-to-end.
 
 A real Harbour application, compiled against the standard
 `contrib/rddads` static library, opens a DBF, walks records, runs
-`dbSeek`, appends rows, writes per-field values, and reopens to
-verify durability — all calls land on OpenADS' `ace64.dll` with no
-Harbour rebuild. See `tests/harbour_smoke/README.md` for the full
-captured output.
+`dbSeek`, **swaps focus across multiple CDX tags**, **runs ARIES
+transactions** with rollback semantics, **reads and writes memo
+fields**, and reopens to verify durability — every call lands on
+OpenADS' `ace64.dll` with no Harbour rebuild. See
+`tests/harbour_smoke/README.md` for the captured output of every
+M8.0–M8.11 milestone.
 
 ```
 $ smoke.exe
@@ -30,7 +32,7 @@ Reopen & dbSeek 'DELTA': Found=T NAME=[DELTA] AGE=99 ACTIVE=F BORN=20260101
 Done.
 ```
 
-### What works in 0.1.0-rc1
+### What works in 0.1.0
 
 - **DBF read/write** — Character / Numeric / Logical / Date columns,
   positional + by-name field access, APPEND BLANK, per-field
@@ -55,13 +57,11 @@ Done.
 
 ### What's deferred to 0.2.0
 
-- Multi-tag focus through `OrdSetFocus` (M8.9).
-- Harbour `BeginTransaction` / `CommitTransaction` end-to-end smoke
-  (M8.10 — engine-side WAL is M5.4/M5.5 done; ABI plumbing pending).
-- Memo M-field round-trip via Harbour `FieldGet` / `FieldPut` (M8.11).
-- Compound CDX expressions (`UPPER(NAME)`, concatenations) in
-  `Table::compute_index_key_`.
-- Real impls for the 140 remaining `Ads*` stubs.
+- Compound CDX key expressions (`UPPER(NAME)`, concatenations) in
+  `Table::compute_index_key_` — only bare field names are supported
+  today.
+- Real implementations for the remaining ~120 `Ads*` stubs (most of
+  the cache / managment / Find-table family).
 - Linux / macOS / BSD builds (the engine is portable; only the
   Harbour smoke is Windows-anchored today).
 - Full Advantage SQL dialect, AEP host, ADT / VFP / ADI formats,
@@ -1049,9 +1049,9 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 - **135 doctest cases / 1820 assertions passing** on Windows / MSVC 2022 Release.
 - **~80 ACE entry points wired** (read / write / lock / index / scope / memo / encryption / autoinc / transaction / savepoint / data dictionary / SQL).
 - **Persistent WAL with crash recovery** is byte-identical for OpenADS-produced files.
-- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`, `m8.1-partial`, `m8.2-done`, `m8.3-done`, `m8.4-done`, `m8.5-done`, `m8.6-done`, `m8.7-partial`, `m8.8-done`, `m8.9-done`, `m8.10-done`, `m8.11-done`, `0.1.0-rc1`.
+- **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`, `m8.1-partial`, `m8.2-done`, `m8.3-done`, `m8.4-done`, `m8.5-done`, `m8.6-done`, `m8.7-partial`, `m8.8-done`, `m8.9-done`, `m8.10-done`, `m8.11-done`, `0.1.0-rc1`, `0.1.0`.
 - **Drop-in DLL:** `ace64.dll` (Win x64) and `ace32.dll` (Win x86) build from the `openads_ace` SHARED target, exporting **226 `Ads*` entry points** plus 6 legacy MSVC2013-era CRT shims (`_dclass`, `_dsign`, `_wfsopen`, `_getch`, `_kbhit`, `_eof`) referenced by Harbour's prebuilt `msvc64` libs. 80 of the `Ads*` are real implementations (M0–M7); the rest are M8.1 stubs that return `AE_FUNCTION_NOT_AVAILABLE` (5004).
-- **End-to-end Harbour validation (M8.3):** `tests/harbour_smoke/smoke.prg` opens a real DBF through `USE data VIA "ADSCDX"`, walks its records, and prints each row's data — every call lands on OpenADS' `ace64.dll`. See `tests/harbour_smoke/README.md` for the captured output and the M8.3 fix list.
+- **End-to-end Harbour validation (M8.3–M8.11):** `tests/harbour_smoke/smoke.prg` exercises the full read + write + index + multi-tag focus + transactions + memo path through `rddads.lib` and OpenADS' `ace64.dll`. See `tests/harbour_smoke/README.md` for captured outputs.
 
 ### Working on a milestone
 

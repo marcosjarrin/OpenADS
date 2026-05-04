@@ -5,6 +5,71 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 0.1.0 — 2026-05-04
+
+Final 0.1.0. The post-rc1 work below extends the Harbour smoke
+beyond the read path covered in 0.1.0-rc1: a real Harbour app now
+also drives multi-tag focus swaps, ARIES-style transactions, and
+memo M-field round-trips end-to-end through OpenADS' `ace64.dll`.
+
+### M8.9 — Multi-tag CDX + OrdSetFocus
+
+- `AdsOpenIndex` widened to its real 4-arg signature
+  `(hTable, pucName, ahIndex[], &pu16ArrayLen)`. Every tag inside a
+  compound CDX is opened by name through `CdxIndex::open_named`;
+  the first tag's IIndex moves into `Table::set_order` and the rest
+  park in their bindings.
+- `Table::take_order()` / `Order::release()` surrender the active
+  index's `unique_ptr<IIndex>` so a focus swap can park it in the
+  previous binding's slot.
+- `get_table` and `table_for_index` now call `activate_binding(h)`
+  whenever a navigation call arrives with an index handle, so
+  rddads' `pArea->hOrdCurrent` swaps drive the Table's active order
+  in lockstep.
+- `AdsGetIndexHandle` strips trailing whitespace from the caller's
+  tag name; `AdsGetIndexName` / `AdsGetIndexExpr` read each
+  binding's metadata directly so parked tags report their real name
+  even before they become live.
+- `AdsGetNumIndexes` returns the per-table binding count.
+
+### M8.10 — Transactions through Harbour
+
+- A real Harbour app drives `AdsBeginTransaction` /
+  `AdsRollback` / `AdsCommitTransaction` directly. BEGIN + APPEND +
+  ROLLBACK leaves the appended row in the DBF flagged deleted (CDX
+  index entries persist by design — `Found()` still reports `T` but
+  `Deleted()` is `T`); BEGIN + APPEND + COMMIT persists durably to
+  both the DBF and every CDX tag.
+- `Table::register_extra_index_view` /
+  `Table::unregister_extra_index_view` /
+  `Table::clear_extra_index_views` track the parked CDX sub-tags as
+  non-owning views; the binding still owns the IIndex lifetime.
+- `Table::snapshot_index_keys_()` captures the pre-write key per
+  index — active order plus extras — and `sync_all_indexes_(snap)`
+  erases each prior `(recno, prev_key)` and inserts the new one in
+  lockstep, so a `set_field` on a multi-tag CDX keeps every tag
+  consistent (M8.8 only synced the active order).
+- `Table::flush()` flushes the active order **and** every extra
+  view so a multi-tag commit reaches disk for every tag.
+
+### M8.11 — Memo M-fields (FPT)
+
+- A real Harbour app appends rows whose `FIELD->NOTES` carries a
+  short memo (43 bytes) and a longer memo (280 bytes), closes the
+  area, reopens, and reads the memos back via the standard Clipper
+  RDD surface.
+- `make_cdx.exe` now also writes an empty `data.fpt` next to
+  `data.cdx` via `FptMemo::create`, so `Connection::open_table` finds
+  a memo store to auto-attach when the DBF declares an M field.
+- `AdsGetMemoLength` / `AdsGetMemoDataType` / `AdsGetString` are now
+  real implementations using `resolve_field_index` (M4 had earlier
+  versions that only accepted string field names; rddads passes the
+  `ADSFIELD(n)` integer form).
+- `AdsCloseTable` flushes the table before releasing the handle so
+  non-transactional appends reach disk on `USE` close.
+- `ADS_MEMO_TEXT` / `ADS_MEMO_PICTURE` aliases resolve to the
+  M8.4-verified `ADS_STRING` (4) and `ADS_IMAGE` (7) values.
+
 ## 0.1.0-rc1 — 2026-05-03
 
 First end-to-end validation against Harbour `contrib/rddads`. A real
