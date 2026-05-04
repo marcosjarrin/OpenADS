@@ -427,11 +427,27 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected FROM", sql};
     }
     stmt.table = c.read_identifier_or_filename();
-    if (c.match_keyword("INNER")) {
+    bool is_left_join = false;
+    bool saw_join_keyword = false;
+    if (c.match_keyword("LEFT")) {
+        c.match_keyword("OUTER");   // optional
+        if (!c.match_keyword("JOIN")) {
+            return util::Error{7200, 0, "expected JOIN after LEFT", sql};
+        }
+        is_left_join = true;
+        saw_join_keyword = true;
+    } else if (c.match_keyword("INNER")) {
         if (!c.match_keyword("JOIN")) {
             return util::Error{7200, 0, "expected JOIN after INNER", sql};
         }
+        saw_join_keyword = true;
+    } else if (c.match_keyword("JOIN")) {
+        // Bare JOIN — treated as INNER per SQL convention.
+        saw_join_keyword = true;
+    }
+    if (saw_join_keyword) {
         JoinClause j;
+        j.is_left = is_left_join;
         j.table = c.read_identifier_or_filename();
         if (j.table.empty()) {
             return util::Error{7200, 0,

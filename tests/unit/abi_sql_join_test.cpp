@@ -114,6 +114,51 @@ TEST_CASE("M10.14 INNER JOIN materialises matched rows") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.16 LEFT OUTER JOIN keeps left rows without a match") {
+    auto dir = fs::temp_directory_path() / "openads_m10_16_left";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "ZZZZ"}});   // no matching customer
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[200] =
+        "SELECT * FROM ord.dbf LEFT OUTER JOIN cus.dbf ON CUST = CUST";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);   // O01 matches Alice; O02 keeps left + blank right
+
+    REQUIRE(AdsGotoRecord(hCur, 2) == 0);   // O02 row
+    UNSIGNED8 rname[16] = "R_NAME";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hCur, rname, buf, &cap, 0) == 0);
+    auto v = std::string(reinterpret_cast<const char*>(buf), cap);
+    while (!v.empty() && v.back() == ' ') v.pop_back();
+    CHECK(v.empty());   // blank right for outer-left match
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.14 INNER JOIN drops rows without a match") {
     auto dir = fs::temp_directory_path() / "openads_m10_14_join_miss";
     std::error_code ec;

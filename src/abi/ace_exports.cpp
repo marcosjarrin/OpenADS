@@ -4022,6 +4022,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         file.push_back(0x0D);
 
         // Walk left, build merged rows for matched right recnos.
+        // For LEFT OUTER joins, emit a single row with blank right
+        // fields when no right match exists (M10.16).
         std::uint32_t lrc = ltbl->record_count();
         std::uint32_t emitted = 0;
         for (std::uint32_t l = 1; l <= lrc; ++l) {
@@ -4030,25 +4032,36 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             auto lv = ltbl->read_field(static_cast<std::uint16_t>(lcol));
             if (!lv) continue;
             auto rit = rmap.find(trim_trailing(lv.value().as_string));
-            if (rit == rmap.end()) continue;
             auto lraw = ltbl->driver()->read_record_raw(l);
             if (!lraw) continue;
             const auto& lbuf = lraw.value();
-            for (std::uint32_t rr : rit->second) {
-                auto rraw = rtbl->driver()->read_record_raw(rr);
-                if (!rraw) continue;
-                const auto& rbuf = rraw.value();
+
+            auto emit_with_right = [&](const std::uint8_t* rbytes,
+                                       std::size_t rsize) {
                 std::vector<std::uint8_t> mrec(merged_rec, ' ');
                 mrec[0] = lbuf.empty() ? ' ' : lbuf[0];
                 if (lrec > 1 && lbuf.size() >= lrec) {
                     std::memcpy(mrec.data() + 1, lbuf.data() + 1, lrec - 1);
                 }
-                if (rrec > 1 && rbuf.size() >= rrec) {
+                if (rbytes != nullptr && rrec > 1 && rsize >= rrec) {
                     std::memcpy(mrec.data() + lrec,
-                                rbuf.data() + 1, rrec - 1);
+                                rbytes + 1, rrec - 1);
                 }
                 file.insert(file.end(), mrec.begin(), mrec.end());
                 ++emitted;
+            };
+
+            if (rit == rmap.end()) {
+                if (j.is_left) {
+                    emit_with_right(nullptr, 0);
+                }
+                continue;
+            }
+            for (std::uint32_t rr : rit->second) {
+                auto rraw = rtbl->driver()->read_record_raw(rr);
+                if (!rraw) continue;
+                const auto& rbuf = rraw.value();
+                emit_with_right(rbuf.data(), rbuf.size());
             }
         }
         file.push_back(0x1A);
