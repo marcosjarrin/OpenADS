@@ -4,6 +4,7 @@
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
+#include "engine/fts.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
 #include "session/connection.h"
@@ -1752,6 +1753,117 @@ UNSIGNED32 AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
 
 UNSIGNED32 AdsDeleteIndex(ADSHANDLE hIndex) {
     return AdsCloseIndex(hIndex);
+}
+
+// --- M9.19 Full-text search ------------------------------------------------
+//
+// Creates an OpenADS-native `.fts` inverted-index file alongside the
+// table. The format is plain UTF-8 text — clean-room, NOT derived
+// from any proprietary ADS FTS layout. Search support (token lookup
+// at query time) is a follow-up milestone; today the create path
+// gives apps a stable artefact to commit and visit.
+//
+// Most of the optional configuration knobs are honoured: min/max
+// word length, custom delimiter / noise-word arrays. The page-size,
+// drop-char, conditional-char, and reserved arguments are accepted
+// (so the ABI shape matches rddads' ADSCREATEFTSINDEX call) and
+// don't affect today's text emitter.
+
+}  // extern "C"
+
+namespace {
+
+openads::engine::FtsOptions
+build_fts_options(UNSIGNED32  ulMinWordLen, UNSIGNED32  ulMaxWordLen,
+                  UNSIGNED16  usUseDefaultDelim,
+                  const UNSIGNED8* pucDelimiters,
+                  UNSIGNED16  usUseDefaultNoise,
+                  const UNSIGNED8* pucNoiseWords) {
+    openads::engine::FtsOptions opts;
+    if (ulMinWordLen > 0) opts.min_word_len = ulMinWordLen;
+    if (ulMaxWordLen > 0) opts.max_word_len = ulMaxWordLen;
+
+    if (!usUseDefaultDelim && pucDelimiters != nullptr) {
+        opts.extra_delims = openads::abi::to_internal(
+            const_cast<UNSIGNED8*>(pucDelimiters), 0);
+    }
+
+    if (usUseDefaultNoise) {
+        // Standard English stop-word seed; apps can override.
+        for (auto* w : {"a", "an", "the", "and", "or", "but", "if",
+                        "of", "in", "on", "at", "to", "for", "is",
+                        "are", "was", "were", "be", "by", "with",
+                        "as", "from", "this", "that", "these",
+                        "those", "it", "its", "not"}) {
+            opts.noise_words.insert(w);
+        }
+    } else if (pucNoiseWords != nullptr) {
+        auto raw = openads::abi::to_internal(
+            const_cast<UNSIGNED8*>(pucNoiseWords), 0);
+        std::string cur;
+        for (char c : raw) {
+            if (c == ' ' || c == '\t' || c == ',' || c == ';' || c == '\n') {
+                if (!cur.empty()) { opts.noise_words.insert(cur); cur.clear(); }
+            } else {
+                cur.push_back(static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(c))));
+            }
+        }
+        if (!cur.empty()) opts.noise_words.insert(cur);
+    }
+    return opts;
+}
+
+}  // namespace
+
+extern "C" {
+
+UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
+                             UNSIGNED8*  pucFileName,
+                             UNSIGNED8*  pucTag,
+                             UNSIGNED8*  pucField,
+                             UNSIGNED32  /*ulPageSize*/,
+                             UNSIGNED32  ulMinWordLen,
+                             UNSIGNED32  ulMaxWordLen,
+                             UNSIGNED16  usUseDefaultDelim,
+                             UNSIGNED8*  pucDelimiters,
+                             UNSIGNED16  usUseDefaultNoise,
+                             UNSIGNED8*  pucNoiseWords,
+                             UNSIGNED16  /*usUseDefaultDrop*/,
+                             UNSIGNED8*  /*pucDropChars*/,
+                             UNSIGNED16  /*usUseDefaultConditionals*/,
+                             UNSIGNED8*  /*pucConditionalChars*/,
+                             UNSIGNED8*  /*pucReserved1*/,
+                             UNSIGNED8*  /*pucReserved2*/,
+                             UNSIGNED32  /*ulOptions*/) {
+    Table* t = get_table(hTable);
+    if (!t || pucTag == nullptr || pucField == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "AdsCreateFTSIndex: null arg");
+    }
+    auto tag   = openads::abi::to_internal(pucTag, 0);
+    auto field = openads::abi::to_internal(pucField, 0);
+
+    namespace fs = std::filesystem;
+    fs::path p;
+    if (pucFileName != nullptr && pucFileName[0] != '\0') {
+        p = openads::abi::to_internal(pucFileName, 0);
+    } else {
+        // Compound auto-open form: file lives next to the table with
+        // the table's stem and a `.fts` extension.
+        p = fs::path(t->path()).replace_extension(".fts");
+    }
+    if (!p.is_absolute()) {
+        fs::path tdir = fs::path(t->path()).parent_path();
+        p = tdir / p;
+    }
+    if (!p.has_extension()) p.replace_extension(".fts");
+
+    auto opts = build_fts_options(ulMinWordLen, ulMaxWordLen,
+                                  usUseDefaultDelim, pucDelimiters,
+                                  usUseDefaultNoise, pucNoiseWords);
+    auto r = openads::engine::Fts::create(*t, p.string(), tag, field, opts);
+    if (!r) return fail(r.error());
+    return ok();
 }
 
 UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {

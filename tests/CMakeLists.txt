@@ -56,6 +56,7 @@ add_executable(openads_unit_tests
     unit/abi_server_info_test.cpp
     unit/abi_unicode_test.cpp
     unit/abi_lock_retry_test.cpp
+    unit/abi_fts_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

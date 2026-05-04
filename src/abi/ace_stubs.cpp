@@ -181,7 +181,6 @@ uint32_t AdsSetRecord           () { return OK; }
 // Return AE_FUNCTION_NOT_AVAILABLE so callers can detect that the
 // underlying feature is not yet implemented in OpenADS.
 uint32_t AdsAddCustomKey         () { return MISS; }
-uint32_t AdsCreateFTSIndex       () { return MISS; }
 uint32_t AdsDDAddIndexFile       () { return MISS; }
 uint32_t AdsDDAddUserToGroup     () { return MISS; }
 uint32_t AdsDDCreateLink         () { return MISS; }

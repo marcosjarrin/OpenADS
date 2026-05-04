@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (19 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (20 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -168,7 +168,7 @@ Done.
 
 #### Tests
 
-- **179 doctest cases / 3473 assertions** passing on Windows / MSVC
+- **182 doctest cases / 3499 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -230,15 +230,17 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.15-done`     | Real `AdsGetServerName` / `AdsGetServerTime` — local host name + ISO date / `HH:MM:SS` time + ms-of-day, plus the 6-arg `AdsGetServerTime` shape rddads' `ADSGETSERVERTIME` actually expects (the previous 2-arg stub left rddads' on-stack date/time bufs uninitialised). Also fixes a latent index-binding leak: `AdsCloseTable` / `AdsCloseAllTables` / `AdsDisconnect` now purge the global binding map so a future Table allocation at the same heap address can't inherit stale entries. |
 | `m9.16-done`     | Chunked `AdsSetBinary` — per-`(table, field)` accumulator lets rddads deliver an oversized `ADS_BINARY` / `ADS_IMAGE` payload across several calls (`ulOffset != 0`, `ulBytes < ulTotalBytes`); the field only lands in the memo store once every byte arrives. Mid-write chunks that would run past the announced total fail; pending state is dropped at table teardown. |
 | `m9.17-done`     | Unicode `*W` variants — `AdsSetStringW` / `AdsGetStringW` / `AdsGetFieldW`. UTF-16LE ↔ UTF-8 transcoding at the ABI boundary; field names accept both UTF-16 NUL-terminated strings and `ADSFIELD(n)`-style numeric indices (low-pointer encoded). Engine continues to store byte sequences without a fixed codepage assumption. |
-| **`m9.18-done`** | **Lock retry / cycle policy** — `AdsSetLockCycle` / `AdsGetLockCycle` / `AdsSetLockRetryCount` / `AdsGetLockRetryCount` (ms between attempts + retry count, defaults 100 ms / 10 retries). `AdsLockTable` / `AdsLockRecord` switched to non-blocking byte-range acquires (`LockMgr::try_lock_*` / `LockFileEx LOCKFILE_FAIL_IMMEDIATELY` / `fcntl F_SETLK`) and re-attempt up to the configured budget before reporting `AE_LOCKED`. |
+| `m9.18-done`     | Lock retry / cycle policy — `AdsSetLockCycle` / `AdsGetLockCycle` / `AdsSetLockRetryCount` / `AdsGetLockRetryCount` (ms between attempts + retry count, defaults 100 ms / 10 retries). `AdsLockTable` / `AdsLockRecord` switched to non-blocking byte-range acquires (`LockMgr::try_lock_*` / `LockFileEx LOCKFILE_FAIL_IMMEDIATELY` / `fcntl F_SETLK`) and re-attempt up to the configured budget before reporting `AE_LOCKED`. |
+| **`m9.19-done`** | **`AdsCreateFTSIndex`** — clean-room OpenADS-native `.fts` inverted-index file (UTF-8 text: `# OpenADS FTS v0` header + sorted `<token>\t<recno1>,<recno2>,...` rows). Tokeniser respects `ulMinWordLen` / `ulMaxWordLen`, custom delimiter / noise-word arrays, plus a default ASCII delimiter set and an English stop-word seed. Search-side functions remain a follow-up milestone. |
 
 #### What's left for 0.2.0
 
 - **Linux / macOS / BSD builds.** The engine is portable C++17; only
   the Harbour smoke harness is Windows-anchored today (it links
   against `c:\harbour\…`). CI matrix + Linux Harbour install needed.
-- **`AdsCreateFTSIndex`** — full-text search index. Needs an inverted
-  posting list per tag, plus tokeniser + stop-word handling.
+- **FTS search-side ABI** — M9.19 lands `AdsCreateFTSIndex`; query-time
+  token lookup (e.g. an `AdsFTSSearch` entry point) and the SQL
+  `CONTAINS(...)` predicate are the next layer.
 - **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
   entries (apps that pre-compute keys outside the engine and inject
   them by recno). `AdsExtractKey` is already real (M9.6).
@@ -247,10 +249,12 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   UPPER(name)` tag will normalise wide-character keys correctly.
   M9.17 wired the `*W` ABI surface; the evaluator step is the
   follow-up.
-- **Compatible page-sized index pages.** `AdsCreateIndex61` accepts
-  a `usPageSize` parameter; today it's ignored (CDX uses 512, NTX
-  uses 1024). Apps that opt into 4 KiB or 8 KiB pages don't yet get
-  what they asked for.
+- **`usPageSize` honoured beyond NTX/CDX.** `AdsCreateIndex61` /
+  `AdsCreateFTSIndex` accept a `usPageSize` argument. NTX (1024)
+  and FoxPro CDX (512) are fixed-size by their on-disk format —
+  matching the behaviour of the original ACE — so OpenADS records
+  the value but doesn't change the layout. Variable page sizes will
+  land alongside the proprietary ADI driver in 0.3.x.
 
 ### 0.3.x — proprietary formats + advanced SQL (PLANNED)
 
