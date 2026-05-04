@@ -78,18 +78,123 @@ struct Value {
     double      n = 0.0;
 };
 
-std::string upper_ascii(const std::string& s) {
-    std::string out = s;
-    for (auto& c : out) {
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+// ---- UTF-8 codepoint walker (M9.22) --------------------------------------
+//
+// UPPER / LOWER / SUBSTR walk codepoints instead of bytes so an index
+// expression like UPPER(name) over a UTF-8 column normalises non-ASCII
+// characters (ñ → Ñ, ç → Ç, é → É, …) instead of leaving the multi-byte
+// sequence unchanged. The case-mapping table covers ASCII + Latin-1
+// supplement + the U+00FF / U+0178 pair; codepoints outside that range
+// pass through untouched (full Unicode case folding is ICU territory
+// and out of scope until the engine carries an ICU dependency).
+
+std::uint32_t utf8_decode_at(const std::string& s, std::size_t& i) {
+    if (i >= s.size()) return 0xFFFD;
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    std::uint32_t cp = 0xFFFD;
+    std::size_t adv = 1;
+    auto byte = [&](std::size_t k) {
+        return static_cast<unsigned char>(s[k]);
+    };
+    if (c < 0x80) {
+        cp = c;
+    } else if ((c & 0xE0) == 0xC0 && i + 1 < s.size() &&
+               (byte(i + 1) & 0xC0) == 0x80) {
+        cp = (static_cast<std::uint32_t>(c & 0x1F) << 6) |
+              static_cast<std::uint32_t>(byte(i + 1) & 0x3F);
+        adv = 2;
+    } else if ((c & 0xF0) == 0xE0 && i + 2 < s.size() &&
+               (byte(i + 1) & 0xC0) == 0x80 &&
+               (byte(i + 2) & 0xC0) == 0x80) {
+        cp = (static_cast<std::uint32_t>(c & 0x0F) << 12) |
+             (static_cast<std::uint32_t>(byte(i + 1) & 0x3F) << 6) |
+              static_cast<std::uint32_t>(byte(i + 2) & 0x3F);
+        adv = 3;
+    } else if ((c & 0xF8) == 0xF0 && i + 3 < s.size() &&
+               (byte(i + 1) & 0xC0) == 0x80 &&
+               (byte(i + 2) & 0xC0) == 0x80 &&
+               (byte(i + 3) & 0xC0) == 0x80) {
+        cp = (static_cast<std::uint32_t>(c & 0x07) << 18) |
+             (static_cast<std::uint32_t>(byte(i + 1) & 0x3F) << 12) |
+             (static_cast<std::uint32_t>(byte(i + 2) & 0x3F) << 6) |
+              static_cast<std::uint32_t>(byte(i + 3) & 0x3F);
+        adv = 4;
+    }
+    i += adv;
+    return cp;
+}
+
+void utf8_encode(std::string& out, std::uint32_t cp) {
+    if (cp < 0x80) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0u | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else if (cp < 0x10000) {
+        out.push_back(static_cast<char>(0xE0u | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else {
+        out.push_back(static_cast<char>(0xF0u | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    }
+}
+
+std::uint32_t to_upper_cp(std::uint32_t cp) {
+    if (cp >= 'a' && cp <= 'z') return cp - 0x20;
+    // Latin-1 supplement: à..þ → À..Þ, skipping ÷ at 0xF7.
+    if (cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) return cp - 0x20;
+    if (cp == 0xFF) return 0x178;   // ÿ → Ÿ
+    return cp;
+}
+
+std::uint32_t to_lower_cp(std::uint32_t cp) {
+    if (cp >= 'A' && cp <= 'Z') return cp + 0x20;
+    if (cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) return cp + 0x20;
+    if (cp == 0x178) return 0xFF;
+    return cp;
+}
+
+std::string upper_utf8(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    std::size_t i = 0;
+    while (i < s.size()) {
+        std::uint32_t cp = utf8_decode_at(s, i);
+        utf8_encode(out, to_upper_cp(cp));
     }
     return out;
 }
 
-std::string lower_ascii(const std::string& s) {
-    std::string out = s;
-    for (auto& c : out) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+std::string lower_utf8(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    std::size_t i = 0;
+    while (i < s.size()) {
+        std::uint32_t cp = utf8_decode_at(s, i);
+        utf8_encode(out, to_lower_cp(cp));
+    }
+    return out;
+}
+
+std::string substr_utf8(const std::string& s, int start_1based, int len) {
+    if (start_1based < 1) start_1based = 1;
+    if (len < 0) len = 0;
+    std::string out;
+    std::size_t i = 0;
+    int char_index = 0;       // 0-based codepoint counter
+    int copied = 0;
+    while (i < s.size() && copied < len) {
+        std::size_t before = i;
+        (void)utf8_decode_at(s, i);   // advance one codepoint
+        if (char_index + 1 >= start_1based) {
+            out.append(s, before, i - before);
+            ++copied;
+        }
+        ++char_index;
+        if (i == before) break;   // safety on malformed input
     }
     return out;
 }
@@ -165,7 +270,7 @@ private:
                     }
                 }
                 if (peek().kind == TokKind::RParen) ++pos_;
-                return call(upper_ascii(name), args);
+                return call(upper_utf8(name), args);
             }
             return field_or_empty(name);
         }
@@ -219,9 +324,9 @@ private:
         Value v;
         v.is_number = false;
         if (fn == "UPPER" && args.size() >= 1) {
-            v.s = upper_ascii(args[0].s);
+            v.s = upper_utf8(args[0].s);
         } else if (fn == "LOWER" && args.size() >= 1) {
-            v.s = lower_ascii(args[0].s);
+            v.s = lower_utf8(args[0].s);
         } else if (fn == "LTRIM" && args.size() >= 1) {
             v.s = ltrim_ascii(args[0].s);
         } else if (fn == "RTRIM" && args.size() >= 1) {
@@ -245,10 +350,7 @@ private:
             int len   = args.size() >= 3 && args[2].is_number
                       ? static_cast<int>(args[2].n)
                       : static_cast<int>(s.size());
-            if (start < 1) start = 1;
-            std::size_t off = static_cast<std::size_t>(start - 1);
-            if (off >= s.size()) return v;
-            v.s = s.substr(off, static_cast<std::size_t>(std::max(0, len)));
+            v.s = substr_utf8(s, start, len);
         } else {
             // Unknown function — return empty string.
         }
