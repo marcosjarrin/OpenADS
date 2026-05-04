@@ -102,6 +102,13 @@ UNSIGNED32 AdsGetLastError  (UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
 UNSIGNED32 AdsGetVersion    (UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
                               UNSIGNED32* pulLetter, UNSIGNED32* pulDesc);
 
+UNSIGNED32 AdsGetServerName (ADSHANDLE   hConnect,
+                              UNSIGNED8*  pucBuf, UNSIGNED16* pusLen);
+UNSIGNED32 AdsGetServerTime (ADSHANDLE   hConnect,
+                              UNSIGNED8*  pucDateBuf, UNSIGNED16* pusDateLen,
+                              SIGNED32*   plTime,
+                              UNSIGNED8*  pucTimeBuf, UNSIGNED16* pusTimeLen);
+
 UNSIGNED32 AdsAppendRecord  (ADSHANDLE hTable);
 UNSIGNED32 AdsWriteRecord   (ADSHANDLE hTable);
 UNSIGNED32 AdsDeleteRecord  (ADSHANDLE hTable);

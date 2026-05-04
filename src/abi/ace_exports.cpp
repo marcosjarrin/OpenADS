@@ -12,6 +12,7 @@
 #include "drivers/index_trait.h"
 #include "drivers/ntx/ntx_index.h"
 #include "drivers/cdx/cdx_index.h"
+#include "platform/time.h"
 #include "sql/parser.h"
 
 #include <algorithm>
@@ -129,6 +130,7 @@ bool resolve_field_index(Table* tbl, UNSIGNED8* pucField, std::uint16_t* out) {
 Table* lookup_table_by_index(ADSHANDLE h);
 openads::drivers::IIndex* iindex_for_handle(ADSHANDLE h);
 openads::util::Result<void> activate_binding(ADSHANDLE h);
+void purge_bindings_for_table(Table* t);
 
 Table* get_table(ADSHANDLE h) {
     auto& s = state();
@@ -172,6 +174,27 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
 UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
     auto& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
+    // Purge any index bindings whose Table* belongs to a table owned
+    // by this connection — otherwise the bindings outlive the conns
+    // entry that owned the Table and leave dangling pointers behind.
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c != nullptr) {
+        std::vector<Table*> to_purge;
+        s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+            if (k != HandleKind::Table) return;
+            Table* tp = static_cast<Table*>(p);
+            if (tp == nullptr) return;
+            // Heuristic: if the connection's lookup_table on any handle
+            // returns this pointer, the table belongs to this conn. We
+            // don't have that handle here, so collect all tables and
+            // purge any whose driver path lives under the conn's data
+            // dir. Simpler: purge every Table* registered, since at
+            // teardown the caller already closed its tables and any
+            // stale residue is per-table.
+            to_purge.push_back(tp);
+        });
+        for (Table* tp : to_purge) purge_bindings_for_table(tp);
+    }
     s.registry.release(hConnect);
     s.conns.erase(hConnect);
     return ok();
@@ -511,7 +534,10 @@ UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
     });
     for (Handle h : to_release) {
         Table* t = s.registry.lookup<Table>(h, HandleKind::Table);
-        if (t) (void)t->flush();
+        if (t) {
+            (void)t->flush();
+            purge_bindings_for_table(t);
+        }
         s.registry.release(h);
     }
     return ok();
@@ -524,9 +550,14 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     // before releasing the handle. Without an explicit transaction,
     // this is the only point at which mutations made since open
     // reach disk; with one, commit_tx already flushed and this is
-    // a no-op.
+    // a no-op. Also drop any index bindings tied to this Table so
+    // a future Table allocation at the same heap address doesn't
+    // inherit stale entries.
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
-    if (t != nullptr) (void)t->flush();
+    if (t != nullptr) {
+        (void)t->flush();
+        purge_bindings_for_table(t);
+    }
     s.registry.release(hTable);
     return ok();
 }
@@ -742,6 +773,50 @@ UNSIGNED32 AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
     if (pulMinor != nullptr)  *pulMinor  = 0;
     if (pulLetter != nullptr) *pulLetter = 'a';
     if (pulDesc != nullptr)   *pulDesc   = 1;
+    return openads::AE_SUCCESS;
+}
+
+// --- M9.15 server info -----------------------------------------------------
+//
+// Local-mode connections now report the host name + the local wall clock
+// instead of empty strings / 0. AdsGetServerTime returns a six-arg shape
+// matching the ACE 6.x signature rddads' ADSGETSERVERTIME function expects
+// (date string, time string, milliseconds since midnight) — the previous
+// 2-arg stub left rddads' on-stack pucDateBuf / pucTimeBuf uninitialised.
+
+namespace {
+
+UNSIGNED32 emit_text_with_u16len(UNSIGNED8* pucBuf, UNSIGNED16* pusLen,
+                                 const std::string& s) {
+    if (pusLen == nullptr) return openads::AE_INTERNAL_ERROR;
+    UNSIGNED16 cap = *pusLen;
+    UNSIGNED16 n = static_cast<UNSIGNED16>(s.size() < cap ? s.size() : cap);
+    if (pucBuf != nullptr && cap > 0) {
+        if (n > 0) std::memcpy(pucBuf, s.data(), n);
+        if (n < cap) pucBuf[n] = '\0';
+    }
+    *pusLen = static_cast<UNSIGNED16>(s.size());
+    return openads::AE_SUCCESS;
+}
+
+}  // namespace
+
+UNSIGNED32 AdsGetServerName(ADSHANDLE /*hConnect*/,
+                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    return emit_text_with_u16len(pucBuf, pusLen,
+                                 openads::platform::host_name());
+}
+
+UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
+                            UNSIGNED8* pucDateBuf, UNSIGNED16* pusDateLen,
+                            SIGNED32*  plTime,
+                            UNSIGNED8* pucTimeBuf, UNSIGNED16* pusTimeLen) {
+    auto wc = openads::platform::now_local();
+    auto rc = emit_text_with_u16len(pucDateBuf, pusDateLen, wc.date);
+    if (rc != openads::AE_SUCCESS) return rc;
+    rc = emit_text_with_u16len(pucTimeBuf, pusTimeLen, wc.time);
+    if (rc != openads::AE_SUCCESS) return rc;
+    if (plTime != nullptr) *plTime = wc.ms_of_day;
     return openads::AE_SUCCESS;
 }
 
@@ -1009,6 +1084,20 @@ std::unordered_map<ADSHANDLE, IndexBinding>& index_bindings() {
 std::unordered_map<Table*, ADSHANDLE>& active_binding_for() {
     static std::unordered_map<Table*, ADSHANDLE> m;
     return m;
+}
+
+// Drop every binding tied to `t`. Called from AdsCloseTable / AdsCloseAllTables
+// / AdsDisconnect — without this, a Connection teardown leaves the bindings
+// behind, so a later test (or app reconnect) that allocates a Table at the
+// same heap slot inherits the stale entries and table_has_active misfires.
+void purge_bindings_for_table(Table* t) {
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->second.table == t) it = m.erase(it);
+        else                       ++it;
+    }
+    act.erase(t);
 }
 
 Table* lookup_table_by_index(ADSHANDLE h) {

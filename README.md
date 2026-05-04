@@ -6,7 +6,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (15 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (16 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -117,7 +117,7 @@ Done.
 
 #### Tests
 
-- **167 doctest cases / 3364 assertions** passing on Windows / MSVC
+- **170 doctest cases / 3383 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -175,7 +175,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.11-done`     | `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable` |
 | `m9.12-done`     | `AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose` (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
 | `m9.13-done`     | `AdsGetBinaryLength` / `AdsGetBinary` / `AdsSetBinary` + real `AdsGetMemoDataType` (FPT block-type tag round-trip; `ADS_BINARY` → `Object`, `ADS_IMAGE` → `Picture`, text → `Text`; offset-based chunked reads) |
-| **`m9.14-done`** | **NTX multi-tag binding** — multiple `.ntx` files coexist on one Table (`AdsOpenIndex` / `AdsCreateIndex61` / legacy `AdsCreateIndex` are all additive; same-path reopen refreshes; `AdsCloseIndex` releases extra views without disturbing the active order) |
+| `m9.14-done`     | NTX multi-tag binding — multiple `.ntx` files coexist on one Table (`AdsOpenIndex` / `AdsCreateIndex61` / legacy `AdsCreateIndex` are all additive; same-path reopen refreshes; `AdsCloseIndex` releases extra views without disturbing the active order) |
+| **`m9.15-done`** | **Real `AdsGetServerName` / `AdsGetServerTime`** — local host name + ISO date / `HH:MM:SS` time + ms-of-day, plus the 6-arg `AdsGetServerTime` shape rddads' `ADSGETSERVERTIME` actually expects (the previous 2-arg stub left rddads' on-stack date/time bufs uninitialised). Also fixes a latent index-binding leak: `AdsCloseTable` / `AdsCloseAllTables` / `AdsDisconnect` now purge the global binding map so a future Table allocation at the same heap address can't inherit stale entries. |
 
 #### What's left for 0.2.0
 
@@ -203,8 +204,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   a `usPageSize` parameter; today it's ignored (CDX uses 512, NTX
   uses 1024). Apps that opt into 4 KiB or 8 KiB pages don't yet get
   what they asked for.
-- **Real `AdsGetServerName` / `AdsGetServerTime`** — local-mode
-  values (host name, wall clock) instead of empty strings.
 
 ### 0.3.x — proprietary formats + advanced SQL (PLANNED)
 

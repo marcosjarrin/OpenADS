@@ -119,11 +119,6 @@ uint32_t AdsGetTableAlias       (uint64_t, uint8_t* buf, uint16_t* len) {
 }
 uint32_t AdsGetTableCharType    (uint64_t, uint16_t* p) { if (p) *p = /*ADS_ANSI*/ 1; return OK; }
 uint32_t AdsGetTableConnection  (uint64_t, uint64_t* p) { if (p) *p = 1; return OK; }
-uint32_t AdsGetServerName       (uint64_t, uint8_t* buf, uint16_t* len) {
-    if (len) { if (buf && *len > 0) buf[0] = '\0'; *len = 0; }
-    return OK;
-}
-uint32_t AdsGetServerTime       (uint64_t, uint32_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetMilliseconds     (uint64_t, uint8_t*, int32_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetNumActiveLinks   (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetNumLocks         (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
