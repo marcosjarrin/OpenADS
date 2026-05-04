@@ -32,6 +32,7 @@ tests/harbour_smoke/data.cdx
 tests/harbour_smoke/trace.log
 tests/harbour_smoke/openads.txlog
 tests/harbour_smoke/openads.lsnmap*
+tests/harbour_smoke/sync.log
 tests/harbour_smoke/*.obj
 tests/harbour_smoke/*.c
 tests/harbour_smoke/*.pdb

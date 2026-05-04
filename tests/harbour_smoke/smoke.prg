@@ -1,17 +1,19 @@
-/* OpenADS / Harbour rddads smoke test (M8.9).
+/* OpenADS / Harbour rddads smoke test (M8.10).
  *
- * Multi-tag CDX with two tags (NAME and AGE). Smoke walks records in
- * each focus, exercises dbSeek through OrdSetFocus, and verifies the
- * Order list reports both tags.
+ * Transaction surface: BEGIN + APPEND + ROLLBACK should leave the
+ * table unchanged; BEGIN + APPEND + COMMIT should persist the new
+ * row across close/reopen.
  */
 #include "ads.ch"
 
 REQUEST ADS, ADSCDX, ADSNTX
 
 PROCEDURE Main()
+   LOCAL nConn
+
    ErrorBlock( {|oErr| MyHandler( oErr ) } )
 
-   ? "OpenADS smoke test (M8.9)"
+   ? "OpenADS smoke test (M8.10)"
    ? "ACE DLL reports:", AdsVersion()
 
    AdsSetFileType( ADS_CDX )
@@ -21,47 +23,65 @@ PROCEDURE Main()
       ? "AdsConnect failed."
       RETURN
    ENDIF
+   nConn := AdsConnection()
+   ? "Connection handle:", nConn
 
    USE data INDEX data VIA "ADSCDX"
    IF NetErr()
       ? "USE failed"
       RETURN
    ENDIF
+   ? "Initial count:", LastRec()
 
-   ? "Number of orders:", OrdCount()
-   ? "Default order :", OrdName()
-
+   /* === BEGIN + APPEND + ROLLBACK === */
    ? ""
-   ? "=== Walk under NAME order ==="
+   ? "=== Tx 1: append EPSILON, then rollback ==="
+   AdsBeginTransaction( nConn )
+   dbAppend()
+   FIELD->NAME   := "EPSILON"
+   FIELD->AGE    := 50
+   FIELD->ACTIVE := .T.
+   FIELD->BORN   := SToD( "20300101" )
+   ? "  inside tx, count =", LastRec()
+   AdsRollback( nConn )
+   ? "  after rollback, count =", LastRec()
+
+   /* === BEGIN + APPEND + COMMIT === */
+   ? ""
+   ? "=== Tx 2: append ZETA, then commit ==="
+   AdsBeginTransaction( nConn )
+   dbAppend()
+   FIELD->NAME   := "ZETA"
+   FIELD->AGE    := 60
+   FIELD->ACTIVE := .F.
+   FIELD->BORN   := SToD( "20300202" )
+   ? "  inside tx, count =", LastRec()
+   AdsCommitTransaction( nConn )
+   ? "  after commit, count =", LastRec()
+
+   USE
+
+   /* === Reopen + verify durability === */
+   ? ""
+   ? "=== Reopen + verify ==="
+   USE data INDEX data VIA "ADSCDX"
+   ? "Reopened count:", LastRec()
+
+   /* Default order is AGE (alphabetically first sub-tag); switch to
+    * NAME so dbSeek looks up by character key. */
    OrdSetFocus( "NAME" )
-   ? "Active order:", OrdName(), "  key:", OrdKey()
-   dbGoTop()
-   DO WHILE ! Eof()
-      ? "  rec", RecNo(), ;
-        "NAME=[" + FIELD->NAME + "]", ;
-        "AGE=" + LTrim(Str(FIELD->AGE))
-      dbSkip()
-   ENDDO
+   SET DELETED ON
 
-   ? ""
-   ? "=== Walk under AGE order ==="
-   OrdSetFocus( "AGE" )
-   ? "Active order:", OrdName(), "  key:", OrdKey()
-   dbGoTop()
-   DO WHILE ! Eof()
-      ? "  rec", RecNo(), ;
-        "NAME=[" + FIELD->NAME + "]", ;
-        "AGE=" + LTrim(Str(FIELD->AGE))
-      dbSkip()
-   ENDDO
-
-   ? ""
-   ? "=== Seek by AGE ==="
-   dbSeek(" 77")
-   ? "  Seek ' 77': Found=" + iif(Found(), "T", "F"), ;
-     "RecNo=" + LTrim(Str(RecNo())), ;
-     "NAME=[" + FIELD->NAME + "]", ;
-     "AGE=" + LTrim(Str(FIELD->AGE))
+   dbSeek( "ZETA" )
+   ? "  Seek 'ZETA'   : Found=" + iif(Found(), "T", "F") + ;
+     "  RecNo=" + LTrim(Str(RecNo())) + ;
+     "  AGE="    + LTrim(Str(FIELD->AGE)) + ;
+     "  Deleted=" + iif(Deleted(),"T","F")
+   dbSeek( "EPSILON" )
+   ? "  Seek 'EPSILON': Found=" + iif(Found(), "T", "F") + ;
+     "  RecNo=" + LTrim(Str(RecNo())) + ;
+     "  AGE="    + LTrim(Str(FIELD->AGE)) + ;
+     "  Deleted=" + iif(Deleted(),"T","F")
 
    USE
    ? "Done."

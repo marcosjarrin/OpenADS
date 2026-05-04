@@ -86,17 +86,40 @@ std::string Table::compute_index_key_(const std::string& expr,
     return key;
 }
 
-util::Result<void> Table::sync_active_index_(const std::string& prev_key) {
-    if (!order_ || !order_->index()) return {};
-    auto* idx = order_->index();
-    std::string new_key = compute_index_key_(idx->expression(),
-                                             idx->key_length());
-    if (!prev_key.empty() && prev_key != new_key) {
-        // Best-effort erase: index may be the just-inserted one for
-        // an APPEND; ignore not-found.
-        (void)idx->erase(recno_, prev_key);
-    }
-    if (!new_key.empty() && new_key != prev_key) {
+// Snapshot the current key for every bound index. Caller invokes
+// this BEFORE mutating record_buf_ so the snapshot reflects the
+// pre-write key per index; after the write, sync_all_indexes_(snap)
+// erases each prior key and inserts the new one.
+std::vector<std::pair<drivers::IIndex*, std::string>>
+Table::snapshot_index_keys_() {
+    std::vector<std::pair<drivers::IIndex*, std::string>> out;
+    auto push = [&](drivers::IIndex* idx) {
+        if (idx == nullptr) return;
+        out.emplace_back(idx,
+            compute_index_key_(idx->expression(), idx->key_length()));
+    };
+    if (order_ && order_->index()) push(order_->index());
+    for (auto* x : extra_index_views_) push(x);
+    return out;
+}
+
+util::Result<void> Table::sync_active_index_(const std::string& /*unused*/) {
+    // Re-entered after a full snapshot was taken on the caller's
+    // side; that path is the new sync_all_indexes_ below.
+    return {};
+}
+
+util::Result<void> Table::sync_all_indexes_(
+    const std::vector<std::pair<drivers::IIndex*, std::string>>& snap) {
+    for (auto& [idx, prev_key] : snap) {
+        std::string new_key = compute_index_key_(idx->expression(),
+                                                 idx->key_length());
+        if (prev_key == new_key) continue;
+        // Erase prior (recno, prev_key); ignore failure — the index
+        // may not have a prior entry (fresh APPEND case).
+        if (!prev_key.empty()) {
+            (void)idx->erase(recno_, prev_key);
+        }
         if (auto e = idx->insert(recno_, new_key); !e) {
             return e.error();
         }
@@ -298,11 +321,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     }
     const auto& f = driver_->fields().at(idx);
 
-    std::string prev_key;
-    if (order_ && order_->index()) {
-        prev_key = compute_index_key_(order_->index()->expression(),
-                                      order_->index()->key_length());
-    }
+    auto snap = snapshot_index_keys_();
 
     // Memo fields write to the memo store, then store the resulting
     // block number as a right-aligned ASCII string in the record.
@@ -321,14 +340,14 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
         }
         std::memcpy(record_buf_.data() + f.record_offset, buf, f.length);
         if (auto wb = writeback_record_(); !wb) return wb.error();
-        return sync_active_index_(prev_key);
+        return sync_all_indexes_(snap);
     }
 
     auto r = drivers::encode_field_string(f, record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
     if (auto wb = writeback_record_(); !wb) return wb.error();
-    return sync_active_index_(prev_key);
+    return sync_all_indexes_(snap);
 }
 
 util::Result<void> Table::set_field(std::uint16_t idx, double v) {
@@ -338,17 +357,13 @@ util::Result<void> Table::set_field(std::uint16_t idx, double v) {
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
-    std::string prev_key;
-    if (order_ && order_->index()) {
-        prev_key = compute_index_key_(order_->index()->expression(),
-                                      order_->index()->key_length());
-    }
+    auto snap = snapshot_index_keys_();
     auto r = drivers::encode_field_double(driver_->fields().at(idx),
                                           record_buf_.data(),
                                           record_buf_.size(), v);
     if (!r) return r.error();
     if (auto wb = writeback_record_(); !wb) return wb.error();
-    return sync_active_index_(prev_key);
+    return sync_all_indexes_(snap);
 }
 
 util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
@@ -358,17 +373,13 @@ util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
     }
-    std::string prev_key;
-    if (order_ && order_->index()) {
-        prev_key = compute_index_key_(order_->index()->expression(),
-                                      order_->index()->key_length());
-    }
+    auto snap = snapshot_index_keys_();
     auto r = drivers::encode_field_logical(driver_->fields().at(idx),
                                            record_buf_.data(),
                                            record_buf_.size(), v);
     if (!r) return r.error();
     if (auto wb = writeback_record_(); !wb) return wb.error();
-    return sync_active_index_(prev_key);
+    return sync_all_indexes_(snap);
 }
 
 util::Result<void> Table::mark_deleted() {
@@ -396,6 +407,10 @@ util::Result<void> Table::flush() {
     if (auto r = driver_->flush(); !r) return r.error();
     if (order_ && order_->index()) {
         if (auto r = order_->index()->flush(); !r) return r.error();
+    }
+    for (auto* extra : extra_index_views_) {
+        if (extra == nullptr) continue;
+        if (auto r = extra->flush(); !r) return r.error();
     }
     return {};
 }
@@ -461,6 +476,22 @@ std::unique_ptr<drivers::IIndex> Table::take_order() {
     auto idx = order_->release();
     order_.reset();
     return idx;
+}
+
+void Table::register_extra_index_view(drivers::IIndex* idx) {
+    if (idx == nullptr) return;
+    for (auto* v : extra_index_views_) if (v == idx) return;
+    extra_index_views_.push_back(idx);
+}
+
+void Table::unregister_extra_index_view(drivers::IIndex* idx) {
+    extra_index_views_.erase(
+        std::remove(extra_index_views_.begin(), extra_index_views_.end(), idx),
+        extra_index_views_.end());
+}
+
+void Table::clear_extra_index_views() {
+    extra_index_views_.clear();
 }
 
 util::Result<bool>

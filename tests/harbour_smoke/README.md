@@ -16,6 +16,61 @@ Linking `smoke.prg` against `rddads.lib` + `ace64.lib` produces a clean
 resolution of every `HB_FUN_ADSVERSION`/`AdsGetVersion`/etc. symbol
 chain.
 
+## M8.10 — Transactions (BeginTransaction / Rollback / Commit)
+
+Real ARIES-style transactions through Harbour: BEGIN + APPEND +
+ROLLBACK leaves the appended row in the DBF flagged deleted; BEGIN +
+APPEND + COMMIT persists durably to both DBF and CDX.
+
+```
+Initial count:          3
+=== Tx 1: append EPSILON, then rollback ===
+  inside tx, count =    4
+  after rollback, count = 4
+=== Tx 2: append ZETA, then commit ===
+  inside tx, count =    5
+  after commit, count = 5
+=== Reopen + verify ===
+Reopened count:         5
+  Seek 'ZETA'   : Found=T RecNo=5 AGE=60 Deleted=F   (committed)
+  Seek 'EPSILON': Found=T RecNo=4 AGE=50 Deleted=T   (rolled back)
+```
+
+The smoke uses `AdsConnect()` + `AdsConnection()` to fetch the default
+connection handle, then drives `AdsBeginTransaction(hConn)` /
+`AdsRollback(hConn)` / `AdsCommitTransaction(hConn)` directly. Both
+the DBF mutation and the CDX index update are bound to the WAL: ZETA
+survives reopen and is reachable through `dbSeek`; EPSILON is on
+disk with the deletion flag set, so `SET DELETED ON` hides it during
+sequential walks while `Found()` still reports the seek result.
+
+### Multi-index sync (engine)
+
+The previous M8.8 implementation only synced the *active* order on
+each `set_field` call; multi-tag CDX therefore left parked indexes
+out of date after a `dbAppend` inside a transaction. M8.10 widens
+the sync:
+
+- `Table::register_extra_index_view(IIndex*)` /
+  `Table::unregister_extra_index_view(IIndex*)` /
+  `Table::clear_extra_index_views()` track the parked CDX sub-tags as
+  non-owning views (the binding still owns the IIndex lifetime; the
+  Table just borrows the pointer for sync).
+- `Table::snapshot_index_keys_()` captures the pre-write key per
+  index — active order plus extras — so `sync_all_indexes_(snap)`
+  can erase the prior `(recno, prev_key)` from each index and insert
+  the new one in lockstep.
+- `Table::flush()` flushes the active order **and** every extra view
+  so a multi-tag commit reaches disk for every tag.
+- `table_for_index(hIndex)` now also activates the binding
+  (previously only `get_table` did), so `AdsSeek` /
+  `AdsGotoTop(hOrdCurrent)` etc. always reach the right active order
+  even when rddads dispatches through the index handle directly.
+- `AdsOpenIndex` registers each parked tag as an extra view at open
+  time; `activate_binding` swaps the view registration in lockstep
+  with the order swap so the table sees the right set after every
+  `OrdSetFocus`.
+
 ## M8.9 — Multi-tag CDX + OrdSetFocus
 
 `make_cdx.exe` now lays down a CDX with two tags, NAME (key over the

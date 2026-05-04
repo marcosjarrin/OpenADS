@@ -60,3 +60,7 @@ add_test(NAME openads_unit_tests COMMAND openads_unit_tests)
 add_executable(make_cdx harbour_smoke/make_cdx.cpp)
 target_include_directories(make_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(make_cdx PRIVATE openads_core)
+
+add_executable(probe_cdx harbour_smoke/probe_cdx.cpp)
+target_include_directories(probe_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(probe_cdx PRIVATE openads_core)

@@ -636,18 +636,27 @@ openads::util::Result<void> activate_binding(ADSHANDLE h) {
     auto act_it = act.find(t);
     if (act_it != act.end() && act_it->second == h) return {};   // already live
 
-    // Park the currently-active binding's index back into its slot.
+    // Park the currently-active binding's index back into its slot
+    // and register it as an extra view (so multi-index sync still
+    // touches it after the swap).
     if (act_it != act.end()) {
         auto prev = m.find(act_it->second);
         if (prev != m.end()) {
-            prev->second.parked = t->take_order();
+            auto taken = t->take_order();
+            openads::drivers::IIndex* raw = taken.get();
+            prev->second.parked = std::move(taken);
+            if (raw) t->register_extra_index_view(raw);
         } else {
             t->clear_order();
         }
     }
 
-    // Move the parked IIndex from this binding into the table.
+    // Move the parked IIndex from this binding into the table; drop
+    // its extra-view entry since the active order's IIndex is already
+    // walked by the sync loop.
     if (it->second.parked) {
+        openads::drivers::IIndex* raw = it->second.parked.get();
+        t->unregister_extra_index_view(raw);
         t->set_order(std::move(it->second.parked));
     }
     act[t] = h;
@@ -662,6 +671,11 @@ ADSHANDLE next_index_handle() {
 Table* table_for_index(ADSHANDLE hIndex) {
     auto it = index_bindings().find(hIndex);
     if (it == index_bindings().end()) return nullptr;
+    // Activate this binding so the Table's order_ reflects the
+    // requested index — AdsSeek / AdsGotoTop / etc. always operate
+    // through the Table's active order, and rddads passes the index
+    // handle (pArea->hOrdCurrent) as the operand.
+    (void)activate_binding(hIndex);
     return it->second.table;
 }
 
@@ -698,9 +712,9 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     if (!t || ahIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
-    auto raw = openads::abi::to_internal(pucName, 0);
+    auto bag_name = openads::abi::to_internal(pucName, 0);
     namespace fs = std::filesystem;
-    fs::path p(raw);
+    fs::path p(bag_name);
     if (!p.is_absolute()) {
         fs::path table_dir = fs::path(t->path()).parent_path();
         p = table_dir / p;
@@ -751,6 +765,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     UNSIGNED16 cap = (pu16ArrayLen != nullptr && *pu16ArrayLen > 0)
                    ? *pu16ArrayLen : 1;
     UNSIGNED16 count = 0;
+    t->clear_extra_index_views();
     for (const auto& name : tags) {
         if (count >= cap) break;
         auto sub = std::make_unique<openads::drivers::cdx::CdxIndex>();
@@ -766,7 +781,11 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             m[h] = IndexBinding{t, name, nullptr};
             act[t] = h;
         } else {
+            // Parked: register as an extra view so set_field syncs it
+            // even when it isn't the active order.
+            openads::drivers::IIndex* raw = sub.get();
             m[h] = IndexBinding{t, name, std::move(sub)};
+            t->register_extra_index_view(raw);
         }
         ahIndex[count++] = h;
     }

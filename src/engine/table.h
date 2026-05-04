@@ -100,6 +100,15 @@ public:
     // it without an order. Returns nullptr if no order was set.
     std::unique_ptr<drivers::IIndex> take_order();
     Order*             order() noexcept { return order_ ? &*order_ : nullptr; }
+
+    // Non-owning views of additional indexes the ABI layer parks
+    // outside the Table. Every record mutation (`set_field`,
+    // `append_record`) walks both the active order and these views,
+    // so a multi-tag CDX stays consistent across all tags. The ABI
+    // owns the IIndex lifetime; the Table only borrows it for sync.
+    void register_extra_index_view(drivers::IIndex* idx);
+    void unregister_extra_index_view(drivers::IIndex* idx);
+    void clear_extra_index_views();
     const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
     util::Result<bool> seek_key(const std::string& key, bool soft);
     bool last_seek_found() const noexcept { return last_seek_found_; }
@@ -126,6 +135,14 @@ private:
     // the old entry can be removed before the new one is inserted.
     util::Result<void> sync_active_index_(const std::string& prev_key);
 
+    // Snapshot every bound index's current key (active order + extra
+    // views), and replay the snapshot after a write to update the
+    // entries in lockstep. Multi-index variant of sync_active_index_.
+    std::vector<std::pair<drivers::IIndex*, std::string>>
+        snapshot_index_keys_();
+    util::Result<void> sync_all_indexes_(
+        const std::vector<std::pair<drivers::IIndex*, std::string>>& snap);
+
     // Compute the index key bytes for the current `record_buf_`
     // given an index expression. Currently supports bare field names
     // only (e.g., "NAME"); compound expressions land later.
@@ -149,6 +166,7 @@ private:
     std::unordered_map<std::uint32_t, LockHandle> recno_locks_;
     std::optional<LockHandle>                     table_lock_;
     std::optional<Order>                          order_;
+    std::vector<drivers::IIndex*>                 extra_index_views_;
     State                                         state_  = State::Bof;
     std::uint32_t                                 recno_  = 0;
     std::vector<std::uint8_t>                     record_buf_;
