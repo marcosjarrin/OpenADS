@@ -192,6 +192,17 @@ UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
 UNSIGNED32 AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint);
 
+UNSIGNED32 AdsFindFirstTable     (ADSHANDLE   hConnect,
+                                  UNSIGNED8*  pucMask,
+                                  UNSIGNED8*  pucFileName,
+                                  UNSIGNED16* pusFileNameLen,
+                                  ADSHANDLE*  phFind);
+UNSIGNED32 AdsFindNextTable      (ADSHANDLE   hConnect,
+                                  ADSHANDLE   hFind,
+                                  UNSIGNED8*  pucFileName,
+                                  UNSIGNED16* pusFileNameLen);
+UNSIGNED32 AdsFindClose          (ADSHANDLE hConnect, ADSHANDLE hFind);
+
 UNSIGNED32 AdsDDCreate           (UNSIGNED8* pucDictionary,
                                   UNSIGNED16 bEncrypt,
                                   UNSIGNED8* pucAdminPassword,

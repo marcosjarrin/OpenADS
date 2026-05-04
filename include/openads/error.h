@@ -13,6 +13,7 @@ enum : std::uint32_t {
     AE_LOCKED                   = 5012,
     AE_LOCK_FAILED              = 5013,
     AE_NO_CONNECTION            = 5036,
+    AE_NO_FILE_FOUND            = 5018,
     AE_COLUMN_NOT_FOUND         = 5063,
     AE_TABLE_NOT_FOUND          = 5066,
     AE_TABLE_CORRUPTED          = 5103,

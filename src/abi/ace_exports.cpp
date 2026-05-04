@@ -1888,6 +1888,96 @@ UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint)
     return ok();
 }
 
+// --- M9.12 Table directory iteration ---------------------------------------
+//
+// AdsFindFirstTable / AdsFindNextTable / AdsFindClose walk the
+// connection's data directory and emit each entry whose name matches
+// `pucMask` (FoxPro-style glob with `*` and `?`, case insensitive).
+// Matches AE_SUCCESS while names remain; once exhausted, returns
+// AE_NO_FILE_FOUND so the caller breaks out of its loop. The find
+// handle is registered in the global registry under HandleKind::Find
+// so it round-trips through ADSHANDLE without aliasing tables/cursors.
+
+namespace {
+
+// Truncate the matched filename into `pucBuf`, NUL-terminate when
+// there's room, and report the on-wire length back through `pusLen`
+// (matching the ACE convention rddads' AdsFindFirstTable/NextTable
+// callers depend on).
+UNSIGNED32 emit_name(UNSIGNED8* pucBuf, UNSIGNED16* pusLen,
+                     const std::string& name) {
+    if (pusLen == nullptr) return openads::AE_INTERNAL_ERROR;
+    UNSIGNED16 cap = *pusLen;
+    UNSIGNED16 n = static_cast<UNSIGNED16>(
+        name.size() < cap ? name.size() : cap);
+    if (pucBuf != nullptr && cap > 0) {
+        std::memcpy(pucBuf, name.data(), n);
+        if (n < cap) pucBuf[n] = '\0';
+    }
+    *pusLen = static_cast<UNSIGNED16>(name.size());
+    return openads::AE_SUCCESS;
+}
+
+}  // namespace
+
+UNSIGNED32 AdsFindFirstTable(ADSHANDLE   hConnect,
+                             UNSIGNED8*  pucMask,
+                             UNSIGNED8*  pucFileName,
+                             UNSIGNED16* pusFileNameLen,
+                             ADSHANDLE*  phFind) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c == nullptr || phFind == nullptr || pusFileNameLen == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    std::string mask = pucMask
+        ? openads::abi::to_internal(pucMask, 0)
+        : std::string("*.dbf");
+    if (mask.empty()) mask = "*.dbf";
+
+    auto r = c->find_first_table(mask);
+    if (!r) return fail(r.error());
+
+    auto [find_ptr, name] = std::move(r).value();
+    Handle gh = s.registry.register_object(HandleKind::Find, find_ptr);
+    *phFind = gh;
+    return emit_name(pucFileName, pusFileNameLen, name);
+}
+
+UNSIGNED32 AdsFindNextTable(ADSHANDLE   hConnect,
+                            ADSHANDLE   hFind,
+                            UNSIGNED8*  pucFileName,
+                            UNSIGNED16* pusFileNameLen) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c == nullptr || pusFileNameLen == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto* find = s.registry.lookup<Connection::TableFind>(hFind, HandleKind::Find);
+    if (find == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "invalid find handle");
+    }
+    auto r = c->find_next_table(find);
+    if (!r) return fail(r.error());
+    return emit_name(pucFileName, pusFileNameLen, r.value());
+}
+
+UNSIGNED32 AdsFindClose(ADSHANDLE hConnect, ADSHANDLE hFind) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (c == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto* find = s.registry.lookup<Connection::TableFind>(hFind, HandleKind::Find);
+    if (find == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "invalid find handle");
+    }
+    (void)c->find_close(find);
+    s.registry.release(hFind);
+    return ok();
+}
+
 // --- M6 Data Dictionary ----------------------------------------------------
 
 UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,

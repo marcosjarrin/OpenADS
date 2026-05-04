@@ -13,6 +13,8 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace openads::session {
 
@@ -52,6 +54,21 @@ public:
         return dd_.has_value() ? &*dd_ : nullptr;
     }
 
+    // Table directory iteration (M9.12). Glob mask is matched against
+    // each entry of `data_dir_` with `*` and `?` wildcards, case
+    // insensitive on Windows. Returns AE_NO_FILE_FOUND if nothing
+    // matches at the start; otherwise emits the first hit and a handle
+    // the caller threads into find_next_table / find_close.
+    struct TableFind {
+        std::vector<std::string> matches;
+        std::size_t              cursor = 0;
+    };
+
+    util::Result<std::pair<TableFind*, std::string>>
+        find_first_table(const std::string& mask);
+    util::Result<std::string> find_next_table(TableFind* find);
+    util::Result<void>        find_close(TableFind* find);
+
 private:
     util::Result<void> recover_orphan_tx_();
 
@@ -59,6 +76,7 @@ private:
     std::unordered_map<Handle, std::unique_ptr<engine::Table>> tables_;
     std::unordered_map<Handle, std::string>                    table_paths_;
     Handle                                                     next_table_handle_ = 1;
+    std::vector<std::unique_ptr<TableFind>>                    finds_;
 
     engine::TxLog                                              tx_log_;
     engine::LsnMap                                             lsn_map_;

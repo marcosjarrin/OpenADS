@@ -11,7 +11,8 @@ enum class HandleKind {
     Connection = 1,
     Table      = 2,
     Cursor     = 3,
-    Statement  = 4
+    Statement  = 4,
+    Find       = 5
 };
 
 using Handle = std::uint64_t;

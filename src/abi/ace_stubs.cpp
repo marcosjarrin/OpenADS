@@ -203,9 +203,6 @@ uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
 uint32_t AdsDeleteCustomKey      () { return MISS; }
 uint32_t AdsFailedTransactionRecovery() { return MISS; }
-uint32_t AdsFindClose            () { return MISS; }
-uint32_t AdsFindFirstTable       () { return MISS; }
-uint32_t AdsFindNextTable        () { return MISS; }
 uint32_t AdsGetAllLocks          () { return MISS; }
 uint32_t AdsGetBinary            () { return MISS; }
 uint32_t AdsGetBinaryLength      () { return MISS; }

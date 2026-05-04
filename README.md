@@ -6,7 +6,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (12 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (13 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -96,9 +96,8 @@ Done.
   Set* / Refresh* / Customize* — Harbour-side preferences with no
   effect on local-mode storage) and **`AE_FUNCTION_NOT_AVAILABLE`
   hard-fail** (server management `Mg*`, advanced Data-Dictionary
-  CRUD, `Find*` table iterators, binary blob set/get, full-text
-  search, ...). The split is documented inline in
-  `src/abi/ace_stubs.cpp`.
+  CRUD, binary blob set/get, full-text search, ...). The split is
+  documented inline in `src/abi/ace_stubs.cpp`.
 - **6 legacy CRT shims** — `_dclass`, `_dsign`, `_wfsopen`, `_getch`,
   `_kbhit`, `_eof` re-exported from `ace64.dll` so apps built against
   Harbour's prebuilt MSVC2013-era libs link without rebuilding
@@ -113,7 +112,7 @@ Done.
 
 #### Tests
 
-- **155 doctest cases / 3210 assertions** passing on Windows / MSVC
+- **160 doctest cases / 3238 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -168,7 +167,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.8-done`      | `AdsZapTable` + `AdsPackTable` |
 | `m9.9-done`      | `AdsReindex` — rebuild every bound index from current records |
 | `m9.10-done`     | NTX multi-level B+tree split (closes M3.7 limit) |
-| **`m9.11-done`** | **`AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable`** |
+| `m9.11-done`     | `AdsCopyTable` / `AdsCopyTableContents` / `AdsConvertTable` |
+| **`m9.12-done`** | **`AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose`** (`*` / `?` glob, case-insensitive, returns `AE_NO_FILE_FOUND` when exhausted) |
 
 #### What's left for 0.2.0
 
@@ -180,9 +180,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 - **`AdsAddCustomKey` / `AdsDeleteCustomKey`** — custom-keyed index
   entries (apps that pre-compute keys outside the engine and inject
   them by recno). `AdsExtractKey` is already real (M9.6).
-- **`AdsFindFirstTable` / `AdsFindNextTable` / `AdsFindClose`** —
-  server-style table directory iteration. For a local connection,
-  walks the data dir's `*.dbf` / `*.adt` entries.
 - **`AdsGetBinary` / `AdsSetBinary` / `AdsGetBinaryLength`** —
   explicit binary memo / blob payloads. The smoke fixtures use plain
   text memos today; binary memos write `type=2` (binary) in the FPT
@@ -194,9 +191,6 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
   tag refactor only landed for CDX in M3.10. Apps that bundle
   multiple NTX files per `USE` need the same `add_tag` / `open_named`
   / `list_tags` treatment.
-- **`AdsRollbackTransaction80(savepoint)`** — partial rollback to a
-  named savepoint via the WAL. Engine has the savepoint primitive
-  (M5.3); ABI plumbing is currently a stub.
 - **`AdsLockTable` / `AdsUnlockTable` / `AdsIsTableLocked` /
   `AdsLockRecord` / `AdsUnlockRecord`** — already wired in M4 for
   byte-range locks; missing the timeout / retry surface most

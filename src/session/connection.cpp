@@ -6,6 +6,9 @@
 #include "drivers/ntx/ntx_driver.h"
 #include "platform/path.h"
 
+#include "openads/error.h"
+
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
@@ -328,6 +331,104 @@ engine::Table* Connection::lookup_table(Handle h) {
     auto it = tables_.find(h);
     if (it == tables_.end()) return nullptr;
     return it->second.get();
+}
+
+namespace {
+
+// FoxPro-style glob match with `*` (zero or more chars) and `?`
+// (exactly one char). Comparison is ASCII case-insensitive so the
+// Windows convention of case-blind matching against the on-disk
+// `MIXED.DBF` keeps working when the caller asks for `*.dbf`.
+bool glob_match(const char* pat, const char* str) {
+    auto eq = [](unsigned char a, unsigned char b) {
+        if (a >= 'A' && a <= 'Z') a = static_cast<unsigned char>(a + ('a' - 'A'));
+        if (b >= 'A' && b <= 'Z') b = static_cast<unsigned char>(b + ('a' - 'A'));
+        return a == b;
+    };
+    const char* p = pat;
+    const char* s = str;
+    const char* star_p = nullptr;
+    const char* star_s = nullptr;
+    while (*s) {
+        if (*p == '*') {
+            star_p = ++p;
+            star_s = s;
+            if (*p == '\0') return true;
+        } else if (*p == '?' || eq(static_cast<unsigned char>(*p),
+                                   static_cast<unsigned char>(*s))) {
+            ++p;
+            ++s;
+        } else if (star_p) {
+            p = star_p;
+            s = ++star_s;
+        } else {
+            return false;
+        }
+    }
+    while (*p == '*') ++p;
+    return *p == '\0';
+}
+
+}  // namespace
+
+util::Result<std::pair<Connection::TableFind*, std::string>>
+Connection::find_first_table(const std::string& mask) {
+    namespace fs = std::filesystem;
+    auto find = std::make_unique<TableFind>();
+
+    std::error_code ec;
+    if (fs::exists(data_dir_, ec) && fs::is_directory(data_dir_, ec)) {
+        for (auto& entry : fs::directory_iterator(data_dir_, ec)) {
+            if (!entry.is_regular_file(ec)) continue;
+            std::string name = entry.path().filename().string();
+            if (glob_match(mask.c_str(), name.c_str())) {
+                find->matches.push_back(std::move(name));
+            }
+        }
+    }
+
+    if (find->matches.empty()) {
+        return util::Error{openads::AE_NO_FILE_FOUND, 0,
+                           "no matching file", mask};
+    }
+
+    std::sort(find->matches.begin(), find->matches.end());
+    std::string first = find->matches.front();
+    find->cursor = 1;
+    TableFind* raw = find.get();
+    finds_.push_back(std::move(find));
+    return std::make_pair(raw, std::move(first));
+}
+
+util::Result<std::string>
+Connection::find_next_table(TableFind* find) {
+    if (find == nullptr) {
+        return util::Error{openads::AE_INTERNAL_ERROR, 0,
+                           "invalid find handle", ""};
+    }
+    if (find->cursor >= find->matches.size()) {
+        return util::Error{openads::AE_NO_FILE_FOUND, 0,
+                           "no more files", ""};
+    }
+    return find->matches[find->cursor++];
+}
+
+util::Result<void>
+Connection::find_close(TableFind* find) {
+    if (find == nullptr) {
+        return util::Error{openads::AE_INTERNAL_ERROR, 0,
+                           "invalid find handle", ""};
+    }
+    auto it = std::find_if(finds_.begin(), finds_.end(),
+        [&](const std::unique_ptr<TableFind>& p) {
+            return p.get() == find;
+        });
+    if (it == finds_.end()) {
+        return util::Error{openads::AE_INTERNAL_ERROR, 0,
+                           "unknown find handle", ""};
+    }
+    finds_.erase(it);
+    return {};
 }
 
 } // namespace openads::session
