@@ -217,7 +217,7 @@ on OpenADS without recompiling Harbour.
 
 #### Tests
 
-- **260 doctest cases / 4278 assertions** passing on Windows / MSVC
+- **264 doctest cases / 4306 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -329,6 +329,8 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.13-done` | SQL `INNER JOIN <b> ON <l_col> = <r_col>` — parser. |
 | `m10.14-done` | SQL `INNER JOIN` executor — hash on right column, materialise merged rows into temp DBF cursor; right-side fields prefixed `R_`. Combos with WHERE / ORDER BY / aggregates over the joined cursor land in a follow-up. |
 | `m10.15-done` | SQL `<col> IN (…)` — literal list `IN ('a', 'b', …)` and subquery `IN (SELECT col FROM t)`. Matching set captured at compile time so per-row check is O(1). |
+| `m10.16-done` | SQL `LEFT [OUTER] JOIN` — left rows survive without a right-side match (right fields blank-pad); bare `JOIN` keyword treated as INNER per SQL convention. |
+| `m10.17-done` | SQL `EXISTS (SELECT … FROM t)` — uncorrelated presence test, materialised once at compile time. `NOT EXISTS` falls out of the existing NOT-tree. |
 
 #### Still planned for 0.3.x
 
@@ -342,13 +344,15 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 - **Real ADS record-level encryption** — the AES primitive is
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
-- **More SQL** — INNER JOIN combined with WHERE / ORDER BY /
-  aggregates in a single statement, OUTER joins, EXISTS / scalar
-  subqueries. Earlier 0.3.x milestones already land boolean WHERE
-  (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6), `UPDATE` /
-  `DELETE` (M10.7), projection lists (M10.8), DDL `CREATE TABLE` /
-  `CREATE INDEX` (M10.9), aggregates (M10.10), INNER JOIN
-  (M10.13 / M10.14), and `IN` literal lists / subqueries (M10.15).
+- **More SQL** — JOIN combined with WHERE / ORDER BY / aggregates
+  in a single statement, RIGHT / FULL OUTER joins, correlated
+  subqueries, scalar subqueries (`= (SELECT MAX(x) FROM t)`). The
+  shipped 0.3.x SQL surface covers boolean WHERE (M10.3), `INSERT`
+  (M10.5), `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7),
+  projection lists (M10.8), DDL `CREATE TABLE` / `CREATE INDEX`
+  (M10.9), aggregates (M10.10), INNER JOIN (M10.13 / M10.14),
+  IN literal / subquery (M10.15), LEFT OUTER JOIN (M10.16), and
+  EXISTS (M10.17).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
