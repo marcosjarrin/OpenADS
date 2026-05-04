@@ -66,6 +66,7 @@ add_executable(openads_unit_tests
     unit/abi_dd_crud_test.cpp
     unit/abi_restructure_test.cpp
     unit/abi_dd_persistence_test.cpp
+    unit/dbf_vfp_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

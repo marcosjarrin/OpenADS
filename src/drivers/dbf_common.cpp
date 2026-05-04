@@ -114,6 +114,54 @@ double parse_numeric(const std::uint8_t* p, std::size_t n) {
     return std::strtod(tmp, &end);
 }
 
+// VFP I (Integer) — 4-byte little-endian signed int32.
+std::int32_t read_i32_le(const std::uint8_t* p) {
+    std::uint32_t u =
+         static_cast<std::uint32_t>(p[0])        |
+        (static_cast<std::uint32_t>(p[1]) <<  8) |
+        (static_cast<std::uint32_t>(p[2]) << 16) |
+        (static_cast<std::uint32_t>(p[3]) << 24);
+    return static_cast<std::int32_t>(u);
+}
+
+// VFP Y (Currency) — 8-byte little-endian signed int64 of money * 10000.
+std::int64_t read_i64_le(const std::uint8_t* p) {
+    std::uint64_t u = 0;
+    for (int i = 0; i < 8; ++i) {
+        u |= static_cast<std::uint64_t>(p[i]) << (i * 8);
+    }
+    return static_cast<std::int64_t>(u);
+}
+
+// VFP B (Double) — 8-byte IEEE 754 little-endian double.
+double read_f64_le(const std::uint8_t* p) {
+    std::uint64_t u = static_cast<std::uint64_t>(read_i64_le(p));
+    double out;
+    std::memcpy(&out, &u, sizeof(out));
+    return out;
+}
+
+void write_i32_le(std::uint8_t* p, std::int32_t v) {
+    auto u = static_cast<std::uint32_t>(v);
+    p[0] = static_cast<std::uint8_t>( u        & 0xFFu);
+    p[1] = static_cast<std::uint8_t>((u >>  8) & 0xFFu);
+    p[2] = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
+    p[3] = static_cast<std::uint8_t>((u >> 24) & 0xFFu);
+}
+
+void write_i64_le(std::uint8_t* p, std::int64_t v) {
+    auto u = static_cast<std::uint64_t>(v);
+    for (int i = 0; i < 8; ++i) {
+        p[i] = static_cast<std::uint8_t>((u >> (i * 8)) & 0xFFu);
+    }
+}
+
+void write_f64_le(std::uint8_t* p, double v) {
+    std::uint64_t u;
+    std::memcpy(&u, &v, sizeof(u));
+    write_i64_le(p, static_cast<std::int64_t>(u));
+}
+
 } // namespace
 
 util::Result<DbfFieldValue> decode_field(const DbfField& field,
@@ -154,9 +202,48 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             v.as_string.clear();
             break;
 
-        case DbfFieldType::Integer:
-        case DbfFieldType::Currency:
-        case DbfFieldType::Double:
+        case DbfFieldType::Integer: {
+            // VFP I — 4-byte little-endian signed int32.
+            if (field.length < 4) {
+                v.as_string = make_string(p, field.length);
+                break;
+            }
+            std::int32_t n = read_i32_le(p);
+            v.as_double = static_cast<double>(n);
+            char tmp[32];
+            std::snprintf(tmp, sizeof(tmp), "%d",
+                          static_cast<int>(n));
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::Currency: {
+            // VFP Y — 8-byte little-endian signed int64, money * 10000.
+            if (field.length < 8) {
+                v.as_string = make_string(p, field.length);
+                break;
+            }
+            std::int64_t raw = read_i64_le(p);
+            double money = static_cast<double>(raw) / 10000.0;
+            v.as_double = money;
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.4f", money);
+            v.as_string = tmp;
+            break;
+        }
+        case DbfFieldType::Double: {
+            // VFP B — 8-byte IEEE 754 little-endian double.
+            if (field.length < 8) {
+                v.as_string = make_string(p, field.length);
+                break;
+            }
+            v.as_double = read_f64_le(p);
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.*f",
+                          static_cast<int>(field.decimals),
+                          v.as_double);
+            v.as_string = tmp;
+            break;
+        }
         case DbfFieldType::Unknown:
             v.as_string = make_string(p, field.length);
             break;
@@ -195,6 +282,35 @@ util::Result<void> encode_field_double(const DbfField& f,
         static_cast<std::size_t>(f.length) > rec_size) {
         return util::Error{5000, 0, "field range past record buffer", ""};
     }
+    std::uint8_t* dst = rec + f.record_offset;
+
+    // VFP binary types take a fixed-width little-endian payload, not
+    // an ASCII representation; route them through the right packer
+    // before falling back to the Clipper-style ASCII numeric encoding.
+    switch (f.type) {
+        case DbfFieldType::Integer:
+            if (f.length >= 4) {
+                write_i32_le(dst, static_cast<std::int32_t>(value));
+                return {};
+            }
+            break;
+        case DbfFieldType::Currency:
+            if (f.length >= 8) {
+                write_i64_le(dst,
+                    static_cast<std::int64_t>(value * 10000.0));
+                return {};
+            }
+            break;
+        case DbfFieldType::Double:
+            if (f.length >= 8) {
+                write_f64_le(dst, value);
+                return {};
+            }
+            break;
+        default:
+            break;
+    }
+
     char tmp[64];
     int written = std::snprintf(tmp, sizeof(tmp), "%*.*f",
                                 static_cast<int>(f.length),
@@ -205,7 +321,6 @@ util::Result<void> encode_field_double(const DbfField& f,
     }
     std::size_t n = static_cast<std::size_t>(written);
     if (n > f.length) n = f.length;
-    std::uint8_t* dst = rec + f.record_offset;
     std::memcpy(dst, tmp, n);
     for (std::size_t i = n; i < f.length; ++i) dst[i] = ' ';
     return {};
