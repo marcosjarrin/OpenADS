@@ -2205,6 +2205,213 @@ UNSIGNED32 AdsFTSSearch(ADSHANDLE   /*hConnect*/,
     return ok();
 }
 
+// --- M10.1 Data-Dictionary CRUD --------------------------------------------
+//
+// Real persistence in OpenADS' clean-room DD text format. When the
+// caller's connection has no DD attached (i.e. the connection was
+// opened against a plain data directory, not a `.add` file), the
+// CRUD calls report AE_SUCCESS and no-op — matching the "everything
+// quiescent" contract used for AdsMg* in M9.24. Apps that opened
+// the DD via `Connection::open(<.add>)` (M6) get round-trip
+// persistence.
+
+namespace {
+
+openads::engine::DataDict* dd_from_handle(ADSHANDLE hConn) {
+    auto& s = state();
+    Connection* c = s.registry.lookup<Connection>(hConn, HandleKind::Connection);
+    if (c == nullptr || !c->has_dd()) return nullptr;
+    return c->dd();
+}
+
+}  // namespace
+
+UNSIGNED32 AdsDDAddIndexFile(ADSHANDLE hConn,
+                             UNSIGNED8* pucTable, UNSIGNED8* pucIndex,
+                             UNSIGNED8* pucComment) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto tbl  = openads::abi::to_internal(pucTable, 0);
+    auto idx  = openads::abi::to_internal(pucIndex, 0);
+    auto cmt  = pucComment ? openads::abi::to_internal(pucComment, 0)
+                           : std::string();
+    auto r = dd->add_index_file(tbl, idx, cmt);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDRemoveIndexFile(ADSHANDLE hConn,
+                                UNSIGNED8* pucTable, UNSIGNED8* pucIndex,
+                                UNSIGNED16 /*opt*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto tbl = openads::abi::to_internal(pucTable, 0);
+    auto idx = openads::abi::to_internal(pucIndex, 0);
+    auto r = dd->remove_index_file(tbl, idx);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* /*pucGroup*/,
+                           UNSIGNED8* pucUser, UNSIGNED8* /*pucPwd*/,
+                           UNSIGNED8* /*pucDesc*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto user = openads::abi::to_internal(pucUser, 0);
+    auto r = dd->create_user(user);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto user = openads::abi::to_internal(pucUser, 0);
+    auto r = dd->delete_user(user);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDAddUserToGroup(ADSHANDLE hConn,
+                               UNSIGNED8* pucGroup, UNSIGNED8* pucUser) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto group = openads::abi::to_internal(pucGroup, 0);
+    auto user  = openads::abi::to_internal(pucUser, 0);
+    auto r = dd->add_user_to_group(user, group);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
+                                    UNSIGNED8* pucGroup, UNSIGNED8* pucUser) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto group = openads::abi::to_internal(pucGroup, 0);
+    auto user  = openads::abi::to_internal(pucUser, 0);
+    auto r = dd->remove_user_from_group(user, group);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+                           UNSIGNED8* pucPath, UNSIGNED8* pucUser,
+                           UNSIGNED8* pucPwd, UNSIGNED16 /*opt*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto alias = openads::abi::to_internal(pucAlias, 0);
+    auto path  = openads::abi::to_internal(pucPath, 0);
+    auto user  = pucUser ? openads::abi::to_internal(pucUser, 0) : std::string();
+    auto pwd   = pucPwd  ? openads::abi::to_internal(pucPwd, 0)  : std::string();
+    auto r = dd->create_link(alias, path, user, pwd);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDropLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+                         UNSIGNED16 /*opt*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto alias = openads::abi::to_internal(pucAlias, 0);
+    auto r = dd->drop_link(alias);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+                           UNSIGNED8* pucPath, UNSIGNED8* pucUser,
+                           UNSIGNED8* pucPwd, UNSIGNED16 /*opt*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto alias = openads::abi::to_internal(pucAlias, 0);
+    auto path  = pucPath ? openads::abi::to_internal(pucPath, 0) : std::string();
+    auto user  = pucUser ? openads::abi::to_internal(pucUser, 0) : std::string();
+    auto pwd   = pucPwd  ? openads::abi::to_internal(pucPwd, 0)  : std::string();
+    auto r = dd->modify_link(alias, path, user, pwd);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
+                                   UNSIGNED8* pucName, UNSIGNED8* pucFail,
+                                   UNSIGNED8* pucParent, UNSIGNED8* pucChild,
+                                   UNSIGNED8* pucTag,
+                                   UNSIGNED16 usUpdate, UNSIGNED16 usDelete,
+                                   UNSIGNED8* /*pucDesc*/, UNSIGNED16 /*opt*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::RiEntry e;
+    e.name        = openads::abi::to_internal(pucName,   0);
+    e.parent      = pucParent ? openads::abi::to_internal(pucParent, 0) : std::string();
+    e.child       = pucChild  ? openads::abi::to_internal(pucChild,  0) : std::string();
+    e.tag         = pucTag    ? openads::abi::to_internal(pucTag,    0) : std::string();
+    e.update_opt  = std::to_string(static_cast<unsigned>(usUpdate));
+    e.delete_opt  = std::to_string(static_cast<unsigned>(usDelete));
+    e.fail_table  = pucFail   ? openads::abi::to_internal(pucFail,   0) : std::string();
+    auto r = dd->create_ri(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    auto r = dd->remove_ri(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+                                    void* pBuf, UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    std::string key = "prop_" + std::to_string(static_cast<unsigned>(usProp));
+    std::string val;
+    if (pBuf != nullptr && usLen > 0) {
+        val.assign(reinterpret_cast<const char*>(pBuf), usLen);
+    }
+    auto r = dd->set_db_property(key, val);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+                                    void* pBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) {
+        std::memset(pBuf, 0, cap);
+    }
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    std::string key = "prop_" + std::to_string(static_cast<unsigned>(usProp));
+    auto val = dd->get_db_property(key);
+    UNSIGNED16 n = static_cast<UNSIGNED16>(
+        std::min<std::size_t>(val.size(), cap));
+    if (pBuf != nullptr && n > 0) std::memcpy(pBuf, val.data(), n);
+    *pusLen = static_cast<UNSIGNED16>(val.size());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+                                UNSIGNED16 usProp, void* pBuf,
+                                UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto user = openads::abi::to_internal(pucUser, 0);
+    std::string key = "prop_" + std::to_string(static_cast<unsigned>(usProp));
+    auto val = dd->get_user_property(user, key);
+    UNSIGNED16 n = static_cast<UNSIGNED16>(
+        std::min<std::size_t>(val.size(), cap));
+    if (pBuf != nullptr && n > 0) std::memcpy(pBuf, val.data(), n);
+    *pusLen = static_cast<UNSIGNED16>(val.size());
+    return ok();
+}
+
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
                              UNSIGNED8*  pucFileName,
                              UNSIGNED8*  pucTag,
