@@ -1030,7 +1030,12 @@ openads::util::Result<void> activate_binding(ADSHANDLE h) {
 
     // Park the currently-active binding's index back into its slot
     // and register it as an extra view (so multi-index sync still
-    // touches it after the swap).
+    // touches it after the swap). When act_it points to a handle
+    // that's no longer in the binding map (stale entry left by a
+    // previous AdsCloseAllIndexes / test cleanup that didn't tidy
+    // act_), drop the act entry but leave Table::order_ alone — the
+    // current code may have set it via the legacy AdsCreateIndex path
+    // that doesn't populate `act_`.
     if (act_it != act.end()) {
         auto prev = m.find(act_it->second);
         if (prev != m.end()) {
@@ -1038,9 +1043,8 @@ openads::util::Result<void> activate_binding(ADSHANDLE h) {
             openads::drivers::IIndex* raw = taken.get();
             prev->second.parked = std::move(taken);
             if (raw) t->register_extra_index_view(raw);
-        } else {
-            t->clear_order();
         }
+        // else: stale act entry; leave Table::order_ untouched.
     }
 
     // Move the parked IIndex from this binding into the table; drop
@@ -1203,6 +1207,112 @@ UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
         else                       ++it;
     }
     t->clear_order();
+    return ok();
+}
+
+UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
+                            UNSIGNED8*  pucFileName,
+                            UNSIGNED8*  pucIndexName,
+                            UNSIGNED8*  pucExpr,
+                            UNSIGNED8*  /*pucCondition*/,
+                            UNSIGNED8*  /*pucKeyFilter*/,
+                            UNSIGNED32  ulOptions,
+                            UNSIGNED16  /*usPageSize*/,
+                            ADSHANDLE*  phIndex) {
+    Table* t = get_table(hTable);
+    if (!t || phIndex == nullptr || pucFileName == nullptr ||
+        pucIndexName == nullptr || pucExpr == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null arg");
+    }
+    auto bag  = openads::abi::to_internal(pucFileName, 0);
+    auto tag  = openads::abi::to_internal(pucIndexName, 0);
+    auto expr = openads::abi::to_internal(pucExpr, 0);
+
+    namespace fs = std::filesystem;
+    fs::path p(bag);
+    if (!p.is_absolute()) {
+        fs::path tdir = fs::path(t->path()).parent_path();
+        p = tdir / p;
+    }
+    if (!p.has_extension()) p.replace_extension(".cdx");
+    bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
+
+    bool unique  = (ulOptions & 0x01u) != 0;
+    bool descend = (ulOptions & 0x02u) != 0;
+
+    // Determine key length by evaluating the expression against the
+    // first live record. Empty tables get a 32-char default.
+    std::uint16_t klen = 32;
+    if (t->record_count() > 0) {
+        if (auto g = t->goto_record(1); g) {
+            auto k = openads::engine::evaluate_index_expr(*t, expr, 254);
+            if (k) {
+                std::string s = std::move(k).value();
+                while (!s.empty() && s.back() == ' ') s.pop_back();
+                if (!s.empty()) {
+                    klen = static_cast<std::uint16_t>(
+                        std::min<std::size_t>(s.size(), 254));
+                }
+            }
+        }
+    }
+
+    std::unique_ptr<openads::drivers::IIndex> idx_owner;
+    openads::drivers::IIndex* idx_view = nullptr;
+    bool exists = false;
+    {
+        std::error_code ec;
+        exists = is_cdx && fs::exists(p, ec);
+    }
+    if (is_cdx && exists) {
+        auto added = openads::drivers::cdx::CdxIndex::add_tag(
+            p.string(), tag, expr, klen, unique, descend);
+        if (!added) return fail(added.error());
+        idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
+            std::move(added).value());
+    } else if (is_cdx) {
+        auto created = openads::drivers::cdx::CdxIndex::create(
+            p.string(), tag, expr, klen, unique, descend);
+        if (!created) return fail(created.error());
+        idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
+            std::move(created).value());
+    } else {
+        auto created = openads::drivers::ntx::NtxIndex::create(
+            p.string(), tag, expr, klen, unique, descend);
+        if (!created) return fail(created.error());
+        idx_owner = std::make_unique<openads::drivers::ntx::NtxIndex>(
+            std::move(created).value());
+    }
+    idx_view = idx_owner.get();
+
+    auto rec_count = t->record_count();
+    for (std::uint32_t r = 1; r <= rec_count; ++r) {
+        if (auto g = t->goto_record(r); !g) return fail(g.error());
+        if (t->is_deleted()) continue;
+        auto k = openads::engine::evaluate_index_expr(*t, expr, klen);
+        if (!k) return fail(k.error());
+        if (auto ins = idx_owner->insert(r, k.value()); !ins) {
+            return fail(ins.error());
+        }
+    }
+    if (auto fl = idx_owner->flush(); !fl) return fail(fl.error());
+
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
+    bool table_has_active = false;
+    for (auto& kv : m) {
+        if (kv.second.table == t) { table_has_active = true; break; }
+    }
+    ADSHANDLE h = next_index_handle();
+    if (!table_has_active) {
+        t->set_order(std::move(idx_owner));
+        m[h] = IndexBinding{t, tag, nullptr};
+        act[t] = h;
+    } else {
+        t->register_extra_index_view(idx_view);
+        m[h] = IndexBinding{t, tag, std::move(idx_owner)};
+    }
+    *phIndex = h;
     return ok();
 }
 

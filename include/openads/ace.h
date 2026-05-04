@@ -56,6 +56,11 @@ UNSIGNED32 AdsCloseAllTables(ADSHANDLE  hConnect);
 UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen);
 
 UNSIGNED32 AdsRefreshRecord (ADSHANDLE hTable);
+UNSIGNED32 AdsCreateIndex61 (ADSHANDLE  hTable, UNSIGNED8* pucFileName,
+                              UNSIGNED8* pucIndexName, UNSIGNED8* pucExpr,
+                              UNSIGNED8* pucCondition, UNSIGNED8* pucKeyFilter,
+                              UNSIGNED32 ulOptions, UNSIGNED16 usPageSize,
+                              ADSHANDLE* phIndex);
 UNSIGNED32 AdsExtractKey    (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
                               UNSIGNED16* pusLen);
 

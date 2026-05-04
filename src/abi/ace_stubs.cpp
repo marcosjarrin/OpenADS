@@ -190,7 +190,6 @@ uint32_t AdsConvertTable         () { return MISS; }
 uint32_t AdsCopyTable            () { return MISS; }
 uint32_t AdsCopyTableContents    () { return MISS; }
 uint32_t AdsCreateFTSIndex       () { return MISS; }
-uint32_t AdsCreateIndex61        () { return MISS; }
 uint32_t AdsDDAddIndexFile       () { return MISS; }
 uint32_t AdsDDAddUserToGroup     () { return MISS; }
 uint32_t AdsDDCreateLink         () { return MISS; }
