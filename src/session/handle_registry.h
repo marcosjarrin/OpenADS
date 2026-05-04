@@ -30,6 +30,14 @@ public:
         return static_cast<T*>(it->second.ptr);
     }
 
+    template <class F>
+    void for_each_handle(F&& f) const {
+        std::lock_guard<std::mutex> lk(mu_);
+        for (auto& [h, slot] : slots_) {
+            f(h, slot.kind, slot.ptr);
+        }
+    }
+
 private:
     struct Slot { HandleKind kind = HandleKind::None; void* ptr = nullptr; };
 

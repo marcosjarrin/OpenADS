@@ -120,8 +120,6 @@ uint32_t AdsGetTableAlias       (uint64_t, uint8_t* buf, uint16_t* len) {
 }
 uint32_t AdsGetTableCharType    (uint64_t, uint16_t* p) { if (p) *p = /*ADS_ANSI*/ 1; return OK; }
 uint32_t AdsGetTableConnection  (uint64_t, uint64_t* p) { if (p) *p = 1; return OK; }
-uint32_t AdsGetTableFilename    (uint64_t, uint16_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
-uint32_t AdsGetTableType        (uint64_t, uint16_t* p) { if (p) *p = /*ADS_CDX*/ 2; return OK; }
 uint32_t AdsGetServerName       (uint64_t, uint8_t* buf, uint16_t* len) {
     if (len) { if (buf && *len > 0) buf[0] = '\0'; *len = 0; }
     return OK;
@@ -132,7 +130,6 @@ uint32_t AdsGetNumActiveLinks   (uint64_t, uint16_t* p) { if (p) *p = 0; return 
 uint32_t AdsGetNumLocks         (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetNumOpenTables    (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetRecord           (uint64_t, uint8_t*, uint32_t* len) { if (len) *len = 0; return OK; }
-uint32_t AdsGetRecordLength     (uint64_t, uint32_t* p) { if (p) *p = 0; return OK; }
 uint32_t AdsGetRelKeyPos        (uint64_t, double* p) { if (p) *p = 0.0; return OK; }
 uint32_t AdsGetLastTableUpdate  (uint64_t, uint8_t*, uint16_t* len) { if (len) *len = 0; return OK; }
 uint32_t AdsGetKeyLength        (uint64_t, uint16_t* p) { if (p) *p = 0; return OK; }
@@ -190,8 +187,6 @@ uint32_t AdsSetRecord           () { return OK; }
 // Return AE_FUNCTION_NOT_AVAILABLE so callers can detect that the
 // underlying feature is not yet implemented in OpenADS.
 uint32_t AdsAddCustomKey         () { return MISS; }
-uint32_t AdsCheckExistence       () { return MISS; }
-uint32_t AdsCloseAllTables       () { return MISS; }
 uint32_t AdsConvertTable         () { return MISS; }
 uint32_t AdsCopyTable            () { return MISS; }
 uint32_t AdsCopyTableContents    () { return MISS; }
@@ -213,7 +208,6 @@ uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
 uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
 uint32_t AdsDeleteCustomKey      () { return MISS; }
-uint32_t AdsDeleteFile           () { return MISS; }
 uint32_t AdsExtractKey           () { return MISS; }
 uint32_t AdsFailedTransactionRecovery() { return MISS; }
 uint32_t AdsFindClose            () { return MISS; }
@@ -225,7 +219,6 @@ uint32_t AdsGetBinaryLength      () { return MISS; }
 uint32_t AdsGetFieldW            () { return MISS; }
 uint32_t AdsGetLongLong          () { return MISS; }
 uint32_t AdsGetStringW           () { return MISS; }
-uint32_t AdsGotoRecord           () { return MISS; }
 uint32_t AdsMgConnect            () { return MISS; }
 uint32_t AdsMgDisconnect         () { return MISS; }
 uint32_t AdsMgGetActivityInfo    () { return MISS; }

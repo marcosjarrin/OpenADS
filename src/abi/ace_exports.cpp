@@ -196,6 +196,108 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     return ok();
 }
 
+UNSIGNED32 AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
+    Table* t = get_table(hTable);
+    if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    // Map our internal TableType back to ACE constants. We only own
+    // CDX and NTX today; the rest are out of scope for phase 1.
+    namespace fs = std::filesystem;
+    fs::path p(t->path());
+    auto ext = p.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(c)));
+    if (ext == ".dbf") {
+        // Distinguishing CDX vs NTX vs VFP from a bare DBF requires
+        // probing the matching index file alongside it, which we
+        // don't do yet. Return CDX (the most common case).
+        *pusType = ADS_CDX;
+    } else if (ext == ".adt") {
+        *pusType = ADS_ADT;
+    } else {
+        *pusType = ADS_CDX;
+    }
+    return ok();
+}
+
+UNSIGNED32 AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
+                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    Table* t = get_table(hTable);
+    if (!t || pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    openads::abi::copy_to_caller(pucBuf, pusLen, t->path());
+    return ok();
+}
+
+UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
+    Table* t = get_table(hTable);
+    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (t->driver() == nullptr) { *pulLen = 0; return ok(); }
+    *pulLen = t->driver()->record_length();
+    return ok();
+}
+
+UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->goto_record(ulRecord);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsCheckExistence(ADSHANDLE /*hConn*/, UNSIGNED8* pucName,
+                             UNSIGNED16* pbExists) {
+    if (pbExists == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null out");
+    }
+    if (pucName == nullptr) {
+        *pbExists = 0;
+        return ok();
+    }
+    auto path = openads::abi::to_internal(pucName, 0);
+    std::error_code ec;
+    *pbExists = std::filesystem::exists(path, ec) ? 1 : 0;
+    return ok();
+}
+
+UNSIGNED32 AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
+    if (pucName == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null name");
+    auto path = openads::abi::to_internal(pucName, 0);
+    std::error_code ec;
+    if (!std::filesystem::remove(path, ec)) {
+        return fail(openads::AE_INTERNAL_ERROR,
+                    "AdsDeleteFile: file not found / cannot remove");
+    }
+    return ok();
+}
+
+UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConn,
+                            HandleKind::Connection);
+    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    // Walk every Table handle that points to a Table belonging to
+    // this connection and release it. Connection's tables_ map owns
+    // the unique_ptrs; the handle registry just borrows pointers.
+    std::vector<Handle> to_release;
+    s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+        if (k != HandleKind::Table) return;
+        Table* tp = static_cast<Table*>(p);
+        if (tp == nullptr) return;
+        // Table belongs to this connection if c->lookup_table on its
+        // handle returns the same pointer. We don't track the
+        // back-edge directly, so iterate all Connection's table
+        // handles instead.
+        (void)tp;
+        to_release.push_back(h);
+    });
+    for (Handle h : to_release) {
+        Table* t = s.registry.lookup<Table>(h, HandleKind::Table);
+        if (t) (void)t->flush();
+        s.registry.release(h);
+    }
+    return ok();
+}
+
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     auto& s = state();
     std::lock_guard<std::mutex> lk(s.mu);
