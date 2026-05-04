@@ -230,7 +230,6 @@ uint32_t AdsMgGetUserNames       () { return MISS; }
 uint32_t AdsMgGetWorkerThreadActivity() { return MISS; }
 uint32_t AdsMgKillUser           () { return MISS; }
 uint32_t AdsMgResetCommStats     () { return MISS; }
-uint32_t AdsReindex              () { return MISS; }
 uint32_t AdsRestructureTable     () { return MISS; }
 uint32_t AdsSetBinary            () { return MISS; }
 uint32_t AdsSetFieldRaw          () { return MISS; }

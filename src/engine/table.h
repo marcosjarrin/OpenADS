@@ -76,6 +76,13 @@ public:
     // bound index so its entries point at the new recnos.
     util::Result<void> pack();
 
+    // Re-build every bound index in place by clearing its entries
+    // and re-inserting (recno, evaluate_index_expr) for each live
+    // record. Used by AdsReindex when an app has mutated the DBF
+    // outside the index sync path or the key expression has been
+    // changed externally.
+    util::Result<void> reindex();
+
     // Locking surface.
     util::Result<void> lock_record_excl(std::uint32_t recno);
     util::Result<void> unlock_record    (std::uint32_t recno);

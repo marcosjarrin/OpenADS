@@ -454,9 +454,10 @@ util::Result<void> Table::pack() {
             }
         }
     }
-    // 2) Truncate to dst by zapping then re-walking surviving records
-    //    that were already copied: simplest is to issue a zap (which
-    //    also wipes index entries) and re-append the survivors.
+    // 2) Truncate the on-disk record count to `dst` by saving the
+    //    survivors, zapping the driver (DBF-only — does NOT touch
+    //    bound indexes), and re-appending. Pack matches Clipper's
+    //    semantics: indexes are left stale, the caller must REINDEX.
     std::vector<std::vector<std::uint8_t>> survivors;
     survivors.reserve(dst);
     for (std::uint32_t i = 1; i <= dst; ++i) {
@@ -464,24 +465,73 @@ util::Result<void> Table::pack() {
         if (!rec) return rec.error();
         survivors.push_back(std::move(rec).value());
     }
-    if (auto r = zap(); !r) return r.error();
+    if (auto r = driver_->zap(); !r) return r.error();
     for (auto& buf : survivors) {
         auto a = driver_->append_record_raw(buf.data(), buf.size());
         if (!a) return a.error();
-        recno_ = a.value();
-        record_buf_ = buf;
-        state_ = State::Positioned;
-        // Re-insert into every active+extra index using the live key.
-        auto snap = snapshot_index_keys_();
-        std::vector<std::pair<drivers::IIndex*, std::string>> empty_snap;
-        // Reuse sync_all_indexes_ with empty prev keys so it just
-        // inserts the new (recno, key).
-        (void)snap;
-        if (auto r = sync_all_indexes_(empty_snap); !r) return r.error();
     }
     state_ = State::Bof;
     recno_ = 0;
     record_buf_.assign(driver_->record_length(), 0);
+    return {};
+}
+
+util::Result<void> Table::reindex() {
+    if (mode_ == OpenMode::Read) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (driver_ == nullptr) return {};
+
+    // 1) Clear every bound index. Re-using the same erase walk that
+    //    zap() uses keeps the IIndex file structurally intact.
+    auto erase_all = [&](drivers::IIndex* idx) -> util::Result<void> {
+        if (idx == nullptr) return {};
+        std::vector<std::pair<std::uint32_t, std::string>> entries;
+        auto seek = idx->seek_first();
+        while (seek && seek.value().positioned) {
+            entries.emplace_back(seek.value().recno, idx->current_key());
+            seek = idx->next();
+        }
+        for (auto& [rec, key] : entries) {
+            (void)idx->erase(rec, key);
+        }
+        return {};
+    };
+    if (order_ && order_->index()) {
+        if (auto r = erase_all(order_->index()); !r) return r.error();
+    }
+    for (auto* x : extra_index_views_) {
+        if (auto r = erase_all(x); !r) return r.error();
+    }
+
+    // 2) Walk every live record and re-insert into each index using
+    //    its current key expression. Snapshot is built with empty
+    //    prev_keys so sync_all_indexes_ skips the (unneeded) erase
+    //    pass and performs only the insert.
+    std::vector<std::pair<drivers::IIndex*, std::string>> snap;
+    if (order_ && order_->index()) snap.emplace_back(order_->index(),
+                                                     std::string{});
+    for (auto* x : extra_index_views_) {
+        if (x) snap.emplace_back(x, std::string{});
+    }
+    auto rec_count = driver_->record_count();
+    for (std::uint32_t r = 1; r <= rec_count; ++r) {
+        if (auto g = goto_record(r); !g) return g.error();
+        if (is_deleted()) continue;
+        if (auto s = sync_all_indexes_(snap); !s) return s.error();
+    }
+
+    // 3) Flush every index so the rebuilt entries hit disk before the
+    //    caller resumes work.
+    if (order_ && order_->index()) {
+        if (auto r = order_->index()->flush(); !r) return r.error();
+    }
+    for (auto* x : extra_index_views_) {
+        if (x == nullptr) continue;
+        if (auto r = x->flush(); !r) return r.error();
+    }
+    state_ = State::Bof;
+    recno_ = 0;
     return {};
 }
 

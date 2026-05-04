@@ -1550,6 +1550,14 @@ UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 AdsReindex(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto r = t->reindex();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 AdsPackTable_DEFERRED(ADSHANDLE /*hTable*/) {
     return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
                 "AdsPackTable lands in M4 alongside memo store");

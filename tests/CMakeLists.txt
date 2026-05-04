@@ -47,6 +47,7 @@ add_executable(openads_unit_tests
     unit/abi_refresh_extract_test.cpp
     unit/abi_create_index61_test.cpp
     unit/abi_zap_pack_test.cpp
+    unit/abi_reindex_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
