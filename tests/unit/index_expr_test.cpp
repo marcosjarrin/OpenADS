@@ -1,0 +1,170 @@
+#include "doctest.h"
+
+#include "engine/index_expr.h"
+#include "engine/table.h"
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+namespace fs = std::filesystem;
+using openads::engine::Table;
+using openads::engine::TableType;
+using openads::engine::OpenMode;
+using openads::engine::evaluate_index_expr;
+
+namespace {
+
+// Stage a tiny DBF with NAME C(10) + AGE N(3,0) + BORN D(8) so the
+// expression evaluator has real fields to look up.
+fs::path stage_dbf(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto p = dir / "expr.dbf";
+    fs::remove(p);
+
+    std::vector<std::uint8_t> buf;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        buf.insert(buf.end(), b, b + n);
+    };
+    auto pad = [&](std::size_t n) { for (std::size_t i = 0; i < n; ++i) buf.push_back(0); };
+
+    // Header.
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0] = 0x03;
+    hdr[4] = 1;                       // 1 record
+    hdr[8] = 32 + 32 * 3 + 1;        // header_len = 129
+    hdr[10] = 1 + 10 + 3 + 8;         // record_len = 22
+    push(hdr.data(), hdr.size());
+
+    auto field = [&](const char* name, char type, std::uint8_t len) {
+        std::array<std::uint8_t, 32> fd{};
+        std::strncpy(reinterpret_cast<char*>(fd.data()), name, 11);
+        fd[11] = static_cast<std::uint8_t>(type);
+        fd[16] = len;
+        push(fd.data(), fd.size());
+    };
+    field("NAME", 'C', 10);
+    field("AGE",  'N',  3);
+    field("BORN", 'D',  8);
+    buf.push_back(0x0D);
+
+    // One record: " ALPHA      75 19990501"
+    buf.push_back(' ');                                  // not deleted
+    const char name[10] = {'A','L','P','H','A',' ',' ',' ',' ',' '};
+    push(name, 10);
+    push(" 75", 3);
+    push("19990501", 8);
+    buf.push_back(0x1A);
+
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(buf.data()),
+        static_cast<std::streamsize>(buf.size()));
+    (void)pad;
+    return p;
+}
+
+Table open_table(const fs::path& p) {
+    auto t = Table::open(p.string(), TableType::Cdx, OpenMode::Read);
+    REQUIRE(t.has_value());
+    Table tbl = std::move(t).value();
+    REQUIRE(tbl.goto_top().has_value());
+    return tbl;
+}
+
+} // namespace
+
+TEST_CASE("index_expr: bare field name returns padded raw bytes") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr1";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto k = evaluate_index_expr(tbl, "NAME", 10);
+    REQUIRE(k.has_value());
+    CHECK(k.value() == "ALPHA     ");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("index_expr: UPPER + LOWER on string fields") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr2";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto u = evaluate_index_expr(tbl, "UPPER(NAME)", 10);
+    REQUIRE(u.has_value());
+    CHECK(u.value() == "ALPHA     ");
+
+    auto l = evaluate_index_expr(tbl, "LOWER(NAME)", 10);
+    REQUIRE(l.has_value());
+    CHECK(l.value() == "alpha     ");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("index_expr: STR formats numerics with width and decimals") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr3";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto s = evaluate_index_expr(tbl, "STR(AGE, 4)", 4);
+    REQUIRE(s.has_value());
+    CHECK(s.value() == "  75");
+
+    auto sd = evaluate_index_expr(tbl, "STR(AGE, 6, 1)", 6);
+    REQUIRE(sd.has_value());
+    CHECK(sd.value() == "  75.0");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("index_expr: DTOS returns YYYYMMDD") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr4";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto d = evaluate_index_expr(tbl, "DTOS(BORN)", 8);
+    REQUIRE(d.has_value());
+    CHECK(d.value() == "19990501");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("index_expr: concatenation with + builds compound keys") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr5";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto k = evaluate_index_expr(tbl, "RTRIM(NAME) + DTOS(BORN)", 14);
+    REQUIRE(k.has_value());
+    CHECK(k.value() == "ALPHA19990501 ");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("index_expr: SUBSTR slices a string field") {
+    auto dir = fs::temp_directory_path() / "openads_idx_expr6";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto k = evaluate_index_expr(tbl, "SUBSTR(NAME, 1, 3)", 3);
+    REQUIRE(k.has_value());
+    CHECK(k.value() == "ALP");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}

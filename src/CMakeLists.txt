@@ -28,6 +28,7 @@ add_library(openads_core STATIC
     engine/cursor.cpp
     engine/lock_mgr.cpp
     engine/order.cpp
+    engine/index_expr.cpp
     engine/aes.cpp
     engine/tx.cpp
     engine/tx_log.cpp

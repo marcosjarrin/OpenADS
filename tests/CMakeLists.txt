@@ -41,6 +41,7 @@ add_executable(openads_unit_tests
     unit/sql_parser_test.cpp
     unit/abi_sql_smoke_test.cpp
     unit/lsn_map_test.cpp
+    unit/index_expr_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

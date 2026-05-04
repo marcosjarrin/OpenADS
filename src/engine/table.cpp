@@ -1,5 +1,7 @@
 #include "engine/table.h"
 
+#include "engine/index_expr.h"
+
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/ntx/ntx_driver.h"
 
@@ -69,21 +71,13 @@ util::Result<void> Table::load_record_(std::uint32_t recno) {
 
 std::string Table::compute_index_key_(const std::string& expr,
                                       std::uint16_t       key_len) const {
-    // Bare field-name expression: use the column's bytes verbatim,
-    // padded with spaces to key_len. Compound expressions (UPPER(),
-    // STR(), concatenation, ...) land in a future milestone.
-    auto idx = field_index(expr);
-    if (idx < 0) return std::string(key_len, ' ');
-    const auto& f = driver_->fields().at(static_cast<std::size_t>(idx));
-    if (record_buf_.size() < f.record_offset + f.length) {
-        return std::string(key_len, ' ');
-    }
-    std::string key(reinterpret_cast<const char*>(
-                        record_buf_.data() + f.record_offset),
-                    f.length);
-    if (key.size() < key_len) key.append(key_len - key.size(), ' ');
-    if (key.size() > key_len) key.resize(key_len);
-    return key;
+    // Compound expressions (UPPER(NAME), STR(AGE,3), concatenation,
+    // SUBSTR, ...) handled by engine/index_expr.cpp. Bare field-name
+    // expressions short-circuit there to the legacy raw-bytes path so
+    // existing CDX files stay byte-exact.
+    auto r = evaluate_index_expr(const_cast<Table&>(*this), expr, key_len);
+    if (!r) return std::string(key_len, ' ');
+    return r.value();
 }
 
 // Snapshot the current key for every bound index. Caller invokes
