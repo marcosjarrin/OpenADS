@@ -3514,9 +3514,112 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
 
-    // M10.5/M10.7: dispatch on the leading keyword. INSERT / UPDATE /
-    // DELETE write rows and return no cursor (phCursor → 0); SELECT
-    // keeps the M9.21 path.
+    // M10.5/M10.7/M10.9: dispatch on the leading keyword. INSERT /
+    // UPDATE / DELETE / CREATE TABLE / CREATE INDEX write through
+    // the engine and return no cursor (phCursor → 0); SELECT keeps
+    // the M9.21 path.
+    if (openads::sql::sql_is_create_table(sql)) {
+        auto& s = state();
+        auto ct = openads::sql::parse_create_table(sql);
+        if (!ct) return fail(ct.error());
+        // Build the rddads `NAME,Type,Len,Dec;…` field-def string and
+        // route through AdsCreateTable so M9.5's parser owns the
+        // schema-write logic.
+        std::string defs;
+        for (const auto& col : ct.value().columns) {
+            if (!defs.empty()) defs.push_back(';');
+            defs += col.name;
+            defs.push_back(',');
+            defs += col.type;
+            if (col.length > 0) {
+                defs.push_back(',');
+                defs += std::to_string(col.length);
+            }
+            if (col.decimals > 0) {
+                defs.push_back(',');
+                defs += std::to_string(col.decimals);
+            }
+        }
+        std::vector<UNSIGNED8> name_buf(ct.value().table.size() + 1, 0);
+        std::memcpy(name_buf.data(), ct.value().table.data(),
+                    ct.value().table.size());
+        std::vector<UNSIGNED8> def_buf(defs.size() + 1, 0);
+        std::memcpy(def_buf.data(), defs.data(), defs.size());
+        ADSHANDLE hTable = 0;
+        // Resolve the connection's registry handle so AdsCreateTable
+        // can look it up the same way external callers do.
+        ADSHANDLE conn_h = 0;
+        s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+            if (k != HandleKind::Connection) return;
+            if (static_cast<Connection*>(p) == c) conn_h = h;
+        });
+        if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        UNSIGNED32 rc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
+                                       ADS_CDX, 0, 0, 0, 0,
+                                       def_buf.data(), &hTable);
+        if (rc != openads::AE_SUCCESS) return rc;
+        // Close the table immediately; CREATE TABLE returns no cursor.
+        AdsCloseTable(hTable);
+        *phCursor = 0;
+        return ok();
+    }
+
+    if (openads::sql::sql_is_create_index(sql)) {
+        auto& s = state();
+        auto ci = openads::sql::parse_create_index(sql);
+        if (!ci) return fail(ci.error());
+        // Resolve the connection handle and open the table to obtain
+        // an ADSHANDLE for AdsCreateIndex61.
+        ADSHANDLE conn_h = 0;
+        s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+            if (k != HandleKind::Connection) return;
+            if (static_cast<Connection*>(p) == c) conn_h = h;
+        });
+        if (conn_h == 0) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+        std::vector<UNSIGNED8> name_buf(ci.value().table.size() + 1, 0);
+        std::memcpy(name_buf.data(), ci.value().table.data(),
+                    ci.value().table.size());
+        ADSHANDLE hTable = 0;
+        if (auto rc = AdsOpenTable(conn_h, name_buf.data(), name_buf.data(),
+                                   ADS_CDX, 1, 1, 0, 1, &hTable);
+            rc != openads::AE_SUCCESS) {
+            return rc;
+        }
+
+        // CREATE INDEX writes a sibling .cdx by default. Build the
+        // file name from the table's stem so subsequent reopens
+        // auto-attach. Caller can specify the bag explicitly via the
+        // tag name's prefix; for now derive it.
+        namespace fs = std::filesystem;
+        fs::path tbl_path(c->data_dir());
+        tbl_path /= ci.value().table;
+        if (!tbl_path.has_extension()) tbl_path.replace_extension(".dbf");
+        fs::path bag = tbl_path;
+        bag.replace_extension(".cdx");
+
+        std::vector<UNSIGNED8> bag_buf(bag.string().size() + 1, 0);
+        std::memcpy(bag_buf.data(), bag.string().data(),
+                    bag.string().size());
+        std::vector<UNSIGNED8> tag_buf(ci.value().tag.size() + 1, 0);
+        std::memcpy(tag_buf.data(), ci.value().tag.data(),
+                    ci.value().tag.size());
+        std::vector<UNSIGNED8> expr_buf(ci.value().expression.size() + 1, 0);
+        std::memcpy(expr_buf.data(), ci.value().expression.data(),
+                    ci.value().expression.size());
+        UNSIGNED32 opts = 0;
+        if (ci.value().unique)     opts |= 0x01u;
+        if (ci.value().descending) opts |= 0x02u;
+        ADSHANDLE hIdx = 0;
+        UNSIGNED32 rc = AdsCreateIndex61(
+            hTable, bag_buf.data(), tag_buf.data(),
+            expr_buf.data(), nullptr, nullptr,
+            opts, 512, &hIdx);
+        AdsCloseTable(hTable);
+        if (rc != openads::AE_SUCCESS) return rc;
+        *phCursor = 0;
+        return ok();
+    }
+
     if (openads::sql::sql_is_update(sql)) {
         auto upd = openads::sql::parse_update(sql);
         if (!upd) return fail(upd.error());

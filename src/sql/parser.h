@@ -92,9 +92,37 @@ struct DeleteStmt {
 
 util::Result<DeleteStmt> parse_delete(const std::string& sql);
 
+// M10.9 — `CREATE TABLE <name> (<col> <type> [(<len> [, <dec>])] …)`.
+struct CreateTableColumn {
+    std::string  name;
+    std::string  type;          // 'Character' / 'Numeric' / 'Memo' / …
+    std::uint32_t length    = 0;
+    std::uint32_t decimals  = 0;
+};
+
+struct CreateTableStmt {
+    std::string                       table;
+    std::vector<CreateTableColumn>    columns;
+};
+
+util::Result<CreateTableStmt> parse_create_table(const std::string& sql);
+
+// M10.9 — `CREATE INDEX <tag> ON <table> (<expr>) [DESCENDING] [UNIQUE]`.
+struct CreateIndexStmt {
+    std::string  table;
+    std::string  tag;
+    std::string  expression;
+    bool         descending = false;
+    bool         unique     = false;
+};
+
+util::Result<CreateIndexStmt> parse_create_index(const std::string& sql);
+
 // Leading-keyword peeks (used by AdsExecuteSQLDirect to dispatch).
 bool sql_is_insert(const std::string& sql);
 bool sql_is_update(const std::string& sql);
 bool sql_is_delete(const std::string& sql);
+bool sql_is_create_table(const std::string& sql);
+bool sql_is_create_index(const std::string& sql);
 
 } // namespace openads::sql

@@ -155,6 +155,14 @@ public:
         return pos_ < s_.size() && s_[pos_] == c;
     }
 
+    // Advance past one raw character (no whitespace skip) and return
+    // it. Used by the CREATE INDEX expression scanner that wants to
+    // capture the source text verbatim until the matching ')'.
+    char consume_char() {
+        if (pos_ >= s_.size()) return '\0';
+        return s_[pos_++];
+    }
+
 private:
     const std::string& s_;
     std::size_t        pos_ = 0;
@@ -356,6 +364,138 @@ bool sql_is_update(const std::string& sql) {
 bool sql_is_delete(const std::string& sql) {
     Cursor c(sql);
     return c.match_keyword("DELETE");
+}
+
+bool sql_is_create_table(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("CREATE") && c.match_keyword("TABLE");
+}
+
+bool sql_is_create_index(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("CREATE") && c.match_keyword("INDEX");
+}
+
+util::Result<CreateTableStmt>
+parse_create_table(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("CREATE")) {
+        return util::Error{7200, 0, "expected CREATE", sql};
+    }
+    if (!c.match_keyword("TABLE")) {
+        return util::Error{7200, 0, "expected TABLE", sql};
+    }
+    CreateTableStmt stmt;
+    stmt.table = c.read_identifier_or_filename();
+    if (stmt.table.empty()) {
+        return util::Error{7200, 0, "expected table name", sql};
+    }
+    if (!c.match_char('(')) {
+        return util::Error{7200, 0,
+            "expected '(' to open column list", sql};
+    }
+    for (;;) {
+        CreateTableColumn col;
+        col.name = c.read_identifier();
+        if (col.name.empty()) {
+            return util::Error{7200, 0,
+                "expected column name in CREATE TABLE", sql};
+        }
+        col.type = c.read_identifier();
+        if (col.type.empty()) {
+            return util::Error{7200, 0,
+                "expected type after column name", sql};
+        }
+        if (c.match_char('(')) {
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            col.length = static_cast<std::uint32_t>(n.value());
+            if (c.match_char(',')) {
+                auto d = c.read_numeric_literal();
+                if (!d) return d.error();
+                col.decimals = static_cast<std::uint32_t>(d.value());
+            }
+            if (!c.match_char(')')) {
+                return util::Error{7200, 0,
+                    "expected ')' to close column type", sql};
+            }
+        }
+        stmt.columns.push_back(std::move(col));
+        if (c.match_char(',')) continue;
+        break;
+    }
+    if (!c.match_char(')')) {
+        return util::Error{7200, 0,
+            "expected ')' to close column list", sql};
+    }
+    c.match_char(';');
+    return stmt;
+}
+
+util::Result<CreateIndexStmt>
+parse_create_index(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("CREATE")) {
+        return util::Error{7200, 0, "expected CREATE", sql};
+    }
+    if (!c.match_keyword("INDEX")) {
+        return util::Error{7200, 0, "expected INDEX", sql};
+    }
+    CreateIndexStmt stmt;
+    stmt.tag = c.read_identifier();
+    if (stmt.tag.empty()) {
+        return util::Error{7200, 0, "expected index tag name", sql};
+    }
+    if (!c.match_keyword("ON")) {
+        return util::Error{7200, 0, "expected ON", sql};
+    }
+    stmt.table = c.read_identifier_or_filename();
+    if (stmt.table.empty()) {
+        return util::Error{7200, 0, "expected table name", sql};
+    }
+    if (!c.match_char('(')) {
+        return util::Error{7200, 0,
+            "expected '(' to open index expression", sql};
+    }
+    // Read everything up to the matching ')' as the expression. The
+    // existing engine evaluator handles compound expressions like
+    // UPPER(name) so identifiers + parens nest correctly.
+    std::string expr;
+    int depth = 1;
+    while (depth > 0) {
+        if (c.eof()) {
+            return util::Error{7200, 0,
+                "unterminated CREATE INDEX expression", sql};
+        }
+        if (c.match_char('(')) { ++depth; expr.push_back('('); continue; }
+        if (c.match_char(')')) {
+            --depth;
+            if (depth == 0) break;
+            expr.push_back(')');
+            continue;
+        }
+        // Append the next character verbatim.
+        // (Cursor doesn't expose a "consume one char" method; reuse
+        // skip_ws then read whatever it lands on.)
+        expr.push_back(c.consume_char());
+    }
+    while (!expr.empty() &&
+           std::isspace(static_cast<unsigned char>(expr.front()))) {
+        expr.erase(expr.begin());
+    }
+    while (!expr.empty() &&
+           std::isspace(static_cast<unsigned char>(expr.back()))) {
+        expr.pop_back();
+    }
+    stmt.expression = std::move(expr);
+    if (c.match_keyword("DESCENDING") || c.match_keyword("DESC")) {
+        stmt.descending = true;
+    }
+    if (c.match_keyword("UNIQUE")) {
+        stmt.unique = true;
+    }
+    c.match_char(';');
+    return stmt;
 }
 
 util::Result<UpdateStmt> parse_update(const std::string& sql) {
