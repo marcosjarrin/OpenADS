@@ -151,9 +151,17 @@ bool Table::key_in_bottom_scope_(const std::string& key) const {
 util::Result<void> Table::goto_top() {
     if (order_ && order_->index()) {
         auto* idx = order_->index();
-        util::Result<drivers::SeekOutcome> r = order_->scope().top.has_value()
-            ? idx->seek_key(*order_->scope().top, true)
-            : idx->seek_first();
+        util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
+        if (order_->descending_traverse()) {
+            // Reverse traversal: "top" is the last key in ascending
+            // order. Scopes flip too — top-bound becomes the upper
+            // bound while walking backward.
+            r = idx->seek_last();
+        } else if (order_->scope().top.has_value()) {
+            r = idx->seek_key(*order_->scope().top, true);
+        } else {
+            r = idx->seek_first();
+        }
         if (!r) return r.error();
         if (!r.value().positioned) {
             state_ = State::Eof; recno_ = 0; return {};
@@ -210,9 +218,13 @@ util::Result<void> Table::skip(std::int32_t delta) {
     if (order_ && order_->index()) {
         auto* idx = order_->index();
         if (delta == 0) return {};
+        // M10.4: when the order is descending, forward-skip walks
+        // prev() instead of next() so the cursor moves through the
+        // tree in reverse from the caller's perspective.
+        bool effective_forward = (delta > 0) ^ order_->descending_traverse();
         util::Result<drivers::SeekOutcome> r = drivers::SeekOutcome{};
         for (std::int32_t i = 0; i < std::abs(delta); ++i) {
-            r = (delta > 0) ? idx->next() : idx->prev();
+            r = effective_forward ? idx->next() : idx->prev();
             if (!r) return r.error();
             if (!r.value().positioned) {
                 if (delta > 0) { state_ = State::Eof; recno_ = 0; }

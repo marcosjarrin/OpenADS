@@ -510,17 +510,48 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
                                : std::string();
     auto chg = pucChangeFields ? openads::abi::to_internal(pucChangeFields, 0)
                                : std::string();
-    if (!del.empty() || !chg.empty()) {
+
+    // CHANGE (rename / retype / re-length existing fields) requires
+    // either silent type coercion semantics or a clean-room ADS spec
+    // we don't have. ADD + DELETE cover the common evolution cases;
+    // CHANGE stays deferred until a future milestone.
+    if (!chg.empty()) {
         return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "AdsRestructureTable: only ADD-fields path supported "
-                    "in 0.2.x; DELETE / CHANGE arrive with VFP / ADT in 0.3.x");
+                    "AdsRestructureTable: CHANGE-fields path deferred "
+                    "(ADD + DELETE are supported)");
     }
+
     auto add = pucAddFields ? openads::abi::to_internal(pucAddFields, 0)
                             : std::string();
     auto add_fields = parse_rddads_field_defs(add);
-    if (add_fields.empty()) {
-        // No-op: nothing to add.
-        return ok();
+
+    // DELETE list is a `;`-separated list of bare field names —
+    // unlike pucAddFields the entries carry no type / len info.
+    std::unordered_set<std::string> del_set;
+    {
+        std::string buf;
+        auto flush = [&] {
+            std::string trimmed = buf;
+            while (!trimmed.empty() &&
+                   std::isspace(static_cast<unsigned char>(trimmed.front()))) {
+                trimmed.erase(trimmed.begin());
+            }
+            while (!trimmed.empty() &&
+                   std::isspace(static_cast<unsigned char>(trimmed.back()))) {
+                trimmed.pop_back();
+            }
+            if (!trimmed.empty()) del_set.insert(trimmed);
+            buf.clear();
+        };
+        for (std::size_t i = 0; i <= del.size(); ++i) {
+            char ch = (i < del.size()) ? del[i] : ';';
+            if (ch == ';' || ch == ',') flush();
+            else buf.push_back(ch);
+        }
+    }
+
+    if (add_fields.empty() && del_set.empty()) {
+        return ok();   // nothing to do
     }
 
     auto rel = openads::abi::to_internal(pucTableName, 0);
@@ -544,28 +575,48 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
         if (!opened) return fail(opened.error());
         auto& t = opened.value();
 
-        // Combined schema = original fields + new fields. Reject
-        // duplicate names so the merged record buffer stays
-        // unambiguous.
-        std::vector<FieldOut> merged;
+        // Per-field copy plan: keep the source order, drop fields that
+        // appear in the DELETE list, then append the ADD list. Each
+        // surviving field tracks where to copy from in the old record
+        // (or no source for newly-added columns).
+        struct PerField {
+            FieldOut       descriptor;
+            bool           from_old   = false;
+            std::uint16_t  old_offset = 0;
+        };
+        std::vector<PerField> plan;
         for (std::uint16_t i = 0; i < t.field_count(); ++i) {
             const auto& src = t.field_descriptor(i);
-            FieldOut f;
-            f.name   = src.name;
-            f.type   = src.raw_type;
-            f.length = src.length;
-            f.dec    = src.decimals;
-            merged.push_back(std::move(f));
+            if (del_set.find(src.name) != del_set.end()) continue;
+            PerField p;
+            p.descriptor.name   = src.name;
+            p.descriptor.type   = src.raw_type;
+            p.descriptor.length = src.length;
+            p.descriptor.dec    = src.decimals;
+            p.from_old   = true;
+            p.old_offset = src.record_offset;
+            plan.push_back(std::move(p));
         }
         for (auto& nf : add_fields) {
-            for (auto& existing : merged) {
-                if (existing.name == nf.name) {
+            for (auto& existing : plan) {
+                if (existing.descriptor.name == nf.name) {
                     return fail(openads::AE_INTERNAL_ERROR,
                                 "AdsRestructureTable: duplicate field name");
                 }
             }
-            merged.push_back(nf);
+            PerField p;
+            p.descriptor = nf;
+            p.from_old   = false;
+            plan.push_back(std::move(p));
         }
+        if (plan.empty()) {
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "AdsRestructureTable: every field deleted "
+                        "without an ADD — would leave the table empty");
+        }
+        std::vector<FieldOut> merged;
+        merged.reserve(plan.size());
+        for (auto& p : plan) merged.push_back(p.descriptor);
 
         std::uint16_t header_len = static_cast<std::uint16_t>(
             32 + 32 * merged.size() + 1);
@@ -608,11 +659,19 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 
             std::vector<std::uint8_t> new_buf(rec_len, ' ');
             new_buf[0] = old_buf.empty() ? ' ' : old_buf[0];
-            if (old_rec_len > 1 && old_buf.size() >= old_rec_len) {
-                std::memcpy(new_buf.data() + 1,
-                            old_buf.data() + 1,
-                            old_rec_len - 1);
+            std::uint16_t out_off = 1;
+            for (auto& p : plan) {
+                if (p.from_old &&
+                    old_buf.size() >= static_cast<std::size_t>(p.old_offset) +
+                                       static_cast<std::size_t>(p.descriptor.length)) {
+                    std::memcpy(new_buf.data() + out_off,
+                                old_buf.data() + p.old_offset,
+                                p.descriptor.length);
+                }
+                out_off = static_cast<std::uint16_t>(
+                    out_off + p.descriptor.length);
             }
+            (void)old_rec_len;
             file_bytes.insert(file_bytes.end(),
                               new_buf.begin(), new_buf.end());
         }
@@ -2535,9 +2594,25 @@ UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
     return ok();
 }
 
-UNSIGNED32 AdsSetIndexDirection(ADSHANDLE /*hIndex*/, UNSIGNED16 /*usDir*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsSetIndexDirection deferred");
+UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    auto it = index_bindings().find(hIndex);
+    if (it == index_bindings().end()) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    }
+    Table* t = it->second.table;
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    (void)activate_binding(hIndex);
+    auto* o = t->order();
+    if (o == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "no active order");
+    }
+    // ACE convention: usDir == 0 (ADS_ASCENDING) → forward; non-zero
+    // (ADS_DESCENDING) → reverse.
+    const_cast<openads::engine::Order*>(o)->set_descending_traverse(
+        usDir != 0);
+    return ok();
 }
 
 // ACE / rddads signature: 6 args.

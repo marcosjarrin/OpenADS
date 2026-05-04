@@ -123,7 +123,11 @@ TEST_CASE("M9.26 AdsRestructureTable adds a new field, preserves old data") {
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("M9.26 AdsRestructureTable rejects DELETE / CHANGE field lists") {
+TEST_CASE("M9.26 AdsRestructureTable still rejects CHANGE field lists") {
+    // CHANGE-fields semantics (rename / retype existing columns) need
+    // a clean-room ADS spec we don't have; M10.4 ships ADD + DELETE
+    // only. The DELETE-fields path is now real (covered by an M10.4
+    // test below).
     auto dir = fs::temp_directory_path() / "openads_m9_26_reject";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -137,19 +141,136 @@ TEST_CASE("M9.26 AdsRestructureTable rejects DELETE / CHANGE field lists") {
 
     UNSIGNED8 leaf[16]  = "data";
     UNSIGNED8 empty[1]  = {0};
-    UNSIGNED8 del[16]   = "TAG";
     UNSIGNED8 chg[32]   = "TAG,Character,10";
 
-    UNSIGNED32 rc1 = AdsRestructureTable(hConn, leaf, nullptr,
-                                         ADS_CDX, 0, 0, 0,
-                                         empty, del, empty);
-    CHECK(rc1 == openads::AE_FUNCTION_NOT_AVAILABLE);
+    UNSIGNED32 rc = AdsRestructureTable(hConn, leaf, nullptr,
+                                        ADS_CDX, 0, 0, 0,
+                                        empty, empty, chg);
+    CHECK(rc == openads::AE_FUNCTION_NOT_AVAILABLE);
 
-    UNSIGNED32 rc2 = AdsRestructureTable(hConn, leaf, nullptr,
-                                         ADS_CDX, 0, 0, 0,
-                                         empty, empty, chg);
-    CHECK(rc2 == openads::AE_FUNCTION_NOT_AVAILABLE);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
 
+namespace {
+
+fs::path stage_two_field_dbf(const fs::path& dir) {
+    fs::create_directories(dir);
+    auto p = dir / "data.dbf";
+    fs::remove(p);
+    std::vector<std::uint8_t> file;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        file.insert(file.end(), b, b + n);
+    };
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = 2;
+    hdr[8]  = 32 + 32 + 32 + 1;
+    hdr[10] = 1 + 4 + 3;
+    push(hdr.data(), hdr.size());
+    std::array<std::uint8_t, 32> tag_fd{};
+    std::strncpy(reinterpret_cast<char*>(tag_fd.data()), "TAG", 11);
+    tag_fd[11] = 'C'; tag_fd[16] = 4;
+    push(tag_fd.data(), tag_fd.size());
+    std::array<std::uint8_t, 32> seq_fd{};
+    std::strncpy(reinterpret_cast<char*>(seq_fd.data()), "SEQ", 11);
+    seq_fd[11] = 'C'; seq_fd[16] = 3;
+    push(seq_fd.data(), seq_fd.size());
+    file.push_back(0x0D);
+    auto rec = [&](const char* tag, const char* seq) {
+        file.push_back(' ');
+        for (int i = 0; i < 4; ++i)
+            file.push_back(i < (int)std::strlen(tag)
+                           ? static_cast<std::uint8_t>(tag[i]) : ' ');
+        for (int i = 0; i < 3; ++i)
+            file.push_back(i < (int)std::strlen(seq)
+                           ? static_cast<std::uint8_t>(seq[i]) : ' ');
+    };
+    rec("ALPH", "001");
+    rec("BETA", "002");
+    file.push_back(0x1A);
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("M10.4 AdsRestructureTable DELETE drops a column, keeps the others") {
+    auto dir = fs::temp_directory_path() / "openads_m10_4_del";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_two_field_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    UNSIGNED8 empty[1] = {0};
+    UNSIGNED8 del[16]  = "SEQ";
+
+    REQUIRE(AdsRestructureTable(hConn, leaf, nullptr,
+                                ADS_CDX, 0, 0, 0,
+                                empty, del, empty) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED16 nf = 0;
+    REQUIRE(AdsGetNumFields(hTable, &nf) == 0);
+    CHECK(nf == 1);
+
+    UNSIGNED8 fname[16] = {0};
+    UNSIGNED16 fnlen = sizeof(fname);
+    REQUIRE(AdsGetFieldName(hTable, 1, fname, &fnlen) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(fname), fnlen) == "TAG");
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "ALPH");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.4 AdsRestructureTable DELETE + ADD combine") {
+    auto dir = fs::temp_directory_path() / "openads_m10_4_del_add";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_two_field_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 leaf[16] = "data";
+    UNSIGNED8 empty[1] = {0};
+    UNSIGNED8 add[32]  = "AGE,Numeric,3,0";
+    UNSIGNED8 del[16]  = "SEQ";
+
+    REQUIRE(AdsRestructureTable(hConn, leaf, nullptr,
+                                ADS_CDX, 0, 0, 0,
+                                add, del, empty) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         1, 1, 0, 1, &hTable) == 0);
+    UNSIGNED16 nf = 0;
+    REQUIRE(AdsGetNumFields(hTable, &nf) == 0);
+    CHECK(nf == 2);   // TAG kept, SEQ dropped, AGE added
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

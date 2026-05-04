@@ -34,9 +34,16 @@ public:
     Scope&       scope()       noexcept { return scope_; }
     const Scope& scope() const noexcept { return scope_; }
 
+    // M10.4: AdsSetIndexDirection toggles whether the order is walked
+    // backward. `goto_top` / `goto_bottom` / `skip` consult this flag
+    // and swap their direction accordingly. Default is forward.
+    bool descending_traverse() const noexcept { return descending_; }
+    void set_descending_traverse(bool v) noexcept { descending_ = v; }
+
 private:
     std::unique_ptr<drivers::IIndex> index_;
     Scope                            scope_;
+    bool                             descending_ = false;
 };
 
 } // namespace openads::engine
