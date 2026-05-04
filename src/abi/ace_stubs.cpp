@@ -194,9 +194,6 @@ uint32_t AdsDDRemoveIndexFile    () { return MISS; }
 uint32_t AdsDDRemoveRefIntegrity () { return MISS; }
 uint32_t AdsDDRemoveUserFromGroup() { return MISS; }
 uint32_t AdsDDSetDatabaseProperty() { return MISS; }
-uint32_t AdsFailedTransactionRecovery() { return MISS; }
-uint32_t AdsGetAllLocks          () { return MISS; }
-uint32_t AdsGetLongLong          () { return MISS; }
 uint32_t AdsMgConnect            () { return MISS; }
 uint32_t AdsMgDisconnect         () { return MISS; }
 uint32_t AdsMgGetActivityInfo    () { return MISS; }
@@ -213,8 +210,5 @@ uint32_t AdsMgGetWorkerThreadActivity() { return MISS; }
 uint32_t AdsMgKillUser           () { return MISS; }
 uint32_t AdsMgResetCommStats     () { return MISS; }
 uint32_t AdsRestructureTable     () { return MISS; }
-uint32_t AdsSetFieldRaw          () { return MISS; }
-uint32_t AdsSkipUnique           () { return MISS; }
-uint32_t AdsVerifySQL            () { return MISS; }
 
 }  // extern "C"

@@ -1892,6 +1892,111 @@ build_fts_options(UNSIGNED32  ulMinWordLen, UNSIGNED32  ulMaxWordLen,
 
 extern "C" {
 
+// --- M9.23 fill in remaining MISS exports ---------------------------------
+
+UNSIGNED32 AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
+                          std::int64_t* pllValue) {
+    Table* t = get_table(hTable);
+    if (!t || pllValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    auto v = t->read_field(idx);
+    if (!v) return fail(v.error());
+    auto& s = v.value().as_string;
+    // Strip leading whitespace; strtoll handles signed prefix and digits.
+    std::size_t i = 0;
+    while (i < s.size() &&
+           std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    *pllValue = static_cast<std::int64_t>(
+        std::strtoll(s.c_str() + i, nullptr, 10));
+    return ok();
+}
+
+UNSIGNED32 AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
+                          UNSIGNED8* pucBuf, UNSIGNED32 ulLen) {
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::uint16_t idx = 0;
+    if (!resolve_field_index(t, pucField, &idx)) {
+        return fail(openads::AE_COLUMN_NOT_FOUND, "");
+    }
+    std::string raw;
+    if (pucBuf != nullptr && ulLen > 0) {
+        raw.assign(reinterpret_cast<const char*>(pucBuf), ulLen);
+    }
+    auto r = t->set_field(idx, raw);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsVerifySQL(ADSHANDLE /*hStatement*/, UNSIGNED8* pucSQL) {
+    if (pucSQL == nullptr) return fail(openads::AE_PARSE_ERROR, "null SQL");
+    auto sql = openads::abi::to_internal(pucSQL, 0);
+    auto r = openads::sql::parse_select(sql);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsFailedTransactionRecovery(UNSIGNED8* pucServer) {
+    if (pucServer == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "null server path");
+    }
+    auto path = openads::abi::to_internal(pucServer, 0);
+    // Recovery happens automatically on Connection::open — the open
+    // path scans openads.txlog, replays orphan transactions' before-
+    // images, and truncates the log. Open + close gives the caller a
+    // single explicit recovery pass.
+    auto opened = Connection::open(path);
+    if (!opened) return fail(opened.error());
+    return ok();
+}
+
+UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
+                          UNSIGNED16* pusCount) {
+    Table* t = get_table(hTable);
+    if (!t || pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto held = t->held_record_locks();
+    UNSIGNED16 cap = *pusCount;
+    UNSIGNED16 n   = static_cast<UNSIGNED16>(
+        std::min<std::size_t>(held.size(), cap));
+    if (paRecnos != nullptr && n > 0) {
+        for (UNSIGNED16 i = 0; i < n; ++i) {
+            paRecnos[i] = static_cast<UNSIGNED32>(held[i]);
+        }
+    }
+    *pusCount = static_cast<UNSIGNED16>(held.size());
+    return ok();
+}
+
+UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    auto* idx = iindex_for_handle(hIndex);
+    Table* t  = lookup_table_by_index(hIndex);
+    if (!idx || !t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    (void)activate_binding(hIndex);
+
+    std::string start_key = idx->current_key();
+    auto step = [&]() {
+        return lDirection < 0 ? idx->prev() : idx->next();
+    };
+
+    for (;;) {
+        auto r = step();
+        if (!r) return fail(r.error());
+        if (!r.value().positioned) {
+            return fail(openads::AE_INTERNAL_ERROR, "no more unique keys");
+        }
+        if (idx->current_key() != start_key) {
+            // Position the table on the new recno.
+            (void)t->goto_record(r.value().recno);
+            return ok();
+        }
+    }
+}
+
 // AdsFTSSearch is an OpenADS extension. The original ACE SDK doesn't
 // export an entry point with this exact shape that rddads' Harbour
 // surface ever reached (rddads is silent on FTS query semantics), so

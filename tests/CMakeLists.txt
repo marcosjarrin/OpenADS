@@ -61,6 +61,7 @@ add_executable(openads_unit_tests
     unit/abi_fts_search_test.cpp
     unit/abi_sql_contains_test.cpp
     unit/index_expr_utf8_test.cpp
+    unit/abi_misc_impls_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

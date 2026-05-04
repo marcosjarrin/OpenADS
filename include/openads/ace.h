@@ -98,6 +98,16 @@ UNSIGNED32 AdsExtractKey    (ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 UNSIGNED32 AdsAddCustomKey   (ADSHANDLE hIndex);
 UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex);
 
+UNSIGNED32 AdsGetLongLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              int64_t* pllValue);
+UNSIGNED32 AdsSetFieldRaw   (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
+UNSIGNED32 AdsVerifySQL     (ADSHANDLE  hStatement, UNSIGNED8* pucSQL);
+UNSIGNED32 AdsFailedTransactionRecovery(UNSIGNED8* pucServer);
+UNSIGNED32 AdsGetAllLocks   (ADSHANDLE hTable, UNSIGNED32* paRecnos,
+                              UNSIGNED16* pusCount);
+UNSIGNED32 AdsSkipUnique    (ADSHANDLE hIndex, SIGNED32 lDirection);
+
 UNSIGNED32 AdsCreateTable   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED8* pucAlias,
                               UNSIGNED16 usTableType, UNSIGNED16 usCharType,

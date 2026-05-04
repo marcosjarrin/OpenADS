@@ -57,7 +57,7 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.1.0** released. **0.2.0 in progress** (23 milestones merged on
+**0.1.0** released. **0.2.0 in progress** (24 milestones merged on
 top of 0.1.0 — see the M9.x table below).
 
 A real Harbour application, compiled against the standard
@@ -168,7 +168,7 @@ Done.
 
 #### Tests
 
-- **196 doctest cases / 3598 assertions** passing on Windows / MSVC
+- **202 doctest cases / 3645 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -234,7 +234,8 @@ Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
 | `m9.19-done`     | `AdsCreateFTSIndex` — clean-room OpenADS-native `.fts` inverted-index file (UTF-8 text: `# OpenADS FTS v0` header + sorted `<token>\t<recno1>,<recno2>,...` rows). Tokeniser respects `ulMinWordLen` / `ulMaxWordLen`, custom delimiter / noise-word arrays, plus a default ASCII delimiter set and an English stop-word seed. Search-side functions remain a follow-up milestone. |
 | `m9.20-done`     | `AdsAddCustomKey` / `AdsDeleteCustomKey` — manual-mode (key, recno) injection on the current record. Each call evaluates the index's expression against the positioned row and routes through the existing `IIndex::insert` / `IIndex::erase` paths, matching rddads' `DBOI_KEYADD` / `DBOI_KEYDELETE` call sites. |
 | `m9.21-done`     | FTS search side — `AdsFTSSearch(hConn, pucFile, pucQuery, paRecnos, *pulCount)` loads the `.fts` file, tokenises the query, intersects per-token recno lists (AND semantics), and writes the hit list into `paRecnos` with truncation reporting. SQL gains a `CONTAINS(<col>, '<query>')` predicate that lowers to a precomputed recno set captured in the row predicate, so the FTS lookup runs once per query instead of per row. |
-| **`m9.22-done`** | **UTF-8 codepoint-aware index-expression evaluator** — `UPPER`, `LOWER`, `SUBSTR` walk codepoints instead of bytes. ASCII + Latin-1 supplement (incl. `ÿ↔Ÿ`) case map cleanly; codepoints outside that range pass through. `INDEX ON UPPER(name)` over a UTF-8 column now produces stable keys for non-ASCII rows. Bare-field indexes still byte-identical (existing CDX / NTX files round-trip unchanged). |
+| `m9.22-done`     | UTF-8 codepoint-aware index-expression evaluator — `UPPER`, `LOWER`, `SUBSTR` walk codepoints instead of bytes. ASCII + Latin-1 supplement (incl. `ÿ↔Ÿ`) case map cleanly; codepoints outside that range pass through. `INDEX ON UPPER(name)` over a UTF-8 column now produces stable keys for non-ASCII rows. Bare-field indexes still byte-identical (existing CDX / NTX files round-trip unchanged). |
+| **`m9.23-done`** | **Misc MISS fillers** — real `AdsGetLongLong` (numeric field → int64), `AdsSetFieldRaw` (raw byte write, no encoding), `AdsVerifySQL` (lowers through `parse_select` without executing), `AdsFailedTransactionRecovery` (open + close drives the existing orphan-tx replay), `AdsGetAllLocks` (Table-side enumeration of held byte-range locks), `AdsSkipUnique` (walks the index to the next distinct key). Reduces the AE_FUNCTION_NOT_AVAILABLE list to the `Mg*` server-management group (15, deferred to 1.0.x TCP server) plus the `AdsDD*` proprietary CRUD set (14, deferred to 0.3.x clean-room `.add` spec) plus `AdsRestructureTable` (schema mutation, deferred). |
 
 #### What's left for 0.2.0
 

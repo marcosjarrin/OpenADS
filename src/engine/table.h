@@ -110,6 +110,11 @@ public:
     util::Result<void> try_lock_record_excl(std::uint32_t recno);
     util::Result<void> try_lock_table_excl ();
 
+    // Snapshot the currently-held record-lock recnos (M9.23). Used by
+    // AdsGetAllLocks to enumerate the per-table lock view without
+    // exposing the LockMgr internals.
+    std::vector<std::uint32_t> held_record_locks() const;
+
     // Memo surface (M4).
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);
     drivers::IMemoStore* memo() noexcept { return memo_.get(); }

@@ -5,6 +5,7 @@
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/ntx/ntx_driver.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -648,6 +649,14 @@ util::Result<void> Table::lock_table_excl() {
     if (!h) return h.error();
     table_lock_ = std::move(h).value();
     return {};
+}
+
+std::vector<std::uint32_t> Table::held_record_locks() const {
+    std::vector<std::uint32_t> out;
+    out.reserve(recno_locks_.size());
+    for (auto& [recno, _] : recno_locks_) out.push_back(recno);
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 util::Result<void> Table::try_lock_table_excl() {
