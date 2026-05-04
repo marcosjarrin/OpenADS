@@ -474,13 +474,10 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         return {};
     }
 
-    // Leaf is full — split. M3.7 currently supports a single split level
-    // (the leaf was the root, or a sibling under a one-level branch root).
-    // Multi-level recursion lands in a follow-up.
-    if (stack_.size() > 1) {
-        return util::Error{5004, 0,
-            "NTX multi-level split not yet implemented", ""};
-    }
+    // Leaf is full — split. The split may need to propagate up through
+    // any number of branch levels; M9.10 closes the M3.7 single-level
+    // limitation by walking the stack from leaf upward and splitting
+    // each parent that is also full.
 
     // Build a sorted vector of (recno, key) for the kc existing entries
     // plus the new one. Both halves below are leaves so left_child = 0
@@ -525,35 +522,164 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
         dirty_[page_off]      = true;
     };
 
-    // Promote all[mid] up to the new branch root. left_half stays in
-    // the original page; right_half holds entries strictly after mid.
-    // This prevents the separator key from being visited twice during
-    // an in-order walk.
+    // Promote all[mid] up. left_half stays in the original page;
+    // right_half holds entries strictly after mid.
     Entry separator = all[mid];
     std::vector<Entry> left_half (all.begin(), all.begin() + mid);
     std::vector<Entry> right_half(all.begin() + mid + 1, all.end());
     fill_leaf(left_off,  left_half);
     fill_leaf(right_off, right_half);
 
-    Page root{};
-    format_empty_page(root, max_keys_, item_size_);
-    {
-        std::uint16_t off = get_key_offset(root, 0);
-        write_u32_le(root.data() + off,     left_off);
-        write_u32_le(root.data() + off + 4, separator.recno);
-        std::memcpy (root.data() + off + 8, separator.key.data(), key_size_);
-        std::uint16_t tail = get_key_offset(root, 1);
-        write_u32_le(root.data() + tail, right_off);
+    // Walk the stack upward, propagating the split into every full
+    // parent. `level` is the index of the parent being modified at
+    // each iteration. After the loop either the separator has been
+    // absorbed into an existing parent or every level has split and
+    // we need to grow a new root above.
+    std::uint32_t prop_left  = left_off;
+    std::uint32_t prop_right = right_off;
+    Entry         prop_sep   = separator;
+    bool          need_new_root = false;
+    for (std::int32_t level = static_cast<std::int32_t>(stack_.size()) - 2;
+         level >= 0; --level) {
+        StackFrame parent_frame = stack_[level];
+        auto pp = get_page_(parent_frame.page);
+        if (!pp) return pp.error();
+        Page& parent = *pp.value();
+        std::uint16_t pkc = get_key_count(parent);
+        std::int32_t pos = parent_frame.key_index;
+
+        if (pkc + 1 <= max_keys_) {
+            // Room in parent: insert (lchild=prop_left, prop_sep) at
+            // position `pos` and update the entry now at pos+1 to
+            // point its lchild at prop_right.
+            std::uint16_t free_off = get_key_offset(parent, pkc);
+            for (std::int32_t i = static_cast<std::int32_t>(pkc); i > pos; --i) {
+                set_key_offset(parent, i, get_key_offset(parent, i - 1));
+            }
+            set_key_offset(parent, pos, free_off);
+            std::uint16_t new_tail = static_cast<std::uint16_t>(
+                free_off + item_size_);
+            set_key_offset(parent, pkc + 1, new_tail);
+
+            write_u32_le(parent.data() + free_off,     prop_left);
+            write_u32_le(parent.data() + free_off + 4, prop_sep.recno);
+            std::memcpy (parent.data() + free_off + 8,
+                         prop_sep.key.data(), key_size_);
+            // The entry that was at pos has moved to pos+1; its
+            // left_child should now be prop_right (the new sibling).
+            put_left_child(parent, pos + 1, prop_right);
+
+            set_key_count(parent, pkc + 1);
+            dirty_[parent_frame.page] = true;
+            need_new_root = false;
+            break;
+        }
+
+        // Parent is full — split it. Build the full sequence of
+        // (lchild, recno, key) entries for the parent, insert our new
+        // (prop_left, prop_sep) at `pos`, then split into left/right
+        // halves around mid. The mid entry's recno+key becomes the
+        // grandparent separator; its lchild becomes the new left
+        // sibling (the original parent page); the new right sibling
+        // becomes a fresh page.
+        struct InternalEntry {
+            std::uint32_t lchild;
+            std::uint32_t recno;
+            std::string   key;
+        };
+        std::vector<InternalEntry> ents;
+        ents.reserve(static_cast<std::size_t>(pkc) + 1);
+        for (std::int32_t i = 0; i < pkc; ++i) {
+            InternalEntry e;
+            e.lchild = get_left_child(parent, i);
+            e.recno  = get_recno(parent, i);
+            e.key.assign(reinterpret_cast<const char*>(get_key_data(parent, i)),
+                         key_size_);
+            ents.push_back(std::move(e));
+        }
+        // Capture rightmost child pointer (sentinel at offset[pkc]).
+        std::uint32_t right_sentinel = get_left_child(parent, pkc);
+        InternalEntry pinsert;
+        pinsert.lchild = prop_left;
+        pinsert.recno  = prop_sep.recno;
+        pinsert.key    = prop_sep.key;
+        ents.insert(ents.begin() + pos, std::move(pinsert));
+        // The entry that was at pos now lives at pos+1; its lchild
+        // becomes prop_right (the new sibling we just produced).
+        ents[pos + 1].lchild = prop_right;
+
+        std::size_t pmid = ents.size() / 2;
+        std::vector<InternalEntry> p_left (ents.begin(),
+                                           ents.begin() + pmid);
+        std::vector<InternalEntry> p_right(ents.begin() + pmid + 1,
+                                           ents.end());
+        InternalEntry psep = ents[pmid];
+
+        // Allocate the new right-sibling parent page.
+        std::uint32_t parent_left  = parent_frame.page;
+        std::uint32_t parent_right = next_avail_;
+        next_avail_ += NTX_PAGE_SIZE;
+
+        auto fill_internal = [&](std::uint32_t page_off,
+                                 const std::vector<InternalEntry>& subset,
+                                 std::uint32_t rightmost) {
+            Page np{};
+            format_empty_page(np, max_keys_, item_size_);
+            for (std::size_t i = 0; i < subset.size(); ++i) {
+                std::uint16_t off = get_key_offset(np,
+                                       static_cast<std::int32_t>(i));
+                write_u32_le(np.data() + off,     subset[i].lchild);
+                write_u32_le(np.data() + off + 4, subset[i].recno);
+                std::memcpy (np.data() + off + 8,
+                             subset[i].key.data(), key_size_);
+            }
+            // Sentinel at offset[subset.size()] holds the rightmost
+            // child (lchild slot of the would-be next entry).
+            std::uint16_t sentinel_off =
+                get_key_offset(np, static_cast<std::int32_t>(subset.size()));
+            write_u32_le(np.data() + sentinel_off, rightmost);
+            set_key_count(np, static_cast<std::uint16_t>(subset.size()));
+            page_cache_[page_off] = np;
+            dirty_[page_off]      = true;
+        };
+
+        // Left half's rightmost child = the lchild of the promoted
+        // separator (since p_left contains entries strictly before
+        // psep, and the next "boundary" is psep's lchild).
+        fill_internal(parent_left,  p_left,  psep.lchild);
+        // Right half's rightmost child = the original sentinel.
+        fill_internal(parent_right, p_right, right_sentinel);
+
+        prop_left  = parent_left;
+        prop_right = parent_right;
+        prop_sep   = Entry{psep.recno, psep.key};
+        need_new_root = (level == 0);
     }
-    set_key_count(root, 1);
 
-    std::uint32_t new_root_off = next_avail_;
-    next_avail_ += NTX_PAGE_SIZE;
-    page_cache_[new_root_off] = root;
-    dirty_[new_root_off]      = true;
-    root_page_                = new_root_off;
+    if (stack_.size() == 1) {
+        need_new_root = true;
+    }
 
-    // Persist header.
+    if (need_new_root) {
+        Page root{};
+        format_empty_page(root, max_keys_, item_size_);
+        std::uint16_t off = get_key_offset(root, 0);
+        write_u32_le(root.data() + off,     prop_left);
+        write_u32_le(root.data() + off + 4, prop_sep.recno);
+        std::memcpy (root.data() + off + 8, prop_sep.key.data(), key_size_);
+        std::uint16_t tail = get_key_offset(root, 1);
+        write_u32_le(root.data() + tail, prop_right);
+        set_key_count(root, 1);
+
+        std::uint32_t new_root_off = next_avail_;
+        next_avail_ += NTX_PAGE_SIZE;
+        page_cache_[new_root_off] = root;
+        dirty_[new_root_off]      = true;
+        root_page_                = new_root_off;
+    }
+
+    // Persist header (root_page_ may have changed; next_avail_ may
+    // have advanced regardless).
     Page hdr{};
     auto got = file_.read_at(0, hdr.data(), hdr.size());
     if (!got) return got.error();
