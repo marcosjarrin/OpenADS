@@ -3917,11 +3917,175 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     if (!parsed) return fail(parsed.error());
 
     if (parsed.value().inner_join) {
-        // M10.13 lands the parser; the materialised executor follows
-        // in a later milestone.
-        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                    "INNER JOIN parser is real but execution lands "
-                    "in a follow-up milestone");
+        // M10.14: materialise the inner join into a temp DBF and
+        // return a cursor on it. WHERE / ORDER BY / aggregates over
+        // the joined cursor land in a follow-up; for now reject
+        // those combos so semantics stay clear.
+        if (parsed.value().where || parsed.value().order_by ||
+            !parsed.value().aggregates.empty()) {
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                        "INNER JOIN with WHERE / ORDER BY / aggregate "
+                        "in same query lands in a follow-up");
+        }
+
+        const auto& j = *parsed.value().inner_join;
+        auto& s = state();
+        std::lock_guard<std::mutex> lk(s.mu);
+
+        auto lh = c->open_table(parsed.value().table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Read);
+        if (!lh) return fail(lh.error());
+        auto rh = c->open_table(j.table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Read);
+        if (!rh) {
+            c->close_table(lh.value());
+            return fail(rh.error());
+        }
+        openads::engine::Table* ltbl = c->lookup_table(lh.value());
+        openads::engine::Table* rtbl = c->lookup_table(rh.value());
+        if (ltbl == nullptr || rtbl == nullptr) {
+            return fail(openads::AE_INTERNAL_ERROR, "join post-open");
+        }
+
+        std::int32_t lcol = ltbl->field_index(j.left_column);
+        std::int32_t rcol = rtbl->field_index(j.right_column);
+        if (lcol < 0) {
+            c->close_table(lh.value()); c->close_table(rh.value());
+            return fail(openads::AE_COLUMN_NOT_FOUND,
+                        j.left_column.c_str());
+        }
+        if (rcol < 0) {
+            c->close_table(lh.value()); c->close_table(rh.value());
+            return fail(openads::AE_COLUMN_NOT_FOUND,
+                        j.right_column.c_str());
+        }
+
+        auto trim_trailing = [](std::string s) {
+            while (!s.empty() && s.back() == ' ') s.pop_back();
+            return s;
+        };
+
+        // Build hash on right_column.
+        std::unordered_map<std::string, std::vector<std::uint32_t>> rmap;
+        std::uint32_t rrc = rtbl->record_count();
+        for (std::uint32_t r = 1; r <= rrc; ++r) {
+            if (auto g = rtbl->goto_record(r); !g) continue;
+            if (rtbl->is_deleted()) continue;
+            auto v = rtbl->read_field(static_cast<std::uint16_t>(rcol));
+            if (!v) continue;
+            rmap[trim_trailing(v.value().as_string)].push_back(r);
+        }
+
+        // Build merged schema.
+        std::vector<openads::drivers::DbfField> merged;
+        const auto& lfields = ltbl->driver()->fields();
+        const auto& rfields = rtbl->driver()->fields();
+        for (const auto& f : lfields) merged.push_back(f);
+        for (auto f : rfields) {
+            std::string nm = "R_" + f.name;
+            if (nm.size() > 10) nm.resize(10);
+            f.name = std::move(nm);
+            merged.push_back(f);
+        }
+
+        std::uint16_t header_len = static_cast<std::uint16_t>(
+            32 + 32 * merged.size() + 1);
+        std::uint32_t lrec = ltbl->driver()->record_length();
+        std::uint32_t rrec = rtbl->driver()->record_length();
+        std::uint32_t merged_rec = 1 + (lrec - 1) + (rrec - 1);
+        if (merged_rec > 0xFFFF) {
+            c->close_table(lh.value()); c->close_table(rh.value());
+            return fail(openads::AE_INTERNAL_ERROR,
+                        "joined record exceeds 64 KiB");
+        }
+
+        // Lay out file bytes: header + field-desc + records + EOF.
+        std::vector<std::uint8_t> file;
+        std::array<std::uint8_t, 32> hdr{};
+        hdr[0] = 0x03;
+        hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>( merged_rec       & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((merged_rec >> 8) & 0xFFu);
+        file.insert(file.end(), hdr.begin(), hdr.end());
+        for (const auto& f : merged) {
+            std::array<std::uint8_t, 32> fd{};
+            std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+            std::memcpy(fd.data(), f.name.data(), n);
+            fd[11] = static_cast<std::uint8_t>(f.raw_type);
+            fd[16] = f.length;
+            fd[17] = f.decimals;
+            file.insert(file.end(), fd.begin(), fd.end());
+        }
+        file.push_back(0x0D);
+
+        // Walk left, build merged rows for matched right recnos.
+        std::uint32_t lrc = ltbl->record_count();
+        std::uint32_t emitted = 0;
+        for (std::uint32_t l = 1; l <= lrc; ++l) {
+            if (auto g = ltbl->goto_record(l); !g) continue;
+            if (ltbl->is_deleted()) continue;
+            auto lv = ltbl->read_field(static_cast<std::uint16_t>(lcol));
+            if (!lv) continue;
+            auto rit = rmap.find(trim_trailing(lv.value().as_string));
+            if (rit == rmap.end()) continue;
+            auto lraw = ltbl->driver()->read_record_raw(l);
+            if (!lraw) continue;
+            const auto& lbuf = lraw.value();
+            for (std::uint32_t rr : rit->second) {
+                auto rraw = rtbl->driver()->read_record_raw(rr);
+                if (!rraw) continue;
+                const auto& rbuf = rraw.value();
+                std::vector<std::uint8_t> mrec(merged_rec, ' ');
+                mrec[0] = lbuf.empty() ? ' ' : lbuf[0];
+                if (lrec > 1 && lbuf.size() >= lrec) {
+                    std::memcpy(mrec.data() + 1, lbuf.data() + 1, lrec - 1);
+                }
+                if (rrec > 1 && rbuf.size() >= rrec) {
+                    std::memcpy(mrec.data() + lrec,
+                                rbuf.data() + 1, rrec - 1);
+                }
+                file.insert(file.end(), mrec.begin(), mrec.end());
+                ++emitted;
+            }
+        }
+        file.push_back(0x1A);
+        // Patch record count (header bytes 4-7).
+        file[4] = static_cast<std::uint8_t>( emitted        & 0xFFu);
+        file[5] = static_cast<std::uint8_t>((emitted >>  8) & 0xFFu);
+        file[6] = static_cast<std::uint8_t>((emitted >> 16) & 0xFFu);
+        file[7] = static_cast<std::uint8_t>((emitted >> 24) & 0xFFu);
+
+        c->close_table(lh.value());
+        c->close_table(rh.value());
+
+        // Write temp DBF.
+        namespace fs = std::filesystem;
+        char namebuf[64];
+        std::snprintf(namebuf, sizeof(namebuf), "_join_%llx.dbf",
+                      static_cast<unsigned long long>(
+                          openads::platform::monotonic_nanos()));
+        fs::path tmp_dbf = fs::path(c->data_dir()) / namebuf;
+        {
+            std::ofstream out(tmp_dbf, std::ios::binary);
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "join temp DBF open failed");
+            out.write(reinterpret_cast<const char*>(file.data()),
+                      static_cast<std::streamsize>(file.size()));
+        }
+
+        std::string rel = tmp_dbf.filename().string();
+        auto cth = c->open_table(rel,
+                                 openads::engine::TableType::Cdx,
+                                 openads::engine::OpenMode::Read);
+        if (!cth) return fail(cth.error());
+        openads::engine::Table* ctbl = c->lookup_table(cth.value());
+        if (!ctbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        ADSHANDLE gh = s.registry.register_object(HandleKind::Table, ctbl);
+        *phCursor = gh;
+        return ok();
     }
 
     auto th = c->open_table(parsed.value().table,

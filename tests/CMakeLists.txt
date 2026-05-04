@@ -76,6 +76,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_ddl_test.cpp
     unit/abi_sql_agg_test.cpp
     unit/dbf_vfp_autoinc_test.cpp
+    unit/abi_sql_join_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
