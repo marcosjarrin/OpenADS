@@ -301,15 +301,71 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     if (c.match_char('*')) {
         // SELECT * — projection stays empty (every column visible).
     } else {
-        // Projection list (M10.8). One or more bare identifiers
-        // separated by commas.
+        // Projection list (M10.8) or aggregate list (M10.10).
+        // Aggregates take the form `KIND(*)` or `KIND(col)` where
+        // KIND is one of COUNT / SUM / AVG / MIN / MAX. The first
+        // item decides the mode for the whole list — mixing plain
+        // columns and aggregates in the same SELECT is not
+        // supported in this milestone.
+        bool aggregate_mode = false;
         for (;;) {
-            std::string col = c.read_identifier();
-            if (col.empty()) {
+            std::string head = c.read_identifier();
+            if (head.empty()) {
                 return util::Error{7200, 0,
                     "expected '*' or column name in SELECT", sql};
             }
-            stmt.projection.push_back(std::move(col));
+            std::string upper;
+            upper.reserve(head.size());
+            for (char ch : head) {
+                upper.push_back(static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(ch))));
+            }
+            bool is_agg_call = (upper == "COUNT" || upper == "SUM" ||
+                                upper == "AVG"   || upper == "MIN" ||
+                                upper == "MAX") && c.peek_char('(');
+
+            if (is_agg_call) {
+                if (!stmt.projection.empty()) {
+                    return util::Error{7200, 0,
+                        "mixing plain columns + aggregates in SELECT not supported", sql};
+                }
+                aggregate_mode = true;
+                if (!c.match_char('(')) {
+                    return util::Error{7200, 0,
+                        "expected '(' after aggregate name", sql};
+                }
+                Aggregate agg;
+                if (upper == "COUNT") agg.kind = AggregateKind::Count;
+                if (upper == "SUM")   agg.kind = AggregateKind::Sum;
+                if (upper == "AVG")   agg.kind = AggregateKind::Avg;
+                if (upper == "MIN")   agg.kind = AggregateKind::Min;
+                if (upper == "MAX")   agg.kind = AggregateKind::Max;
+                if (c.match_char('*')) {
+                    if (upper != "COUNT") {
+                        return util::Error{7200, 0,
+                            "* argument only valid for COUNT", sql};
+                    }
+                    agg.kind = AggregateKind::CountStar;
+                } else {
+                    std::string col = c.read_identifier();
+                    if (col.empty()) {
+                        return util::Error{7200, 0,
+                            "expected column name inside aggregate", sql};
+                    }
+                    agg.column = std::move(col);
+                }
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' to close aggregate", sql};
+                }
+                stmt.aggregates.push_back(std::move(agg));
+            } else {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "mixing plain columns + aggregates in SELECT not supported", sql};
+                }
+                stmt.projection.push_back(std::move(head));
+            }
             if (c.match_char(',')) continue;
             break;
         }

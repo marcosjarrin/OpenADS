@@ -42,11 +42,22 @@ struct OrderBy {
     bool        descending = false;
 };
 
+// M10.10 — `COUNT(*) / COUNT(col) / SUM / AVG / MIN / MAX(col)`.
+enum class AggregateKind { CountStar, Count, Sum, Avg, Min, Max };
+
+struct Aggregate {
+    AggregateKind kind;
+    std::string   column;   // empty for CountStar
+};
+
 struct SelectStmt {
     std::string                table;
     // Empty `projection` means `SELECT *` (every column visible);
     // otherwise the cursor exposes only the listed columns in order.
     std::vector<std::string>   projection;
+    // Aggregate calls in the projection (M10.10). Mutually exclusive
+    // with `projection` — apps either select columns or aggregate.
+    std::vector<Aggregate>     aggregates;
     // Optional WHERE — tree form. nullptr means "no filter".
     std::unique_ptr<WhereExpr> where;
     // Optional ORDER BY — single column ascending or descending (M10.6).

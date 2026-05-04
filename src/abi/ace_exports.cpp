@@ -3901,6 +3901,228 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     openads::engine::Table* tbl = c->lookup_table(th.value());
     if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
+    // M10.10: aggregate query — walk matching rows, compute the
+    // aggregate accumulators, materialise a 1-row temp DBF with one
+    // numeric column per aggregate, and return a cursor on it.
+    if (!parsed.value().aggregates.empty()) {
+        // Resolve each aggregate's column index up front.
+        struct AggSlot {
+            openads::sql::Aggregate def;
+            std::int32_t            field_index = -1;   // -1 for COUNT(*)
+        };
+        std::vector<AggSlot> slots;
+        slots.reserve(parsed.value().aggregates.size());
+        for (auto& a : parsed.value().aggregates) {
+            AggSlot slot;
+            slot.def = a;
+            if (a.kind != openads::sql::AggregateKind::CountStar) {
+                slot.field_index = tbl->field_index(a.column);
+                if (slot.field_index < 0) {
+                    c->close_table(th.value());
+                    return fail(openads::AE_COLUMN_NOT_FOUND, a.column.c_str());
+                }
+            }
+            slots.push_back(std::move(slot));
+        }
+
+        // Build the WHERE filter (same shape as the SELECT branch
+        // below — but the predicate compiles independently here so
+        // the aggregate path doesn't depend on that block's lambdas).
+        std::function<bool(openads::engine::Table&)> filter;
+        if (parsed.value().where) {
+            using Pred = std::function<bool(openads::engine::Table&)>;
+            std::function<openads::util::Result<Pred>(
+                const openads::sql::WhereExpr&)> compile;
+            compile = [&](const openads::sql::WhereExpr& node)
+                      -> openads::util::Result<Pred> {
+                using Kind = openads::sql::WhereExpr::Kind;
+                if (node.kind == Kind::And || node.kind == Kind::Or) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    bool is_and = (node.kind == Kind::And);
+                    return Pred{[ks = std::move(ks), is_and]
+                                (openads::engine::Table& t) {
+                        if (is_and) {
+                            for (auto& k : ks) if (!k(t)) return false;
+                            return true;
+                        }
+                        for (auto& k : ks) if (k(t)) return true;
+                        return false;
+                    }};
+                }
+                if (node.kind == Kind::Not) {
+                    auto inner = compile(*node.child);
+                    if (!inner) return inner.error();
+                    return Pred{[p = std::move(inner).value()]
+                                (openads::engine::Table& t){return !p(t);}};
+                }
+                const auto& w = node.cmp;
+                std::int32_t fidx = tbl->field_index(w.column);
+                if (fidx < 0) {
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        w.column.c_str(), ""};
+                }
+                std::uint16_t fi = static_cast<std::uint16_t>(fidx);
+                openads::sql::WhereOp op = w.op;
+                std::string lit = w.literal;
+                bool is_num     = w.is_numeric;
+                double num      = w.number;
+                return Pred{[fi, op, lit, is_num, num]
+                            (openads::engine::Table& t) {
+                    auto v = t.read_field(fi);
+                    if (!v) return false;
+                    int cmp = 0;
+                    if (is_num) {
+                        double d = v.value().as_double;
+                        if      (d < num) cmp = -1;
+                        else if (d > num) cmp =  1;
+                    } else {
+                        cmp = v.value().as_string.compare(lit);
+                    }
+                    switch (op) {
+                        case openads::sql::WhereOp::Eq: return cmp == 0;
+                        case openads::sql::WhereOp::Ne: return cmp != 0;
+                        case openads::sql::WhereOp::Lt: return cmp <  0;
+                        case openads::sql::WhereOp::Gt: return cmp >  0;
+                        case openads::sql::WhereOp::Le: return cmp <= 0;
+                        case openads::sql::WhereOp::Ge: return cmp >= 0;
+                        case openads::sql::WhereOp::Contains: return false;
+                    }
+                    return false;
+                }};
+            };
+            auto compiled = compile(*parsed.value().where);
+            if (!compiled) {
+                c->close_table(th.value());
+                return fail(compiled.error());
+            }
+            filter = std::move(compiled).value();
+        }
+
+        // Walk matching rows, accumulate per slot.
+        std::vector<double> sum(slots.size(), 0.0);
+        std::vector<double> minv(slots.size(),
+            std::numeric_limits<double>::infinity());
+        std::vector<double> maxv(slots.size(),
+            -std::numeric_limits<double>::infinity());
+        std::vector<std::uint64_t> count(slots.size(), 0);
+        std::uint64_t row_count = 0;
+        std::uint32_t rcount = tbl->record_count();
+        for (std::uint32_t r = 1; r <= rcount; ++r) {
+            if (auto g = tbl->goto_record(r); !g) continue;
+            if (tbl->is_deleted()) continue;
+            if (filter && !filter(*tbl)) continue;
+            ++row_count;
+            for (std::size_t i = 0; i < slots.size(); ++i) {
+                if (slots[i].def.kind == openads::sql::AggregateKind::CountStar) {
+                    ++count[i];
+                    continue;
+                }
+                auto v = tbl->read_field(
+                    static_cast<std::uint16_t>(slots[i].field_index));
+                if (!v) continue;
+                double d = v.value().as_double;
+                ++count[i];
+                sum[i] += d;
+                if (d < minv[i]) minv[i] = d;
+                if (d > maxv[i]) maxv[i] = d;
+            }
+        }
+        c->close_table(th.value());
+
+        // Write a 1-row temp DBF with one C(30) field per aggregate
+        // and the formatted result in each slot.
+        namespace fs = std::filesystem;
+        fs::path tmp_dbf = fs::path(c->data_dir());
+        char namebuf[64];
+        std::snprintf(namebuf, sizeof(namebuf), "_agg_%llx.dbf",
+                      static_cast<unsigned long long>(
+                          openads::platform::monotonic_nanos()));
+        tmp_dbf /= namebuf;
+        std::vector<std::uint8_t> file;
+        std::array<std::uint8_t, 32> hdr{};
+        hdr[0] = 0x03;
+        hdr[4] = 1;
+        std::uint16_t header_len = static_cast<std::uint16_t>(
+            32 + 32 * slots.size() + 1);
+        std::uint16_t rec_len = static_cast<std::uint16_t>(
+            1 + 30 * slots.size());
+        hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>( rec_len          & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rec_len    >> 8) & 0xFFu);
+        file.insert(file.end(), hdr.begin(), hdr.end());
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            std::array<std::uint8_t, 32> fd{};
+            char fn[16];
+            std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
+            std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+            fd[11] = 'C'; fd[16] = 30;
+            file.insert(file.end(), fd.begin(), fd.end());
+        }
+        file.push_back(0x0D);
+        file.push_back(' ');
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            char buf[32] = {0};
+            switch (slots[i].def.kind) {
+                case openads::sql::AggregateKind::CountStar:
+                case openads::sql::AggregateKind::Count:
+                    std::snprintf(buf, sizeof(buf), "%llu",
+                        static_cast<unsigned long long>(
+                            slots[i].def.kind ==
+                            openads::sql::AggregateKind::CountStar
+                                ? row_count : count[i]));
+                    break;
+                case openads::sql::AggregateKind::Sum:
+                    std::snprintf(buf, sizeof(buf), "%.6f", sum[i]);
+                    break;
+                case openads::sql::AggregateKind::Avg:
+                    std::snprintf(buf, sizeof(buf), "%.6f",
+                        count[i] ? sum[i] / static_cast<double>(count[i])
+                                 : 0.0);
+                    break;
+                case openads::sql::AggregateKind::Min:
+                    if (count[i] == 0) std::strcpy(buf, "0");
+                    else std::snprintf(buf, sizeof(buf), "%.6f", minv[i]);
+                    break;
+                case openads::sql::AggregateKind::Max:
+                    if (count[i] == 0) std::strcpy(buf, "0");
+                    else std::snprintf(buf, sizeof(buf), "%.6f", maxv[i]);
+                    break;
+            }
+            std::array<std::uint8_t, 30> cell{};
+            std::memset(cell.data(), ' ', cell.size());
+            std::size_t n = std::min<std::size_t>(std::strlen(buf), 30);
+            std::memcpy(cell.data(), buf, n);
+            file.insert(file.end(), cell.begin(), cell.end());
+        }
+        file.push_back(0x1A);
+        {
+            std::ofstream out(tmp_dbf, std::ios::binary);
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "aggregate temp DBF: open for write failed");
+            out.write(reinterpret_cast<const char*>(file.data()),
+                      static_cast<std::streamsize>(file.size()));
+            // Explicit close before re-opening for read.
+        }
+
+        // Open the temp DBF as the cursor.
+        std::string rel = tmp_dbf.filename().string();
+        auto cth = c->open_table(rel, openads::engine::TableType::Cdx,
+                                 openads::engine::OpenMode::Read);
+        if (!cth) return fail(cth.error());
+        openads::engine::Table* ctbl = c->lookup_table(cth.value());
+        if (!ctbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        ADSHANDLE gh = s.registry.register_object(HandleKind::Table, ctbl);
+        *phCursor = gh;
+        return ok();
+    }
+
     // Compile the WHERE expression tree into a row-predicate closure
     // (M10.3). CONTAINS captures a precomputed recno set at compile
     // time; AND / OR / NOT short-circuit during evaluation.
