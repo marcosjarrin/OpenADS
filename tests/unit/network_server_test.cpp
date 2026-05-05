@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "openads/ace.h"
 #include "network/server.h"
 #include "network/socket.h"
 #include "network/wire.h"
@@ -252,6 +253,61 @@ TEST_CASE("M12.4 remote OpenTable + GetRecordCount + walk + GetField") {
     }
 
     sock_close(cs);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.5 dual-mode AdsConnect60 with tcp:// URI routes ABI calls to server") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_5";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hTable, 0, &cnt) == 0);
+    CHECK(cnt == 2);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8  buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
+    std::string s((char*)buf, cap);
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    CHECK(s == "AAAA");
+
+    REQUIRE(AdsSkip(hTable, 1) == 0);
+    cap = sizeof(buf); std::memset(buf, 0, sizeof(buf));
+    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
+    std::string s2((char*)buf, cap);
+    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+    CHECK(s2 == "BBBB");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
     srv.stop();
     fs::remove_all(dir, ec);
 }

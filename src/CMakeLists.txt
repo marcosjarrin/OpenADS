@@ -47,6 +47,7 @@ add_library(openads_core STATIC
     drivers/fpt/fpt_memo.cpp
     network/wire.cpp
     network/server.cpp
+    network/client.cpp
 )
 
 if(WIN32)

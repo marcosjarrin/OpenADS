@@ -8,6 +8,8 @@
 #include "engine/fts.h"
 #include "engine/index_expr.h"
 #include "engine/table.h"
+
+#include "network/client.h"
 #include "session/connection.h"
 #include "session/handle_registry.h"
 #include "drivers/dbf_common.h"
@@ -183,6 +185,14 @@ openads::drivers::IIndex* iindex_for_handle(ADSHANDLE h);
 openads::util::Result<void> activate_binding(ADSHANDLE h);
 void purge_bindings_for_table(Table* t);
 
+// M12.5 — remote-table lookup helper. Returns nullptr when the
+// handle isn't a TCP-routed table.
+openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
+    auto& s = state();
+    return s.registry.lookup<openads::network::RemoteTable>(
+        h, HandleKind::RemoteTable);
+}
+
 Table* get_table(ADSHANDLE h) {
     auto& s = state();
     Table* t = s.registry.lookup<Table>(h, HandleKind::Table);
@@ -215,6 +225,31 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                           "phConnect is null");
     auto path = openads::abi::to_internal(pucServer, 0);
+    // M12.5 — `tcp://host:port/<data_dir>` routes the connection
+    // through the wire client; every Ads* function that recognises
+    // the connection handle's RemoteConnection kind dispatches to
+    // the server instead of touching a local Connection.
+    {
+        std::string host, dir;
+        std::uint16_t port = 0;
+        if (openads::network::parse_tcp_uri(path, host, port, dir)) {
+            auto rc = std::make_unique<openads::network::RemoteConnection>();
+            if (auto r = rc->connect(host, port, dir); !r) {
+                return fail(r.error());
+            }
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::RemoteConnection, rc.get());
+            // Keep RemoteConnection alive in a side container.
+            static std::unordered_map<Handle,
+                std::unique_ptr<openads::network::RemoteConnection>>
+                remote_conns;
+            remote_conns.emplace(h, std::move(rc));
+            *phConnect = h;
+            return ok();
+        }
+    }
     auto opened = Connection::open(path);
     if (!opened) return fail(opened.error());
     auto holder = std::make_unique<Connection>(std::move(opened).value());
@@ -228,6 +263,15 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
 }
 
 UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
+    {
+        auto& s_local = state();
+        std::lock_guard<std::recursive_mutex> lk_local(s_local.mu);
+        if (auto* rc = s_local.registry.lookup<openads::network::RemoteConnection>(
+                hConnect, HandleKind::RemoteConnection)) {
+            rc->disconnect();
+            return ok();
+        }
+    }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     // Purge any index bindings whose Table* belongs to a table owned
@@ -272,6 +316,23 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
                                         "phTable is null");
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+    // M12.5 — remote connection handle: route through wire client.
+    if (auto* rc = s.registry.lookup<openads::network::RemoteConnection>(
+            hConnect, HandleKind::RemoteConnection)) {
+        auto name = openads::abi::to_internal(pucName, 0);
+        auto id = rc->open_table(name);
+        if (!id) return fail(id.error());
+        static std::unordered_map<Handle,
+            std::unique_ptr<openads::network::RemoteTable>> remote_tables;
+        auto rt = std::make_unique<openads::network::RemoteTable>();
+        rt->conn = rc;
+        rt->id   = id.value();
+        Handle gh = s.registry.register_object(
+            HandleKind::RemoteTable, rt.get());
+        remote_tables.emplace(gh, std::move(rt));
+        *phTable = gh;
+        return ok();
+    }
     auto* conn = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
                                      "unknown connection");
@@ -884,6 +945,12 @@ UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
 }
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
+    {
+        if (auto* rt = get_remote_table(hTable)) {
+            (void)rt->conn->close_table(rt->id);
+            return ok();
+        }
+    }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     // Flush the table (driver + active order + extra index views)
@@ -905,6 +972,11 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->goto_top(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_top();
@@ -921,6 +993,11 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->skip(rt->id, lRows);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->skip(lRows);
@@ -929,6 +1006,13 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
 }
 
 UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        auto r = rt->conn->at_eof(rt->id);
+        if (!r) return fail(r.error());
+        *pbAtEnd = r.value() ? 1 : 0;
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtEnd = t->eof() ? 1 : 0;
@@ -1087,6 +1171,13 @@ UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
 
 UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                              UNSIGNED32* pulRecordCount) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        auto r = rt->conn->record_count(rt->id);
+        if (!r) return fail(r.error());
+        *pulRecordCount = static_cast<UNSIGNED32>(r.value());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // M10.31 / M10.32 — when SQL has materialised a traversal sequence
@@ -1118,6 +1209,18 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
 UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
                        UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
                        UNSIGNED16 /*usOption*/) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        auto fname = openads::abi::to_internal(pucField, 0);
+        auto r = rt->conn->get_field(rt->id, fname);
+        if (!r) return fail(r.error());
+        UNSIGNED16 cap = static_cast<UNSIGNED16>(
+            *pulLen > 0xFFFFu ? 0xFFFFu : *pulLen);
+        UNSIGNED16 cap_inout = cap;
+        openads::abi::copy_to_caller(pucBuf, &cap_inout, r.value());
+        *pulLen = cap_inout;
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;

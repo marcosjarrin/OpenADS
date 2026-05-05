@@ -7,12 +7,16 @@
 namespace openads::session {
 
 enum class HandleKind {
-    None       = 0,
-    Connection = 1,
-    Table      = 2,
-    Cursor     = 3,
-    Statement  = 4,
-    Find       = 5
+    None             = 0,
+    Connection       = 1,
+    Table            = 2,
+    Cursor           = 3,
+    Statement        = 4,
+    Find             = 5,
+    // M12.5 — remote (TCP) variants. Same Ads* surface routes to
+    // a wire client instead of a local engine::Connection.
+    RemoteConnection = 6,
+    RemoteTable      = 7
 };
 
 using Handle = std::uint64_t;
