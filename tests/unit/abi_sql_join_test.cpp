@@ -159,6 +159,105 @@ TEST_CASE("M10.16 LEFT OUTER JOIN keeps left rows without a match") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.20 JOIN combined with WHERE filters merged rows") {
+    auto dir = fs::temp_directory_path() / "openads_m10_20_jw";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "C002"},
+         {"O03", "C001"}});
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[260] =
+        "SELECT * FROM ord.dbf INNER JOIN cus.dbf ON CUST = CUST "
+        "WHERE R_NAME = 'Alice'";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    std::set<UNSIGNED32> seq;
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    while (true) {
+        UNSIGNED16 atend = 0;
+        if (AdsAtEOF(hCur, &atend) != 0 || atend) break;
+        UNSIGNED32 r = 0;
+        if (AdsGetRecordNum(hCur, 0, &r) != 0) break;
+        seq.insert(r);
+        if (AdsSkip(hCur, 1) != 0) break;
+    }
+    CHECK(seq.size() == 2);   // Alice rows = O01 + O03
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.20 JOIN combined with ORDER BY sorts merged rows") {
+    auto dir = fs::temp_directory_path() / "openads_m10_20_jo";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"OB",  "C001"},
+         {"OA",  "C002"},
+         {"OC",  "C001"}});
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[260] =
+        "SELECT * FROM ord.dbf INNER JOIN cus.dbf ON CUST = CUST "
+        "ORDER BY ID";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    std::vector<std::string> ids;
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    while (true) {
+        UNSIGNED16 atend = 0;
+        if (AdsAtEOF(hCur, &atend) != 0 || atend) break;
+        UNSIGNED8 fld[16] = "ID";
+        UNSIGNED8 buf[16] = {0};
+        UNSIGNED32 cap = sizeof(buf);
+        REQUIRE(AdsGetField(hCur, fld, buf, &cap, 0) == 0);
+        std::string v(reinterpret_cast<const char*>(buf), cap);
+        while (!v.empty() && v.back() == ' ') v.pop_back();
+        ids.push_back(v);
+        if (AdsSkip(hCur, 1) != 0) break;
+    }
+    REQUIRE(ids.size() == 3);
+    CHECK(ids[0] == "OA");
+    CHECK(ids[1] == "OB");
+    CHECK(ids[2] == "OC");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.14 INNER JOIN drops rows without a match") {
     auto dir = fs::temp_directory_path() / "openads_m10_14_join_miss";
     std::error_code ec;

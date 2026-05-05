@@ -3917,15 +3917,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     if (!parsed) return fail(parsed.error());
 
     if (parsed.value().inner_join) {
-        // M10.14: materialise the inner join into a temp DBF and
-        // return a cursor on it. WHERE / ORDER BY / aggregates over
-        // the joined cursor land in a follow-up; for now reject
-        // those combos so semantics stay clear.
-        if (parsed.value().where || parsed.value().order_by ||
-            !parsed.value().aggregates.empty()) {
+        // M10.14 materialises the join into a temp DBF cursor; M10.20
+        // additionally compiles the outer WHERE / ORDER BY against
+        // that cursor's merged schema. Aggregate combos still defer.
+        if (!parsed.value().aggregates.empty()) {
             return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                        "INNER JOIN with WHERE / ORDER BY / aggregate "
-                        "in same query lands in a follow-up");
+                        "JOIN + aggregate in same query deferred");
         }
 
         const auto& j = *parsed.value().inner_join;
@@ -4096,6 +4093,133 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!cth) return fail(cth.error());
         openads::engine::Table* ctbl = c->lookup_table(cth.value());
         if (!ctbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+
+        // M10.20: apply outer WHERE / ORDER BY against the merged
+        // cursor's schema (left names verbatim; right names as
+        // `R_<orig>`).
+        if (parsed.value().where) {
+            using Pred = std::function<bool(openads::engine::Table&)>;
+            std::function<openads::util::Result<Pred>(
+                const openads::sql::WhereExpr&)> compile;
+            compile = [&](const openads::sql::WhereExpr& node)
+                      -> openads::util::Result<Pred> {
+                using Kind = openads::sql::WhereExpr::Kind;
+                if (node.kind == Kind::And || node.kind == Kind::Or) {
+                    std::vector<Pred> ks;
+                    for (auto& cn : node.children) {
+                        auto r = compile(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    bool is_and = (node.kind == Kind::And);
+                    return Pred{[ks = std::move(ks), is_and]
+                                (openads::engine::Table& t) {
+                        if (is_and) {
+                            for (auto& k : ks) if (!k(t)) return false;
+                            return true;
+                        }
+                        for (auto& k : ks) if (k(t)) return true;
+                        return false;
+                    }};
+                }
+                if (node.kind == Kind::Not) {
+                    auto inner = compile(*node.child);
+                    if (!inner) return inner.error();
+                    return Pred{[p = std::move(inner).value()]
+                                (openads::engine::Table& t){return !p(t);}};
+                }
+                if (node.kind == Kind::Cmp) {
+                    const auto& w = node.cmp;
+                    std::int32_t fi = ctbl->field_index(w.column);
+                    if (fi < 0) {
+                        return openads::util::Error{
+                            openads::AE_COLUMN_NOT_FOUND, 0,
+                            w.column.c_str(), ""};
+                    }
+                    std::uint16_t f = static_cast<std::uint16_t>(fi);
+                    openads::sql::WhereOp op = w.op;
+                    std::string lit = w.literal;
+                    bool is_num     = w.is_numeric;
+                    double num      = w.number;
+                    return Pred{[f, op, lit, is_num, num]
+                                (openads::engine::Table& t) {
+                        auto v = t.read_field(f);
+                        if (!v) return false;
+                        int cmp = 0;
+                        if (is_num) {
+                            double d = v.value().as_double;
+                            if      (d < num) cmp = -1;
+                            else if (d > num) cmp =  1;
+                        } else {
+                            cmp = v.value().as_string.compare(lit);
+                        }
+                        switch (op) {
+                            case openads::sql::WhereOp::Eq: return cmp == 0;
+                            case openads::sql::WhereOp::Ne: return cmp != 0;
+                            case openads::sql::WhereOp::Lt: return cmp <  0;
+                            case openads::sql::WhereOp::Gt: return cmp >  0;
+                            case openads::sql::WhereOp::Le: return cmp <= 0;
+                            case openads::sql::WhereOp::Ge: return cmp >= 0;
+                            case openads::sql::WhereOp::Contains: return false;
+                        }
+                        return false;
+                    }};
+                }
+                return openads::util::Error{
+                    openads::AE_FUNCTION_NOT_AVAILABLE, 0,
+                    "join cursor WHERE supports Cmp/AND/OR/NOT only", ""};
+            };
+            auto compiled = compile(*parsed.value().where);
+            if (!compiled) return fail(compiled.error());
+            ctbl->set_filter(std::move(compiled).value());
+        }
+        if (parsed.value().order_by) {
+            const auto& ob = *parsed.value().order_by;
+            std::int32_t fi = ctbl->field_index(ob.column);
+            if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                    ob.column.c_str());
+            std::uint16_t key = static_cast<std::uint16_t>(fi);
+            const auto& fdesc = ctbl->field_descriptor(key);
+            bool numeric_sort =
+                fdesc.type == openads::drivers::DbfFieldType::Numeric ||
+                fdesc.type == openads::drivers::DbfFieldType::Float   ||
+                fdesc.type == openads::drivers::DbfFieldType::Integer ||
+                fdesc.type == openads::drivers::DbfFieldType::Currency||
+                fdesc.type == openads::drivers::DbfFieldType::Double;
+            std::vector<std::pair<std::uint32_t, std::string>> ent_str;
+            std::vector<std::pair<std::uint32_t, double>>      ent_num;
+            std::uint32_t crc = ctbl->record_count();
+            for (std::uint32_t r = 1; r <= crc; ++r) {
+                if (auto g = ctbl->goto_record(r); !g) continue;
+                if (ctbl->is_deleted()) continue;
+                if (!ctbl->passes_filter()) continue;
+                auto v = ctbl->read_field(key);
+                if (!v) continue;
+                if (numeric_sort) ent_num.push_back({r, v.value().as_double});
+                else              ent_str.push_back({r, v.value().as_string});
+            }
+            std::vector<std::uint32_t> seq;
+            if (numeric_sort) {
+                std::stable_sort(ent_num.begin(), ent_num.end(),
+                    [&](auto& a, auto& b) {
+                        return ob.descending ? a.second > b.second
+                                             : a.second < b.second;
+                    });
+                seq.reserve(ent_num.size());
+                for (auto& p : ent_num) seq.push_back(p.first);
+            } else {
+                std::stable_sort(ent_str.begin(), ent_str.end(),
+                    [&](auto& a, auto& b) {
+                        return ob.descending ? a.second > b.second
+                                             : a.second < b.second;
+                    });
+                seq.reserve(ent_str.size());
+                for (auto& p : ent_str) seq.push_back(p.first);
+            }
+            ctbl->clear_filter();
+            ctbl->set_recno_sequence(std::move(seq));
+        }
+
         ADSHANDLE gh = s.registry.register_object(HandleKind::Table, ctbl);
         *phCursor = gh;
         return ok();
