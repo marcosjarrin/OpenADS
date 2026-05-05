@@ -347,6 +347,11 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.31-done` | SQL `DISTINCT` — `SELECT DISTINCT [cols\|*] FROM ...` dedups by projected columns; first occurrence wins, applied post-WHERE / post-ORDER-BY. |
 | `m10.32-done` | SQL `LIMIT N [OFFSET M]` — slices the post-clause traversal sequence (skip M, take N). |
 | `m10.33-done` | SQL `BETWEEN` / `LIKE` — `<col> BETWEEN <lit1> AND <lit2>` (inclusive, numeric or lexicographic) and `<col> LIKE '<pattern>'` with SQL `%` (any sequence) and `_` (single char) wildcards. |
+| `m10.34-done` | SQL GROUP BY across JOIN — `SELECT <agg>(...) FROM a JOIN b ON ... GROUP BY ...` produces one row per group of joined rows, mirroring the M10.25 grouped path on the merged cursor. |
+| `m10.35-done` | SQL correlated IN subquery — `<col> IN (SELECT col FROM b WHERE b.x = a.y)` re-evaluates per outer row when the inner WHERE references an outer column. |
+| `m10.37-done` | SQL multi-column ORDER BY — `ORDER BY a [ASC\|DESC], b [ASC\|DESC] ...` cascades on ties; per-column direction independent; numeric vs lex driven by column type. |
+| `m11.1-done`  | VFP V (Varchar) + Q (Varbinary) field types — decode trims trailing NUL pad to recover the meaningful prefix; encode NUL-pads the unused tail so reads recover the original length. |
+| `m11.3-done`  | TPS — `AdsReleaseSavepoint` drops a savepoint marker without rolling back; nested `AdsBeginTransaction` / `AdsCommitTransaction` increment / decrement depth (only the outermost commit flushes); inner ROLLBACK still aborts every nesting level. |
 
 #### Still planned for 0.3.x
 
