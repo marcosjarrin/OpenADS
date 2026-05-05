@@ -57,9 +57,14 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.2.0 released** (2026-05-04). 27 M9.x milestones merged on top of
-0.1.0 — see the table below. The full Harbour-reachable `Ads*` ABI
-surface (~ 231 exports) is now coverable end-to-end.
+**0.3.0 released** (2026-05-05). 42 M10.x SQL milestones + 3 M11.x
+non-SQL milestones (V/Q field types, AEP host, OpenADS-encrypted
+DBF) merged on top of 0.2.0 — see the table below. The full
+Harbour-reachable `Ads*` ABI surface is MISS-free; the SQL surface
+covers the practical Advantage SQL dialect end-to-end.
+
+Earlier: 0.2.0 (2026-05-04) — 27 M9.x milestones on top of 0.1.0,
+unlocked the full `Ads*` ABI.
 
 A real Harbour application, compiled against the standard
 `contrib/rddads` static library, opens a DBF, walks records, runs
@@ -356,6 +361,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.36-done` | SQL UNION + complex members — UNION members may now carry JOIN, GROUP BY, aggregates, CASE, DISTINCT, LIMIT. Dispatcher recurses into AdsExecuteSQLDirect per member (state mutex is recursive); each member's cursor schema drives merge alignment via `cursor_projections`. |
 | `m11.4-done`  | AEP host — `CREATE PROCEDURE <name> AS '<dll>::<sym>'` registers an external function on a connection; `EXECUTE PROCEDURE <name>(args)` calls it through `platform/dll` (LoadLibrary / dlopen) and returns its result string in a 1-row C(255) `RESULT` cursor. Clean-room ABI: `int proc(const char* args, char* out_buf, size_t out_cap)`; not byte-compatible with the legacy ADS Extended Procedure protocol. |
 | `m11.2-done`  | OpenADS-encrypted DBF (AES-256-CTR) — header byte 0xC3 marks an OpenADS-encrypted variant; record bodies XOR with an AES-256-CTR keystream keyed off the connection password (`AdsSetEncryptionPassword`). `AdsEncryptTable` upgrades a plain DBF in place. Schema stays plaintext. **Not byte-compatible** with proprietary SAP ADS encrypted .adt files — that format's byte boundary remains undocumented. |
+| `m10.39-done` | SQL scalar string fns — `UPPER` / `LOWER` / `LEN` / `TRIM` / `LTRIM` / `RTRIM` over a single column in projection, optional `AS alias`. Materialised result cell is C(N). |
+| `m10.40-done` | SQL arithmetic in projection — `<col> {+,-,*,/} <num_or_col>` evaluated as doubles, formatted with `%g` into a C(30) cell. |
+| `m10.41-done` | SQL `INSERT INTO t (cols) SELECT ...` — inner SELECT may use any engine clause; rows copy positionally into the target via the existing append path. |
+| `m10.42-done` | SQL `CREATE TABLE t AS SELECT ...` — derives the new table's schema from the inner cursor's projection, creates the DBF, bulk-copies rows. |
 
 #### Still planned for 0.3.x
 
