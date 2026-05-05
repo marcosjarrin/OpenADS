@@ -354,6 +354,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m11.3-done`  | TPS — `AdsReleaseSavepoint` drops a savepoint marker without rolling back; nested `AdsBeginTransaction` / `AdsCommitTransaction` increment / decrement depth (only the outermost commit flushes); inner ROLLBACK still aborts every nesting level. |
 | `m10.38-done` | SQL `CASE WHEN <cond> THEN <lit> [WHEN ...] [ELSE <lit>] END [AS alias]` in projection — first matching branch wins; result lands in a C(30) cell of the materialised result cursor. Conditions may use Cmp / AND / OR / NOT / BETWEEN / LIKE. |
 | `m10.36-done` | SQL UNION + complex members — UNION members may now carry JOIN, GROUP BY, aggregates, CASE, DISTINCT, LIMIT. Dispatcher recurses into AdsExecuteSQLDirect per member (state mutex is recursive); each member's cursor schema drives merge alignment via `cursor_projections`. |
+| `m11.4-done`  | AEP host — `CREATE PROCEDURE <name> AS '<dll>::<sym>'` registers an external function on a connection; `EXECUTE PROCEDURE <name>(args)` calls it through `platform/dll` (LoadLibrary / dlopen) and returns its result string in a 1-row C(255) `RESULT` cursor. Clean-room ABI: `int proc(const char* args, char* out_buf, size_t out_cap)`; not byte-compatible with the legacy ADS Extended Procedure protocol. |
 
 #### Still planned for 0.3.x
 
@@ -365,10 +366,6 @@ whose use is restricted by the Advantage SDK / ACE EULA.
   OpenADS-only encrypted format is feasible in a follow-up but
   would not interop with existing ADS-encrypted .adt / .dbf
   files.
-- **M11.4 AEP host** — needs a cross-platform DLL loader
-  (`platform/dll.{h,_win32.cpp,_posix.cpp}`), `CREATE PROCEDURE`
-  / `CALL` SQL syntax, a clean-room procedure ABI, and a
-  side-DLL test fixture. Tracked for the next milestone batch.
 - **M11.5 ADT** (proprietary table format) — depends on a
   clean-room specification of the ADT on-disk layout. None is
   publicly available; the only known route is reverse-
