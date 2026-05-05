@@ -352,23 +352,44 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.37-done` | SQL multi-column ORDER BY — `ORDER BY a [ASC\|DESC], b [ASC\|DESC] ...` cascades on ties; per-column direction independent; numeric vs lex driven by column type. |
 | `m11.1-done`  | VFP V (Varchar) + Q (Varbinary) field types — decode trims trailing NUL pad to recover the meaningful prefix; encode NUL-pads the unused tail so reads recover the original length. |
 | `m11.3-done`  | TPS — `AdsReleaseSavepoint` drops a savepoint marker without rolling back; nested `AdsBeginTransaction` / `AdsCommitTransaction` increment / decrement depth (only the outermost commit flushes); inner ROLLBACK still aborts every nesting level. |
+| `m10.38-done` | SQL `CASE WHEN <cond> THEN <lit> [WHEN ...] [ELSE <lit>] END [AS alias]` in projection — first matching branch wins; result lands in a C(30) cell of the materialised result cursor. Conditions may use Cmp / AND / OR / NOT / BETWEEN / LIKE. |
 
 #### Still planned for 0.3.x
 
-- **ADT** (proprietary table format) — depends on a clean-room
-  specification; no implementation today.
-- **VFP** memo + autoinc + NULL-bitmap extensions — basic field
-  types are real (M10.2); the `0x32` autoinc / null-flag header byte
-  + V (varchar) / Q (varbinary) types are next.
+- **M10.36 UNION + JOIN/aggregate inside members** — current
+  UNION executor short-circuits members with joins / aggregates
+  / GROUP BY because that path needs the full SELECT-execute
+  pipeline extracted into a reusable helper (the dispatcher in
+  `AdsExecuteSQLDirect` is ~6 000 lines of inline branches).
+  Tracked for the next milestone batch.
+- **M11.2 Real ADS record-level encryption** — gated by an
+  undocumented byte boundary inside the proprietary ADS record
+  format. The AES-256 primitive is in tree (`openads_aes_impl`),
+  but the in-record salt / IV layout that ADS uses is not
+  publicly specified. Shipping a non-byte-compatible
+  OpenADS-only encrypted format is feasible in a follow-up but
+  would not interop with existing ADS-encrypted .adt / .dbf
+  files.
+- **M11.4 AEP host** — needs a cross-platform DLL loader
+  (`platform/dll.{h,_win32.cpp,_posix.cpp}`), `CREATE PROCEDURE`
+  / `CALL` SQL syntax, a clean-room procedure ABI, and a
+  side-DLL test fixture. Tracked for the next milestone batch.
+- **M11.5 ADT** (proprietary table format) — depends on a
+  clean-room specification of the ADT on-disk layout. None is
+  publicly available; the only known route is reverse-
+  engineering SAP-owned binaries, which violates the project's
+  clean-room policy and the Advantage SDK / ACE EULA. Not
+  implementable until a clean-room spec exists.
+- **VFP** NULL-bitmap extension — the `0x32` autoinc / null-flag
+  header byte stays deferred. Autoinc (M10.11) and V / Q types
+  (M11.1) are real today.
 - **ADM** memo format — pairs with ADT, same gating as ADT.
 - **ADI** index format — proprietary B+tree variant; same gating.
-- **Real ADS record-level encryption** — the AES primitive is
-  ready (M4); the on-record byte boundary lands once a clean-room
-  description is available.
-- **More SQL** — UNION + JOIN / aggregates inside members,
-  correlated IN subquery, ORDER BY across DISTINCT, GROUP BY
-  inside JOIN combo. The shipped 0.3.x SQL surface covers
-  boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6),
+- **More SQL** — ORDER BY across DISTINCT, multi-column ORDER BY
+  inside UNION, projection expressions richer than CASE
+  (arithmetic, string concat). The shipped 0.3.x SQL surface
+  covers boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY`
+  (M10.6),
   `UPDATE` / `DELETE` (M10.7), projection lists (M10.8), DDL
   `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates (M10.10),
   INNER JOIN (M10.13 / M10.14), IN literal / subquery (M10.15),
@@ -380,7 +401,9 @@ whose use is restricted by the Advantage SDK / ACE EULA.
   UNION / UNION ALL (M10.26), UNION + projection (M10.27),
   UNION + ORDER BY (M10.28), correlated scalar subquery
   (M10.29), HAVING tree (M10.30), DISTINCT (M10.31),
-  LIMIT/OFFSET (M10.32), BETWEEN/LIKE (M10.33).
+  LIMIT/OFFSET (M10.32), BETWEEN/LIKE (M10.33), GROUP BY
+  across JOIN (M10.34), correlated IN (M10.35), multi-column
+  ORDER BY (M10.37), CASE WHEN in projection (M10.38).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
