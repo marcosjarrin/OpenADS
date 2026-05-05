@@ -95,6 +95,30 @@ struct HavingExpr {
     std::unique_ptr<HavingExpr>              child;      // Not
 };
 
+// M10.39 — scalar function call in a projection slot. Single source
+// column argument; result is always materialised as C(64) (or C(<len>)
+// for SUBSTR with a literal length).
+enum class ScalarFnKind { Upper, Lower, Len, Trim, Ltrim, Rtrim };
+
+struct ScalarFnCall {
+    ScalarFnKind  kind;
+    std::string   column;
+    std::string   alias;          // optional column alias
+};
+
+// M10.40 — binary arithmetic on numeric columns / literals in a
+// projection slot. Result materialised as C(30).
+enum class ArithOp { Add, Sub, Mul, Div };
+
+struct ArithExpr {
+    ArithOp       op;
+    std::string   lhs_column;     // always a column name
+    bool          rhs_is_literal = false;
+    double        rhs_number     = 0.0;
+    std::string   rhs_column;     // when !rhs_is_literal
+    std::string   alias;          // optional column alias
+};
+
 // M10.38 — `CASE WHEN <expr> THEN <lit> [WHEN <expr> THEN <lit>...]
 // [ELSE <lit>] END` projection item. Evaluated per row; result is
 // always a string (C(30)).
@@ -140,6 +164,10 @@ struct SelectStmt {
     // The index in this vector matches the `$CASE_<n>` placeholder
     // in `projection`.
     std::vector<CaseExpr>      case_items;
+    // M10.39 — scalar function calls referenced via `$FN_<n>`.
+    std::vector<ScalarFnCall>  fn_items;
+    // M10.40 — arithmetic expressions referenced via `$ARITH_<n>`.
+    std::vector<ArithExpr>     arith_items;
     // Aggregate calls in the projection (M10.10). Mutually exclusive
     // with `projection` — apps either select columns or aggregate.
     std::vector<Aggregate>     aggregates;

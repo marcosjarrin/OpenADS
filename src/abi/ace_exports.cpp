@@ -6728,26 +6728,35 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // into a temp DBF whose schema mirrors the projection list (CASE
     // items become C(30); regular columns preserve source type +
     // length), evaluating each row's CASE branches inline.
-    bool has_case = false;
+    auto starts_with = [](const std::string& s, const char* pre) {
+        std::size_t L = std::strlen(pre);
+        return s.size() >= L && std::memcmp(s.data(), pre, L) == 0;
+    };
+    bool has_synth = false;
     for (auto& p : parsed.value().projection) {
-        if (p.size() >= 6 && p.compare(0, 6, "$CASE_") == 0) {
-            has_case = true; break;
+        if (starts_with(p, "$CASE_") || starts_with(p, "$FN_") ||
+            starts_with(p, "$ARITH_")) {
+            has_synth = true; break;
         }
     }
-    if (has_case) {
+    if (has_synth) {
         struct OutCol {
             std::string  name;
             char         raw_type = 'C';
             std::uint8_t length   = 0;
             std::int32_t src_field = -1;
             std::int32_t case_idx  = -1;
+            std::int32_t fn_idx    = -1;
+            std::int32_t arith_idx = -1;
+            std::int32_t arith_lhs_field = -1;
+            std::int32_t arith_rhs_field = -1;
         };
         std::vector<OutCol> outs;
         outs.reserve(parsed.value().projection.size());
         for (std::size_t i = 0; i < parsed.value().projection.size(); ++i) {
             const auto& p = parsed.value().projection[i];
             OutCol o;
-            if (p.size() >= 6 && p.compare(0, 6, "$CASE_") == 0) {
+            if (starts_with(p, "$CASE_")) {
                 std::size_t idx = std::stoul(p.substr(6));
                 o.case_idx = static_cast<std::int32_t>(idx);
                 const auto& ce = parsed.value().case_items[idx];
@@ -6755,6 +6764,46 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 else {
                     char nm[16];
                     std::snprintf(nm, sizeof(nm), "CASE%zu", idx + 1);
+                    o.name = nm;
+                }
+                o.raw_type = 'C';
+                o.length   = 30;
+            } else if (starts_with(p, "$FN_")) {
+                std::size_t idx = std::stoul(p.substr(4));
+                o.fn_idx = static_cast<std::int32_t>(idx);
+                const auto& fc = parsed.value().fn_items[idx];
+                std::int32_t fi = tbl->field_index(fc.column);
+                if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                        fc.column.c_str());
+                o.src_field = fi;
+                if (!fc.alias.empty()) o.name = fc.alias;
+                else o.name = fc.column;
+                o.raw_type = 'C';
+                if (fc.kind == openads::sql::ScalarFnKind::Len) {
+                    o.length = 10;        // numeric string fits comfortably
+                } else {
+                    const auto& fd = tbl->field_descriptor(
+                        static_cast<std::uint16_t>(fi));
+                    o.length = fd.length ? fd.length : 30;
+                }
+            } else if (starts_with(p, "$ARITH_")) {
+                std::size_t idx = std::stoul(p.substr(7));
+                o.arith_idx = static_cast<std::int32_t>(idx);
+                const auto& ae = parsed.value().arith_items[idx];
+                std::int32_t lhs = tbl->field_index(ae.lhs_column);
+                if (lhs < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                         ae.lhs_column.c_str());
+                o.arith_lhs_field = lhs;
+                if (!ae.rhs_is_literal) {
+                    std::int32_t rhs = tbl->field_index(ae.rhs_column);
+                    if (rhs < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                             ae.rhs_column.c_str());
+                    o.arith_rhs_field = rhs;
+                }
+                if (!ae.alias.empty()) o.name = ae.alias;
+                else {
+                    char nm[16];
+                    std::snprintf(nm, sizeof(nm), "EXPR%zu", idx + 1);
                     o.name = nm;
                 }
                 o.raw_type = 'C';
@@ -6926,19 +6975,92 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         file.push_back(0x0D);
 
         std::uint32_t emitted = 0;
+        auto trim_left = [](std::string s) {
+            std::size_t i = 0;
+            while (i < s.size() && s[i] == ' ') ++i;
+            return s.substr(i);
+        };
+        auto trim_right = [](std::string s) {
+            while (!s.empty() && s.back() == ' ') s.pop_back();
+            return s;
+        };
+        auto trim_both = [&](std::string s) {
+            return trim_left(trim_right(std::move(s)));
+        };
         for (std::uint32_t r : walk_seq) {
             if (auto g = tbl->goto_record(r); !g) continue;
             file.push_back(' ');
             for (auto& o : outs) {
+                std::string val;
+                bool from_synth = false;
                 if (o.case_idx >= 0) {
+                    from_synth = true;
                     const auto& cc = ccases[o.case_idx];
-                    std::string val = cc.has_else ? cc.else_value : "";
+                    val = cc.has_else ? cc.else_value : "";
                     for (std::size_t bi = 0; bi < cc.branch_preds.size(); ++bi) {
                         if (cc.branch_preds[bi](*tbl)) {
                             val = cc.branch_values[bi];
                             break;
                         }
                     }
+                } else if (o.fn_idx >= 0) {
+                    from_synth = true;
+                    const auto& fc = parsed.value().fn_items[o.fn_idx];
+                    auto v = tbl->read_field(
+                        static_cast<std::uint16_t>(o.src_field));
+                    std::string raw = v ? v.value().as_string : std::string();
+                    using K = openads::sql::ScalarFnKind;
+                    switch (fc.kind) {
+                        case K::Upper:
+                            for (auto& ch : raw)
+                                ch = static_cast<char>(std::toupper(
+                                    static_cast<unsigned char>(ch)));
+                            val = std::move(raw);
+                            break;
+                        case K::Lower:
+                            for (auto& ch : raw)
+                                ch = static_cast<char>(std::tolower(
+                                    static_cast<unsigned char>(ch)));
+                            val = std::move(raw);
+                            break;
+                        case K::Len: {
+                            std::string trimmed = trim_right(std::move(raw));
+                            char buf[16];
+                            std::snprintf(buf, sizeof(buf), "%zu",
+                                          trimmed.size());
+                            val = buf;
+                            break;
+                        }
+                        case K::Trim:  val = trim_both(std::move(raw));  break;
+                        case K::Ltrim: val = trim_left(std::move(raw));  break;
+                        case K::Rtrim: val = trim_right(std::move(raw)); break;
+                    }
+                } else if (o.arith_idx >= 0) {
+                    from_synth = true;
+                    const auto& ae = parsed.value().arith_items[o.arith_idx];
+                    auto lv = tbl->read_field(
+                        static_cast<std::uint16_t>(o.arith_lhs_field));
+                    double a = lv ? lv.value().as_double : 0.0;
+                    double b = 0.0;
+                    if (ae.rhs_is_literal) b = ae.rhs_number;
+                    else {
+                        auto rv = tbl->read_field(
+                            static_cast<std::uint16_t>(o.arith_rhs_field));
+                        b = rv ? rv.value().as_double : 0.0;
+                    }
+                    double res = 0.0;
+                    using AO = openads::sql::ArithOp;
+                    switch (ae.op) {
+                        case AO::Add: res = a + b; break;
+                        case AO::Sub: res = a - b; break;
+                        case AO::Mul: res = a * b; break;
+                        case AO::Div: res = (b != 0.0) ? a / b : 0.0; break;
+                    }
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%g", res);
+                    val = buf;
+                }
+                if (from_synth) {
                     if (val.size() > o.length) val.resize(o.length);
                     for (std::uint8_t k = 0; k < o.length; ++k) {
                         file.push_back(k < val.size()

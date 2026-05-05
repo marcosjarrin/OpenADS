@@ -578,6 +578,51 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                 upper == "AVG"   || upper == "MIN" ||
                                 upper == "MAX") && c.peek_char('(');
 
+            // M10.39 — scalar function call: UPPER/LOWER/LEN/TRIM/
+            // LTRIM/RTRIM applied to a single column.
+            bool is_scalar_fn = (upper == "UPPER" || upper == "LOWER" ||
+                                 upper == "LEN"   || upper == "TRIM"  ||
+                                 upper == "LTRIM" || upper == "RTRIM") &&
+                                 c.peek_char('(');
+            if (is_scalar_fn) {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "mixing scalar fn + aggregates in SELECT not supported",
+                        sql};
+                }
+                if (!c.match_char('(')) {
+                    return util::Error{7200, 0,
+                        "expected '(' after scalar function name", sql};
+                }
+                ScalarFnCall fn;
+                if      (upper == "UPPER") fn.kind = ScalarFnKind::Upper;
+                else if (upper == "LOWER") fn.kind = ScalarFnKind::Lower;
+                else if (upper == "LEN")   fn.kind = ScalarFnKind::Len;
+                else if (upper == "TRIM")  fn.kind = ScalarFnKind::Trim;
+                else if (upper == "LTRIM") fn.kind = ScalarFnKind::Ltrim;
+                else                       fn.kind = ScalarFnKind::Rtrim;
+                fn.column = c.read_identifier();
+                if (fn.column.empty()) {
+                    return util::Error{7200, 0,
+                        "expected column name inside scalar function", sql};
+                }
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' to close scalar function", sql};
+                }
+                if (c.match_keyword("AS")) {
+                    fn.alias = c.read_identifier();
+                }
+                std::size_t fi = stmt.fn_items.size();
+                stmt.fn_items.push_back(std::move(fn));
+                char placeholder[32];
+                std::snprintf(placeholder, sizeof(placeholder),
+                              "$FN_%zu", fi);
+                stmt.projection.push_back(placeholder);
+                if (c.match_char(',')) continue;
+                break;
+            }
+
             if (is_agg_call) {
                 if (!stmt.projection.empty()) {
                     return util::Error{7200, 0,
@@ -617,6 +662,47 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 if (aggregate_mode) {
                     return util::Error{7200, 0,
                         "mixing plain columns + aggregates in SELECT not supported", sql};
+                }
+                // M10.40 — arithmetic projection: `<col> {+,-,*,/}
+                // <num_or_col>`. Detect binary operator after the
+                // first identifier; if absent, treat `head` as a
+                // plain column reference.
+                bool is_arith =
+                    c.peek_char('+') || c.peek_char('-') ||
+                    c.peek_char('*') || c.peek_char('/');
+                if (is_arith) {
+                    ArithExpr a;
+                    a.lhs_column = head;
+                    if      (c.match_char('+')) a.op = ArithOp::Add;
+                    else if (c.match_char('-')) a.op = ArithOp::Sub;
+                    else if (c.match_char('*')) a.op = ArithOp::Mul;
+                    else                          { c.match_char('/');
+                                                    a.op = ArithOp::Div; }
+                    auto n = c.read_numeric_literal();
+                    if (n) {
+                        a.rhs_is_literal = true;
+                        a.rhs_number     = n.value();
+                    } else {
+                        std::string id = c.read_identifier();
+                        if (id.empty()) {
+                            return util::Error{7200, 0,
+                                "expected number or column on RHS of arith",
+                                sql};
+                        }
+                        a.rhs_is_literal = false;
+                        a.rhs_column     = std::move(id);
+                    }
+                    if (c.match_keyword("AS")) {
+                        a.alias = c.read_identifier();
+                    }
+                    std::size_t ai = stmt.arith_items.size();
+                    stmt.arith_items.push_back(std::move(a));
+                    char placeholder[32];
+                    std::snprintf(placeholder, sizeof(placeholder),
+                                  "$ARITH_%zu", ai);
+                    stmt.projection.push_back(placeholder);
+                    if (c.match_char(',')) continue;
+                    break;
                 }
                 stmt.projection.push_back(std::move(head));
             }
