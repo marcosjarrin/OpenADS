@@ -476,6 +476,95 @@ parse_or_expr(Cursor& c, const std::string& sql) {
 } // namespace
 
 util::Result<SelectStmt> parse_select(const std::string& sql) {
+    // M10.48 — Common Table Expression: `WITH name AS (SELECT ...)
+    // SELECT ... FROM name`. Inline-substitute by replacing the CTE
+    // name in the body with `(<inner SQL>)` so the body parses as a
+    // regular SELECT-with-derived-table. Single CTE for first cut.
+    {
+        Cursor probe(sql);
+        if (probe.match_keyword("WITH")) {
+            std::string name = probe.read_identifier();
+            if (name.empty() || !probe.match_keyword("AS")) {
+                return util::Error{7200, 0,
+                    "expected `<name> AS (SELECT ...)` after WITH", sql};
+            }
+            if (!probe.match_char('(')) {
+                return util::Error{7200, 0,
+                    "expected '(' after WITH ... AS", sql};
+            }
+            std::string inner;
+            int depth = 1;
+            while (depth > 0) {
+                if (probe.eof()) {
+                    return util::Error{7200, 0,
+                        "unterminated CTE body", sql};
+                }
+                char ch = probe.consume_char();
+                if (ch == '(') { ++depth; inner.push_back('('); continue; }
+                if (ch == ')') {
+                    --depth;
+                    if (depth == 0) break;
+                    inner.push_back(')');
+                    continue;
+                }
+                inner.push_back(ch);
+            }
+            // Pull the rest of the SQL — everything after the CTE
+            // body's closing ')' is the body SELECT. Locate via raw
+            // substring search.
+            std::string upper_sql;
+            upper_sql.reserve(sql.size());
+            for (char ch2 : sql) upper_sql.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch2))));
+            std::size_t with_pos = upper_sql.find("WITH");
+            std::size_t open = sql.find('(', with_pos);
+            int d = 1; std::size_t k = open + 1;
+            while (k < sql.size() && d > 0) {
+                if (sql[k] == '(') ++d;
+                else if (sql[k] == ')') --d;
+                ++k;
+            }
+            std::string body = sql.substr(k);
+            // Replace the CTE's name as a whole-word token in `body`
+            // with `(<inner>)`. Case-sensitive whole-word match.
+            std::string body_upper;
+            body_upper.reserve(body.size());
+            for (char ch2 : body) body_upper.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch2))));
+            std::string name_upper;
+            name_upper.reserve(name.size());
+            for (char ch2 : name) name_upper.push_back(static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch2))));
+            std::string rebuilt;
+            rebuilt.reserve(body.size() + inner.size() + 4);
+            std::size_t i = 0;
+            while (i < body.size()) {
+                if (body_upper.compare(i, name_upper.size(),
+                                       name_upper) == 0) {
+                    bool lb = (i == 0) ||
+                        (!std::isalnum(
+                            static_cast<unsigned char>(body[i - 1])) &&
+                         body[i - 1] != '_');
+                    std::size_t end = i + name_upper.size();
+                    bool rb = (end == body.size()) ||
+                        (!std::isalnum(
+                            static_cast<unsigned char>(body[end])) &&
+                         body[end] != '_');
+                    if (lb && rb) {
+                        rebuilt.push_back('(');
+                        rebuilt.append(inner);
+                        rebuilt.push_back(')');
+                        i = end;
+                        continue;
+                    }
+                }
+                rebuilt.push_back(body[i]);
+                ++i;
+            }
+            return parse_select(rebuilt);
+        }
+    }
+
     Cursor c(sql);
     if (!c.match_keyword("SELECT")) {
         return util::Error{7200, 0, "expected SELECT", sql};
@@ -578,13 +667,18 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                 upper == "AVG"   || upper == "MIN" ||
                                 upper == "MAX") && c.peek_char('(');
 
-            // M10.39 — scalar function call: UPPER/LOWER/LEN/TRIM/
-            // LTRIM/RTRIM applied to a single column.
-            bool is_scalar_fn = (upper == "UPPER" || upper == "LOWER" ||
-                                 upper == "LEN"   || upper == "TRIM"  ||
-                                 upper == "LTRIM" || upper == "RTRIM") &&
-                                 c.peek_char('(');
-            if (is_scalar_fn) {
+            // M10.39 / M10.43 / M10.45 — scalar function call.
+            // Single-arg: UPPER/LOWER/LEN/TRIM/LTRIM/RTRIM(col).
+            // Multi-arg: SUBSTR(col,start,len), CONCAT(a,b),
+            // REPLACE(col,old,new), DATEDIFF(a,b), DATEADD(col,n).
+            bool is_single_arg = (upper == "UPPER" || upper == "LOWER" ||
+                                  upper == "LEN"   || upper == "TRIM"  ||
+                                  upper == "LTRIM" || upper == "RTRIM") &&
+                                  c.peek_char('(');
+            bool is_multi_arg  = (upper == "SUBSTR"   || upper == "CONCAT"  ||
+                                  upper == "REPLACE"  || upper == "DATEDIFF" ||
+                                  upper == "DATEADD") && c.peek_char('(');
+            if (is_single_arg || is_multi_arg) {
                 if (aggregate_mode) {
                     return util::Error{7200, 0,
                         "mixing scalar fn + aggregates in SELECT not supported",
@@ -595,16 +689,54 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                         "expected '(' after scalar function name", sql};
                 }
                 ScalarFnCall fn;
-                if      (upper == "UPPER") fn.kind = ScalarFnKind::Upper;
-                else if (upper == "LOWER") fn.kind = ScalarFnKind::Lower;
-                else if (upper == "LEN")   fn.kind = ScalarFnKind::Len;
-                else if (upper == "TRIM")  fn.kind = ScalarFnKind::Trim;
-                else if (upper == "LTRIM") fn.kind = ScalarFnKind::Ltrim;
-                else                       fn.kind = ScalarFnKind::Rtrim;
-                fn.column = c.read_identifier();
-                if (fn.column.empty()) {
-                    return util::Error{7200, 0,
-                        "expected column name inside scalar function", sql};
+                if      (upper == "UPPER")    fn.kind = ScalarFnKind::Upper;
+                else if (upper == "LOWER")    fn.kind = ScalarFnKind::Lower;
+                else if (upper == "LEN")      fn.kind = ScalarFnKind::Len;
+                else if (upper == "TRIM")     fn.kind = ScalarFnKind::Trim;
+                else if (upper == "LTRIM")    fn.kind = ScalarFnKind::Ltrim;
+                else if (upper == "RTRIM")    fn.kind = ScalarFnKind::Rtrim;
+                else if (upper == "SUBSTR")   fn.kind = ScalarFnKind::Substr;
+                else if (upper == "CONCAT")   fn.kind = ScalarFnKind::Concat;
+                else if (upper == "REPLACE")  fn.kind = ScalarFnKind::Replace;
+                else if (upper == "DATEDIFF") fn.kind = ScalarFnKind::DateDiff;
+                else                          fn.kind = ScalarFnKind::DateAdd;
+                if (is_single_arg) {
+                    fn.column = c.read_identifier();
+                    if (fn.column.empty()) {
+                        return util::Error{7200, 0,
+                            "expected column name inside scalar function", sql};
+                    }
+                } else {
+                    for (;;) {
+                        ScalarFnArg arg;
+                        if (c.peek_char('\'')) {
+                            auto s = c.read_string_literal();
+                            if (!s) return s.error();
+                            arg.is_column  = false;
+                            arg.is_numeric = false;
+                            arg.text       = std::move(s).value();
+                        } else {
+                            // Try numeric literal first.
+                            auto n = c.read_numeric_literal();
+                            if (n) {
+                                arg.is_column  = false;
+                                arg.is_numeric = true;
+                                arg.number     = n.value();
+                            } else {
+                                std::string id = c.read_identifier();
+                                if (id.empty()) {
+                                    return util::Error{7200, 0,
+                                        "expected arg in scalar function call",
+                                        sql};
+                                }
+                                arg.is_column = true;
+                                arg.column    = std::move(id);
+                            }
+                        }
+                        fn.args.push_back(std::move(arg));
+                        if (c.match_char(',')) continue;
+                        break;
+                    }
                 }
                 if (!c.match_char(')')) {
                     return util::Error{7200, 0,
@@ -713,7 +845,39 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
     if (!c.match_keyword("FROM")) {
         return util::Error{7200, 0, "expected FROM", sql};
     }
-    stmt.table = c.read_identifier_or_filename();
+    // M10.46 — `FROM (SELECT ...) [AS alias]`. Capture the inner
+    // SELECT text + scan past the matching ')' so subsequent
+    // WHERE / ORDER BY parse against the outer cursor.
+    if (c.match_char('(')) {
+        if (!c.peek_keyword("SELECT")) {
+            return util::Error{7200, 0,
+                "expected SELECT inside derived table", sql};
+        }
+        std::string inner = "SELECT ";
+        c.match_keyword("SELECT");
+        int depth = 1;
+        while (depth > 0) {
+            if (c.eof()) {
+                return util::Error{7200, 0,
+                    "unterminated derived table", sql};
+            }
+            char ch = c.consume_char();
+            if (ch == '(') { ++depth; inner.push_back('('); continue; }
+            if (ch == ')') {
+                --depth;
+                if (depth == 0) break;
+                inner.push_back(')');
+                continue;
+            }
+            inner.push_back(ch);
+        }
+        stmt.derived_sql = std::move(inner);
+        if (c.match_keyword("AS")) {
+            stmt.derived_alias = c.read_identifier();
+        }
+    } else {
+        stmt.table = c.read_identifier_or_filename();
+    }
     bool is_left_join  = false;
     bool is_right_join = false;
     bool is_full_join  = false;
@@ -780,7 +944,7 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         }
         stmt.inner_join = std::move(j);
     }
-    if (stmt.table.empty()) {
+    if (stmt.table.empty() && stmt.derived_sql.empty()) {
         return util::Error{7200, 0, "expected table name", sql};
     }
 

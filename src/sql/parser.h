@@ -98,12 +98,28 @@ struct HavingExpr {
 // M10.39 — scalar function call in a projection slot. Single source
 // column argument; result is always materialised as C(64) (or C(<len>)
 // for SUBSTR with a literal length).
-enum class ScalarFnKind { Upper, Lower, Len, Trim, Ltrim, Rtrim };
+// M10.43 — multi-arg additions: Substr (col, start, len), Concat
+// (col_or_lit, col_or_lit), Replace (col, old_lit, new_lit).
+// M10.45 — date arithmetic: DateDiff (col, col), DateAdd (col, num).
+enum class ScalarFnKind {
+    Upper, Lower, Len, Trim, Ltrim, Rtrim,
+    Substr, Concat, Replace,
+    DateDiff, DateAdd
+};
+
+struct ScalarFnArg {
+    bool        is_column = true;   // true for column ref; false for literal
+    std::string column;
+    bool        is_numeric = false; // for literal kind
+    std::string text;
+    double      number    = 0.0;
+};
 
 struct ScalarFnCall {
-    ScalarFnKind  kind;
-    std::string   column;
-    std::string   alias;          // optional column alias
+    ScalarFnKind             kind;
+    std::string              column;     // first arg when single-column form
+    std::vector<ScalarFnArg> args;       // multi-arg form (M10.43+)
+    std::string              alias;      // optional column alias
 };
 
 // M10.40 — binary arithmetic on numeric columns / literals in a
@@ -152,6 +168,11 @@ struct JoinClause {
 
 struct SelectStmt {
     std::string                table;
+    // M10.46 — derived table: `FROM (SELECT ...) [AS alias]`. When
+    // set, `table` is empty and the executor materialises the inner
+    // SELECT to a cursor before applying the outer clauses.
+    std::string                derived_sql;
+    std::string                derived_alias;
     // M10.31 — DISTINCT keyword right after SELECT. When set, the
     // result cursor dedups by projected column values.
     bool                       distinct = false;

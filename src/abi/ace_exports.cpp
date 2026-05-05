@@ -5518,14 +5518,41 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
-    auto th = c->open_table(parsed.value().table,
-                            openads::engine::TableType::Cdx,
-                            openads::engine::OpenMode::Read);
-    if (!th) return fail(th.error());
+    // M10.46 — derived table: `FROM (SELECT ...)`. Recursively run
+    // the inner SELECT first; the resulting cursor's underlying
+    // engine::Table becomes the source for the outer clauses.
     auto& s = state();
+    openads::engine::Table* tbl = nullptr;
+    ADSHANDLE derived_cur = 0;
+    if (!parsed.value().derived_sql.empty()) {
+        std::vector<UNSIGNED8> selbuf(parsed.value().derived_sql.size() + 1);
+        std::memcpy(selbuf.data(),
+                    parsed.value().derived_sql.c_str(),
+                    parsed.value().derived_sql.size() + 1);
+        UNSIGNED32 rrc =
+            AdsExecuteSQLDirect(hStatement, selbuf.data(), &derived_cur);
+        if (rrc != 0) return rrc;
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        tbl = s.registry.lookup<openads::engine::Table>(
+            derived_cur, HandleKind::Table);
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR,
+                              "derived table cursor lookup");
+        // continue, lock_guard scoped to whole function below by
+        // dropping out — we want to hold lock through registration.
+        // Since `lk` would die at end of this `if` block, re-take.
+    }
     std::lock_guard<std::recursive_mutex> lk(s.mu);
-    openads::engine::Table* tbl = c->lookup_table(th.value());
-    if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+    Handle table_handle = 0;
+    if (!tbl) {
+        auto th = c->open_table(parsed.value().table,
+                                openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Read);
+        if (!th) return fail(th.error());
+        table_handle = th.value();
+        tbl = c->lookup_table(table_handle);
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+    }
+    (void)table_handle;
 
     // M10.10: aggregate query — walk matching rows, compute the
     // aggregate accumulators, materialise a 1-row temp DBF with one
@@ -5544,7 +5571,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (a.kind != openads::sql::AggregateKind::CountStar) {
                 slot.field_index = tbl->field_index(a.column);
                 if (slot.field_index < 0) {
-                    c->close_table(th.value());
+                    if (table_handle != 0) c->close_table(table_handle);
                     return fail(openads::AE_COLUMN_NOT_FOUND, a.column.c_str());
                 }
             }
@@ -5624,7 +5651,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             };
             auto compiled = compile(*parsed.value().where);
             if (!compiled) {
-                c->close_table(th.value());
+                if (table_handle != 0) c->close_table(table_handle);
                 return fail(compiled.error());
             }
             filter = std::move(compiled).value();
@@ -5648,7 +5675,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             for (auto& gname : parsed.value().group_by) {
                 std::int32_t fi = tbl->field_index(gname);
                 if (fi < 0) {
-                    c->close_table(th.value());
+                    if (table_handle != 0) c->close_table(table_handle);
                     return fail(openads::AE_COLUMN_NOT_FOUND, gname.c_str());
                 }
                 const auto& fd = tbl->field_descriptor(
@@ -5706,7 +5733,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 };
                 auto vr = validate(*parsed.value().having);
                 if (!vr) {
-                    c->close_table(th.value());
+                    if (table_handle != 0) c->close_table(table_handle);
                     return fail(vr.error());
                 }
             }
@@ -5769,7 +5796,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if (d > acc.maxv[i]) acc.maxv[i] = d;
                 }
             }
-            c->close_table(th.value());
+            if (table_handle != 0) c->close_table(table_handle);
 
             auto agg_at = [&](const GroupAcc& acc, std::size_t si) -> double {
                 using K = openads::sql::AggregateKind;
@@ -5965,7 +5992,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 if (d > maxv[i]) maxv[i] = d;
             }
         }
-        c->close_table(th.value());
+        if (table_handle != 0) c->close_table(table_handle);
 
         // Write a 1-row temp DBF with one C(30) field per aggregate
         // and the formatted result in each slot.
@@ -7015,19 +7042,43 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::size_t idx = std::stoul(p.substr(4));
                 o.fn_idx = static_cast<std::int32_t>(idx);
                 const auto& fc = parsed.value().fn_items[idx];
-                std::int32_t fi = tbl->field_index(fc.column);
-                if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
-                                        fc.column.c_str());
-                o.src_field = fi;
-                if (!fc.alias.empty()) o.name = fc.alias;
-                else o.name = fc.column;
-                o.raw_type = 'C';
-                if (fc.kind == openads::sql::ScalarFnKind::Len) {
-                    o.length = 10;        // numeric string fits comfortably
+                using K = openads::sql::ScalarFnKind;
+                bool single_col = (fc.kind == K::Upper ||
+                                   fc.kind == K::Lower ||
+                                   fc.kind == K::Len   ||
+                                   fc.kind == K::Trim  ||
+                                   fc.kind == K::Ltrim ||
+                                   fc.kind == K::Rtrim);
+                if (single_col) {
+                    std::int32_t fi = tbl->field_index(fc.column);
+                    if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                            fc.column.c_str());
+                    o.src_field = fi;
+                    if (!fc.alias.empty()) o.name = fc.alias;
+                    else o.name = fc.column;
+                    o.raw_type = 'C';
+                    if (fc.kind == K::Len) {
+                        o.length = 10;
+                    } else {
+                        const auto& fd = tbl->field_descriptor(
+                            static_cast<std::uint16_t>(fi));
+                        o.length = fd.length ? fd.length : 30;
+                    }
                 } else {
-                    const auto& fd = tbl->field_descriptor(
-                        static_cast<std::uint16_t>(fi));
-                    o.length = fd.length ? fd.length : 30;
+                    // M10.43 / M10.45 — multi-arg fns. Width = generous
+                    // default; alias drives the column name; no
+                    // pre-resolved src_field (per-arg lookups happen
+                    // at row-eval time).
+                    if (!fc.alias.empty()) o.name = fc.alias;
+                    else {
+                        char nm[16];
+                        std::snprintf(nm, sizeof(nm), "EXPR%zu", idx + 1);
+                        o.name = nm;
+                    }
+                    o.raw_type = 'C';
+                    o.length   = (fc.kind == K::DateAdd) ? 8
+                               : (fc.kind == K::DateDiff) ? 12
+                               : 64;
                 }
             } else if (starts_with(p, "$ARITH_")) {
                 std::size_t idx = std::stoul(p.substr(7));
@@ -7249,9 +7300,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 } else if (o.fn_idx >= 0) {
                     from_synth = true;
                     const auto& fc = parsed.value().fn_items[o.fn_idx];
-                    auto v = tbl->read_field(
-                        static_cast<std::uint16_t>(o.src_field));
-                    std::string raw = v ? v.value().as_string : std::string();
+                    std::string raw;
+                    if (o.src_field >= 0) {
+                        auto v = tbl->read_field(
+                            static_cast<std::uint16_t>(o.src_field));
+                        if (v) raw = v.value().as_string;
+                    }
                     using K = openads::sql::ScalarFnKind;
                     switch (fc.kind) {
                         case K::Upper:
@@ -7277,6 +7331,127 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case K::Trim:  val = trim_both(std::move(raw));  break;
                         case K::Ltrim: val = trim_left(std::move(raw));  break;
                         case K::Rtrim: val = trim_right(std::move(raw)); break;
+                        case K::Substr:
+                        case K::Concat:
+                        case K::Replace:
+                        case K::DateDiff:
+                        case K::DateAdd: {
+                            // M10.43 / M10.45 — multi-arg fns. Resolve
+                            // each arg as either a column read (with
+                            // trailing-space trim for Char-typed slots)
+                            // or the parsed literal.
+                            auto arg_str = [&](const openads::sql::ScalarFnArg& a)
+                                -> std::string {
+                                if (!a.is_column) return a.text;
+                                std::int32_t fi = tbl->field_index(a.column);
+                                if (fi < 0) return std::string();
+                                auto fv = tbl->read_field(
+                                    static_cast<std::uint16_t>(fi));
+                                if (!fv) return std::string();
+                                std::string s = fv.value().as_string;
+                                while (!s.empty() && s.back() == ' ')
+                                    s.pop_back();
+                                return s;
+                            };
+                            auto arg_num = [&](const openads::sql::ScalarFnArg& a)
+                                -> double {
+                                if (!a.is_column) return a.number;
+                                std::int32_t fi = tbl->field_index(a.column);
+                                if (fi < 0) return 0.0;
+                                auto fv = tbl->read_field(
+                                    static_cast<std::uint16_t>(fi));
+                                return fv ? fv.value().as_double : 0.0;
+                            };
+                            if (fc.kind == K::Substr && fc.args.size() >= 2) {
+                                std::string src = arg_str(fc.args[0]);
+                                long start = static_cast<long>(
+                                    arg_num(fc.args[1]));      // 1-based
+                                long len = (fc.args.size() >= 3)
+                                    ? static_cast<long>(arg_num(fc.args[2]))
+                                    : static_cast<long>(src.size());
+                                if (start < 1) start = 1;
+                                std::size_t s0 = static_cast<std::size_t>(start - 1);
+                                if (s0 >= src.size()) val.clear();
+                                else {
+                                    std::size_t take =
+                                        std::min<std::size_t>(
+                                            len < 0 ? 0 : (std::size_t)len,
+                                            src.size() - s0);
+                                    val = src.substr(s0, take);
+                                }
+                            } else if (fc.kind == K::Concat) {
+                                for (auto& a : fc.args) val += arg_str(a);
+                            } else if (fc.kind == K::Replace &&
+                                       fc.args.size() == 3) {
+                                std::string src = arg_str(fc.args[0]);
+                                std::string oldp = arg_str(fc.args[1]);
+                                std::string newp = arg_str(fc.args[2]);
+                                if (!oldp.empty()) {
+                                    std::size_t i = 0;
+                                    while ((i = src.find(oldp, i)) !=
+                                           std::string::npos) {
+                                        src.replace(i, oldp.size(), newp);
+                                        i += newp.size();
+                                    }
+                                }
+                                val = std::move(src);
+                            } else if (fc.kind == K::DateDiff &&
+                                       fc.args.size() == 2) {
+                                // M10.45 — DATEDIFF on YYYYMMDD strings:
+                                // returns days_a - days_b via Julian day.
+                                auto julian = [](const std::string& s) -> long {
+                                    if (s.size() < 8) return 0;
+                                    int y = std::atoi(s.substr(0, 4).c_str());
+                                    int m = std::atoi(s.substr(4, 2).c_str());
+                                    int d = std::atoi(s.substr(6, 2).c_str());
+                                    long a = (14 - m) / 12;
+                                    long y2 = y + 4800 - a;
+                                    long m2 = m + 12 * a - 3;
+                                    return d + (153 * m2 + 2) / 5 + 365 * y2 +
+                                           y2 / 4 - y2 / 100 + y2 / 400 - 32045;
+                                };
+                                long ja = julian(arg_str(fc.args[0]));
+                                long jb = julian(arg_str(fc.args[1]));
+                                char buf[32];
+                                std::snprintf(buf, sizeof(buf), "%ld",
+                                              ja - jb);
+                                val = buf;
+                            } else if (fc.kind == K::DateAdd &&
+                                       fc.args.size() == 2) {
+                                // M10.45 — add N days to YYYYMMDD.
+                                std::string ds = arg_str(fc.args[0]);
+                                if (ds.size() < 8) { val = ds; break; }
+                                int y = std::atoi(ds.substr(0, 4).c_str());
+                                int mo_in = std::atoi(ds.substr(4, 2).c_str());
+                                int d = std::atoi(ds.substr(6, 2).c_str());
+                                long n = static_cast<long>(arg_num(fc.args[1]));
+                                long aa = (14 - mo_in) / 12;
+                                long y2 = y + 4800 - aa;
+                                long m2 = mo_in + 12 * aa - 3;
+                                long jdn = d + (153 * m2 + 2) / 5 + 365 * y2 +
+                                           y2 / 4 - y2 / 100 + y2 / 400 - 32045;
+                                jdn += n;
+                                long la = jdn + 32044;
+                                long b  = (4 * la + 3) / 146097;
+                                long c2 = la - (146097 * b) / 4;
+                                long d2 = (4 * c2 + 3) / 1461;
+                                long e  = c2 - (1461 * d2) / 4;
+                                long mn = (5 * e + 2) / 153;
+                                int  day = static_cast<int>(
+                                    e - (153 * mn + 2) / 5 + 1);
+                                int  mo  = static_cast<int>(
+                                    mn + 3 - 12 * (mn / 10));
+                                int  yr  = static_cast<int>(
+                                    100 * b + d2 - 4800 + mn / 10);
+                                char buf[16];
+                                std::snprintf(buf, sizeof(buf),
+                                              "%04d%02d%02d", yr, mo, day);
+                                val = buf;
+                            } else {
+                                val.clear();
+                            }
+                            break;
+                        }
                     }
                 } else if (o.arith_idx >= 0) {
                     from_synth = true;
@@ -7344,12 +7519,13 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
-    ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
+    // M10.46 — when this query was a derived-table outer SELECT,
+    // reuse the inner cursor's existing handle so the user-visible
+    // cursor isn't a stale alias of an already-registered Table*.
+    ADSHANDLE gh = (derived_cur != 0)
+        ? derived_cur
+        : s.registry.register_object(HandleKind::Table, tbl);
 
-    // M10.8: stash the projection (column → underlying field index)
-    // for this cursor handle. Empty projection means SELECT * — leave
-    // the entry absent so AdsGetNumFields / Name / Type fall through
-    // to the table's full schema.
     if (!parsed.value().projection.empty()) {
         std::vector<std::uint16_t> proj;
         proj.reserve(parsed.value().projection.size());

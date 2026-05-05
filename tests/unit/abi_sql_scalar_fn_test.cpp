@@ -111,6 +111,72 @@ TEST_CASE("M10.39 UPPER / LOWER / LEN / TRIM in projection") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.43 SUBSTR / CONCAT / REPLACE multi-arg fns") {
+    auto dir = fs::temp_directory_path() / "openads_m10_43";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"NAME", 'C', 8}, {"SUFFIX", 'C', 4}},
+        {{"AliceX", " Inc"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[300] =
+        "SELECT SUBSTR(NAME, 1, 5) AS S, "
+        "CONCAT(NAME, SUFFIX) AS C, "
+        "REPLACE(NAME, 'Alice', 'Bob') AS R FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    CHECK(read_field(hCur, "S") == "Alice");
+    CHECK(read_field(hCur, "C") == "AliceX Inc");
+    CHECK(read_field(hCur, "R") == "BobX");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.45 DATEDIFF / DATEADD on YYYYMMDD strings") {
+    auto dir = fs::temp_directory_path() / "openads_m10_45";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"START_", 'C', 8}, {"END_", 'C', 8}},
+        {{"20260101", "20260131"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[300] =
+        "SELECT DATEDIFF(END_, START_) AS DAYS, "
+        "DATEADD(START_, 7) AS NEXT_W FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    CHECK(read_field(hCur, "DAYS") == "30");
+    CHECK(read_field(hCur, "NEXT_W") == "20260108");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.40 arithmetic in projection") {
     auto dir = fs::temp_directory_path() / "openads_m10_40";
     std::error_code ec;
