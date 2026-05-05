@@ -145,6 +145,82 @@ TEST_CASE("M10.43 SUBSTR / CONCAT / REPLACE multi-arg fns") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.53 NULLIF / COALESCE / IFNULL") {
+    auto dir = fs::temp_directory_path() / "openads_m10_53";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"A", 'C', 5}, {"B", 'C', 5}},
+        {{"hi", "hi"},
+         {"", "fb"},
+         {"foo", "bar"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[300] =
+        "SELECT NULLIF(A, B) AS X, COALESCE(A, B) AS Y, "
+        "IFNULL(A, 'zz') AS Z FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    CHECK(read_field(hCur, "X") == "");          // NULLIF: equal → null
+    CHECK(read_field(hCur, "Y") == "hi");        // COALESCE: A non-empty
+    CHECK(read_field(hCur, "Z") == "hi");
+
+    REQUIRE(AdsSkip(hCur, 1) == 0);
+    CHECK(read_field(hCur, "X") == "");          // NULLIF on empty A,'fb' = '' (because A is "")
+    CHECK(read_field(hCur, "Y") == "fb");        // COALESCE: A empty → B
+    CHECK(read_field(hCur, "Z") == "zz");        // IFNULL: A empty → 'zz'
+
+    REQUIRE(AdsSkip(hCur, 1) == 0);
+    CHECK(read_field(hCur, "X") == "foo");       // NULLIF: not equal → A
+    CHECK(read_field(hCur, "Y") == "foo");
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.54 aggregate FILTER (WHERE ...)") {
+    auto dir = fs::temp_directory_path() / "openads_m10_54";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf_typed(dir / "data.dbf",
+        {{"AGE", 'N', 4}},
+        {{"  10"}, {"  25"}, {"  40"}, {"  55"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[300] =
+        "SELECT COUNT(*) FILTER (WHERE AGE > 20), "
+        "COUNT(*) FILTER (WHERE AGE > 50) FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+    CHECK(read_field(hCur, "COL1") == "3");      // 25 / 40 / 55
+    CHECK(read_field(hCur, "COL2") == "1");      // only 55
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.45 DATEDIFF / DATEADD on YYYYMMDD strings") {
     auto dir = fs::temp_directory_path() / "openads_m10_45";
     std::error_code ec;

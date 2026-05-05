@@ -1,0 +1,143 @@
+#include "network/socket.h"
+
+#ifdef _WIN32
+
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+
+#include <atomic>
+#include <cstring>
+
+namespace openads::network {
+
+namespace {
+
+std::atomic<bool> g_inited{false};
+
+}
+
+util::Result<void> network_init() {
+    if (g_inited.load()) return {};
+    WSADATA wsa{};
+    int rc = WSAStartup(MAKEWORD(2, 2), &wsa);
+    if (rc != 0) {
+        return util::Error{5000, rc, "WSAStartup failed", ""};
+    }
+    g_inited.store(true);
+    return {};
+}
+
+util::Result<Socket> listen_tcp(const ListenerOptions& opts) {
+    if (auto r = network_init(); !r) return r.error();
+    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) {
+        return util::Error{5000, WSAGetLastError(),
+                           "socket() failed", ""};
+    }
+    BOOL on = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&on), sizeof(on));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(opts.port);
+    InetPtonA(AF_INET, opts.host.c_str(), &addr.sin_addr);
+    if (::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) ==
+        SOCKET_ERROR) {
+        int e = WSAGetLastError(); closesocket(s);
+        return util::Error{5000, e, "bind() failed", opts.host};
+    }
+    if (::listen(s, opts.backlog) == SOCKET_ERROR) {
+        int e = WSAGetLastError(); closesocket(s);
+        return util::Error{5000, e, "listen() failed", ""};
+    }
+    Socket out;
+    out.handle = static_cast<std::uintptr_t>(s);
+    return out;
+}
+
+util::Result<std::uint16_t> socket_local_port(const Socket& sock) {
+    sockaddr_in addr{};
+    int len = sizeof(addr);
+    if (getsockname(static_cast<SOCKET>(sock.handle),
+                    reinterpret_cast<sockaddr*>(&addr), &len) ==
+        SOCKET_ERROR) {
+        return util::Error{5000, WSAGetLastError(),
+                           "getsockname failed", ""};
+    }
+    return static_cast<std::uint16_t>(ntohs(addr.sin_port));
+}
+
+util::Result<Socket> accept_one(Socket& listener) {
+    sockaddr_in addr{};
+    int len = sizeof(addr);
+    SOCKET c = ::accept(static_cast<SOCKET>(listener.handle),
+                        reinterpret_cast<sockaddr*>(&addr), &len);
+    if (c == INVALID_SOCKET) {
+        return util::Error{5000, WSAGetLastError(),
+                           "accept() failed", ""};
+    }
+    Socket out;
+    out.handle = static_cast<std::uintptr_t>(c);
+    return out;
+}
+
+util::Result<Socket> connect_tcp(const std::string& host,
+                                  std::uint16_t port) {
+    if (auto r = network_init(); !r) return r.error();
+    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) {
+        return util::Error{5000, WSAGetLastError(),
+                           "socket() failed", ""};
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(port);
+    InetPtonA(AF_INET, host.c_str(), &addr.sin_addr);
+    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) ==
+        SOCKET_ERROR) {
+        int e = WSAGetLastError(); closesocket(s);
+        return util::Error{5000, e, "connect() failed", host};
+    }
+    Socket out;
+    out.handle = static_cast<std::uintptr_t>(s);
+    return out;
+}
+
+util::Result<std::size_t> sock_send(Socket& sock,
+                                     const std::uint8_t* buf,
+                                     std::size_t n) {
+    int sent = ::send(static_cast<SOCKET>(sock.handle),
+                      reinterpret_cast<const char*>(buf),
+                      static_cast<int>(n), 0);
+    if (sent == SOCKET_ERROR) {
+        return util::Error{5000, WSAGetLastError(),
+                           "send() failed", ""};
+    }
+    return static_cast<std::size_t>(sent);
+}
+
+util::Result<std::size_t> sock_recv(Socket& sock,
+                                     std::uint8_t* buf,
+                                     std::size_t n) {
+    int got = ::recv(static_cast<SOCKET>(sock.handle),
+                     reinterpret_cast<char*>(buf),
+                     static_cast<int>(n), 0);
+    if (got == SOCKET_ERROR) {
+        return util::Error{5000, WSAGetLastError(),
+                           "recv() failed", ""};
+    }
+    return static_cast<std::size_t>(got);
+}
+
+void sock_close(Socket& sock) noexcept {
+    if (sock.valid()) {
+        closesocket(static_cast<SOCKET>(sock.handle));
+        sock.handle = static_cast<std::uintptr_t>(-1);
+    }
+}
+
+} // namespace openads::network
+
+#endif // _WIN32

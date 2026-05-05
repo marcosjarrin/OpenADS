@@ -782,7 +782,9 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                   c.peek_char('(');
             bool is_multi_arg  = (upper == "SUBSTR"   || upper == "CONCAT"  ||
                                   upper == "REPLACE"  || upper == "DATEDIFF" ||
-                                  upper == "DATEADD") && c.peek_char('(');
+                                  upper == "DATEADD"  || upper == "NULLIF"   ||
+                                  upper == "COALESCE" || upper == "IFNULL")
+                                  && c.peek_char('(');
             if (is_single_arg || is_multi_arg) {
                 if (aggregate_mode) {
                     return util::Error{7200, 0,
@@ -804,7 +806,10 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 else if (upper == "CONCAT")   fn.kind = ScalarFnKind::Concat;
                 else if (upper == "REPLACE")  fn.kind = ScalarFnKind::Replace;
                 else if (upper == "DATEDIFF") fn.kind = ScalarFnKind::DateDiff;
-                else                          fn.kind = ScalarFnKind::DateAdd;
+                else if (upper == "DATEADD")  fn.kind = ScalarFnKind::DateAdd;
+                else if (upper == "NULLIF")   fn.kind = ScalarFnKind::NullIf;
+                else if (upper == "COALESCE") fn.kind = ScalarFnKind::Coalesce;
+                else                          fn.kind = ScalarFnKind::IfNull;
                 if (is_single_arg) {
                     fn.column = c.read_identifier();
                     if (fn.column.empty()) {
@@ -893,6 +898,24 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 if (!c.match_char(')')) {
                     return util::Error{7200, 0,
                         "expected ')' to close aggregate", sql};
+                }
+                // M10.54 — optional FILTER (WHERE <expr>) tail.
+                if (c.match_keyword("FILTER")) {
+                    if (!c.match_char('(')) {
+                        return util::Error{7200, 0,
+                            "expected '(' after FILTER", sql};
+                    }
+                    if (!c.match_keyword("WHERE")) {
+                        return util::Error{7200, 0,
+                            "expected WHERE inside FILTER", sql};
+                    }
+                    auto root = parse_or_expr(c, sql);
+                    if (!root) return root.error();
+                    agg.filter.reset(root.value().release());
+                    if (!c.match_char(')')) {
+                        return util::Error{7200, 0,
+                            "expected ')' to close FILTER", sql};
+                    }
                 }
                 stmt.aggregates.push_back(std::move(agg));
             } else {

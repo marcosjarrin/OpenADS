@@ -80,6 +80,11 @@ enum class AggregateKind { CountStar, Count, Sum, Avg, Min, Max };
 struct Aggregate {
     AggregateKind kind;
     std::string   column;   // empty for CountStar
+    // M10.54 — optional `FILTER (WHERE <expr>)` on an aggregate
+    // call. Per-row filter; rows that fail are skipped from this
+    // aggregate's accumulation. shared_ptr to keep Aggregate
+    // copyable (consumed in several sites that copy slot defs).
+    std::shared_ptr<WhereExpr> filter;
 };
 
 // M10.25 — `HAVING <agg>(<col_or_*>) <op> <number>` leaf comparison.
@@ -108,7 +113,8 @@ struct HavingExpr {
 enum class ScalarFnKind {
     Upper, Lower, Len, Trim, Ltrim, Rtrim,
     Substr, Concat, Replace,
-    DateDiff, DateAdd
+    DateDiff, DateAdd,
+    NullIf, Coalesce, IfNull       // M10.53
 };
 
 struct ScalarFnArg {

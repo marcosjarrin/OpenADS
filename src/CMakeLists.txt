@@ -54,13 +54,16 @@ if(WIN32)
         platform/lock_win32.cpp
         platform/mmap_win32.cpp
         platform/dll_win32.cpp
+        network/socket_win32.cpp
     )
+    target_link_libraries(openads_core PUBLIC ws2_32)
 else()
     target_sources(openads_core PRIVATE
         platform/file_posix.cpp
         platform/lock_posix.cpp
         platform/mmap_posix.cpp
         platform/dll_posix.cpp
+        network/socket_posix.cpp
     )
 endif()
 

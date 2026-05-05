@@ -6041,6 +6041,84 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return ok();
         }
 
+        // M10.54 — compile each slot's optional FILTER. Subset:
+        // Cmp / AND / OR / NOT (full WHERE support left to follow-up).
+        using AggPred = std::function<bool(openads::engine::Table&)>;
+        std::vector<AggPred> slot_preds(slots.size());
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            if (!parsed.value().aggregates[i].filter) continue;
+            std::function<openads::util::Result<AggPred>(
+                const openads::sql::WhereExpr&)> cf;
+            cf = [&](const openads::sql::WhereExpr& n)
+                  -> openads::util::Result<AggPred> {
+                using K = openads::sql::WhereExpr::Kind;
+                if (n.kind == K::And || n.kind == K::Or) {
+                    std::vector<AggPred> ks;
+                    for (auto& cn : n.children) {
+                        auto r = cf(*cn);
+                        if (!r) return r.error();
+                        ks.push_back(std::move(r).value());
+                    }
+                    bool is_and = (n.kind == K::And);
+                    return AggPred{[ks = std::move(ks), is_and]
+                                   (openads::engine::Table& t) {
+                        if (is_and) {
+                            for (auto& k : ks) if (!k(t)) return false;
+                            return true;
+                        }
+                        for (auto& k : ks) if (k(t)) return true;
+                        return false;
+                    }};
+                }
+                if (n.kind == K::Not) {
+                    auto inner = cf(*n.child);
+                    if (!inner) return inner.error();
+                    return AggPred{[p = std::move(inner).value()]
+                                   (openads::engine::Table& t)
+                                   { return !p(t); }};
+                }
+                if (n.kind != K::Cmp) {
+                    return openads::util::Error{
+                        openads::AE_FUNCTION_NOT_AVAILABLE, 0,
+                        "aggregate FILTER supports Cmp/AND/OR/NOT only", ""};
+                }
+                const auto& w = n.cmp;
+                std::int32_t fi = tbl->field_index(w.column);
+                if (fi < 0) return openads::util::Error{
+                    openads::AE_COLUMN_NOT_FOUND, 0, w.column.c_str(), ""};
+                std::uint16_t f = static_cast<std::uint16_t>(fi);
+                openads::sql::WhereOp op = w.op;
+                std::string lit = w.literal;
+                bool is_num = w.is_numeric;
+                double num = w.number;
+                return AggPred{[f, op, lit, is_num, num]
+                               (openads::engine::Table& t) {
+                    auto v = t.read_field(f);
+                    if (!v) return false;
+                    int cmp = 0;
+                    if (is_num) {
+                        double d = v.value().as_double;
+                        if      (d < num) cmp = -1;
+                        else if (d > num) cmp =  1;
+                    } else {
+                        cmp = v.value().as_string.compare(lit);
+                    }
+                    switch (op) {
+                        case openads::sql::WhereOp::Eq: return cmp == 0;
+                        case openads::sql::WhereOp::Ne: return cmp != 0;
+                        case openads::sql::WhereOp::Lt: return cmp <  0;
+                        case openads::sql::WhereOp::Gt: return cmp >  0;
+                        case openads::sql::WhereOp::Le: return cmp <= 0;
+                        case openads::sql::WhereOp::Ge: return cmp >= 0;
+                        default: return false;
+                    }
+                }};
+            };
+            auto p = cf(*parsed.value().aggregates[i].filter);
+            if (!p) return fail(p.error());
+            slot_preds[i] = std::move(p).value();
+        }
+
         // Walk matching rows, accumulate per slot.
         std::vector<double> sum(slots.size(), 0.0);
         std::vector<double> minv(slots.size(),
@@ -6056,6 +6134,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             if (filter && !filter(*tbl)) continue;
             ++row_count;
             for (std::size_t i = 0; i < slots.size(); ++i) {
+                if (slot_preds[i] && !slot_preds[i](*tbl)) continue;
                 if (slots[i].def.kind == openads::sql::AggregateKind::CountStar) {
                     ++count[i];
                     continue;
@@ -6109,11 +6188,15 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             switch (slots[i].def.kind) {
                 case openads::sql::AggregateKind::CountStar:
                 case openads::sql::AggregateKind::Count:
+                    // M10.54 — when this slot has a FILTER, count[i]
+                    // already excludes filter-failing rows; use it
+                    // even for CountStar.
                     std::snprintf(buf, sizeof(buf), "%llu",
                         static_cast<unsigned long long>(
                             slots[i].def.kind ==
-                            openads::sql::AggregateKind::CountStar
-                                ? row_count : count[i]));
+                                openads::sql::AggregateKind::CountStar
+                                ? (slot_preds[i] ? count[i] : row_count)
+                                : count[i]));
                     break;
                 case openads::sql::AggregateKind::Sum:
                     std::snprintf(buf, sizeof(buf), "%.6f", sum[i]);
@@ -7560,7 +7643,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case K::Concat:
                         case K::Replace:
                         case K::DateDiff:
-                        case K::DateAdd: {
+                        case K::DateAdd:
+                        case K::NullIf:
+                        case K::Coalesce:
+                        case K::IfNull: {
                             // M10.43 / M10.45 — multi-arg fns. Resolve
                             // each arg as either a column read (with
                             // trailing-space trim for Char-typed slots)
@@ -7641,6 +7727,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 std::snprintf(buf, sizeof(buf), "%ld",
                                               ja - jb);
                                 val = buf;
+                            } else if (fc.kind == K::NullIf &&
+                                       fc.args.size() == 2) {
+                                // M10.53 — NULLIF(a, b): NULL if
+                                // equal, else a. Empty string =
+                                // NULL by convention.
+                                std::string a = arg_str(fc.args[0]);
+                                std::string b = arg_str(fc.args[1]);
+                                val = (a == b) ? std::string() : a;
+                            } else if (fc.kind == K::Coalesce) {
+                                // M10.53 — first non-empty arg wins.
+                                for (auto& a : fc.args) {
+                                    auto cs = arg_str(a);
+                                    if (!cs.empty()) {
+                                        val = std::move(cs); break;
+                                    }
+                                }
+                            } else if (fc.kind == K::IfNull &&
+                                       fc.args.size() == 2) {
+                                // M10.53 — IFNULL(expr, default).
+                                std::string a = arg_str(fc.args[0]);
+                                val = a.empty() ? arg_str(fc.args[1]) : a;
                             } else if (fc.kind == K::DateAdd &&
                                        fc.args.size() == 2) {
                                 // M10.45 — add N days to YYYYMMDD.
