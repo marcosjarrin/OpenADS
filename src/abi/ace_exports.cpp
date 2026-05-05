@@ -1612,7 +1612,11 @@ struct LockPolicy {
     UNSIGNED16 retry_count = 10;
 };
 
-LockPolicy& lock_policy() {
+// extern "C++" silences clang's `-Wreturn-type-c-linkage` warning
+// (returning an anonymous-namespace type from inside the surrounding
+// extern "C" block isn't ABI-meaningful, but is harmless here since
+// `lock_policy` is only called from C++ code in this TU).
+extern "C++" LockPolicy& lock_policy() {
     static LockPolicy p;
     return p;
 }
@@ -3220,6 +3224,7 @@ struct PendingBinary {
         openads::drivers::MemoBlockType::Object;
 };
 
+extern "C++"
 std::unordered_map<PendingBinaryKey, PendingBinary, PendingBinaryHash>&
 pending_binaries() {
     static std::unordered_map<PendingBinaryKey, PendingBinary,
