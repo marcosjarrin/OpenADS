@@ -4384,24 +4384,42 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return ok();
         }
 
-        if (auto r = tbl->append_record(); !r) return fail(r.error());
-        for (std::size_t i = 0; i < ins.value().columns.size(); ++i) {
-            std::int32_t fidx =
-                tbl->field_index(ins.value().columns[i]);
-            if (fidx < 0) {
-                return fail(openads::AE_COLUMN_NOT_FOUND,
-                            ins.value().columns[i].c_str());
+        // M10.52 — multi-row VALUES path. When `rows` is non-empty,
+        // append + populate one record per tuple; otherwise fall
+        // back to the single-row `values` path.
+        auto write_one = [&](const std::vector<openads::sql::InsertLiteral>&
+                             vals) -> openads::util::Result<std::monostate>
+        {
+            if (auto r = tbl->append_record(); !r) return r.error();
+            for (std::size_t i = 0; i < ins.value().columns.size(); ++i) {
+                std::int32_t fidx =
+                    tbl->field_index(ins.value().columns[i]);
+                if (fidx < 0) {
+                    return openads::util::Error{
+                        openads::AE_COLUMN_NOT_FOUND, 0,
+                        ins.value().columns[i].c_str(), ""};
+                }
+                const auto& v = vals[i];
+                if (v.is_numeric) {
+                    auto wr = tbl->set_field(
+                        static_cast<std::uint16_t>(fidx), v.number);
+                    if (!wr) return wr.error();
+                } else {
+                    auto wr = tbl->set_field(
+                        static_cast<std::uint16_t>(fidx), v.text);
+                    if (!wr) return wr.error();
+                }
             }
-            const auto& v = ins.value().values[i];
-            if (v.is_numeric) {
-                auto wr = tbl->set_field(static_cast<std::uint16_t>(fidx),
-                                         v.number);
-                if (!wr) return fail(wr.error());
-            } else {
-                auto wr = tbl->set_field(static_cast<std::uint16_t>(fidx),
-                                         v.text);
-                if (!wr) return fail(wr.error());
+            return std::monostate{};
+        };
+        if (!ins.value().rows.empty()) {
+            for (auto& row : ins.value().rows) {
+                auto r = write_one(row);
+                if (!r) return fail(r.error());
             }
+        } else {
+            auto r = write_one(ins.value().values);
+            if (!r) return fail(r.error());
         }
         if (auto fl = tbl->flush(); !fl) return fail(fl.error());
         c->close_table(th.value());
@@ -7352,6 +7370,100 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
         }
 
+        // M10.49 / M10.50 — pre-compute window values per row when
+        // any window items appear in the projection. For each
+        // window slot, group rows by PARTITION BY key, sort within
+        // each group by ORDER BY (if any), then assign values per
+        // kind (ROW_NUMBER / RANK / DENSE_RANK).
+        std::unordered_map<std::uint32_t, std::vector<std::string>>
+            window_vals;
+        if (!parsed.value().window_items.empty()) {
+            window_vals.reserve(walk_seq.size());
+            for (std::size_t wi = 0;
+                 wi < parsed.value().window_items.size(); ++wi) {
+                const auto& wf = parsed.value().window_items[wi];
+                struct Entry {
+                    std::uint32_t recno;
+                    std::string   pkey;
+                    std::string   okey;
+                };
+                std::vector<Entry> ents;
+                ents.reserve(walk_seq.size());
+                for (auto r : walk_seq) {
+                    if (auto g = tbl->goto_record(r); !g) continue;
+                    Entry e;
+                    e.recno = r;
+                    for (auto& pc : wf.partition_by) {
+                        std::int32_t fi = tbl->field_index(pc);
+                        if (fi >= 0) {
+                            auto v = tbl->read_field(
+                                static_cast<std::uint16_t>(fi));
+                            if (v) e.pkey += v.value().as_string;
+                        }
+                        e.pkey.push_back('\x1f');
+                    }
+                    if (wf.order_by) {
+                        std::int32_t fi =
+                            tbl->field_index(wf.order_by->column);
+                        if (fi >= 0) {
+                            auto v = tbl->read_field(
+                                static_cast<std::uint16_t>(fi));
+                            if (v) e.okey = v.value().as_string;
+                        }
+                    }
+                    ents.push_back(std::move(e));
+                }
+                std::stable_sort(ents.begin(), ents.end(),
+                    [&](const Entry& a, const Entry& b) {
+                        if (a.pkey != b.pkey) return a.pkey < b.pkey;
+                        if (wf.order_by) {
+                            return wf.order_by->descending
+                                ? a.okey > b.okey
+                                : a.okey < b.okey;
+                        }
+                        return false;
+                    });
+                std::string prev_pk;
+                std::string prev_ok;
+                bool prev_ok_set = false;
+                std::uint32_t pos       = 0;
+                std::uint32_t rank_now  = 0;
+                std::uint32_t dense_now = 0;
+                for (auto& e : ents) {
+                    if (e.pkey != prev_pk) {
+                        pos = 0; rank_now = 0; dense_now = 0;
+                        prev_ok_set = false;
+                        prev_pk = e.pkey;
+                    }
+                    ++pos;
+                    bool tied = wf.order_by && prev_ok_set &&
+                                e.okey == prev_ok;
+                    if (!tied) {
+                        rank_now = pos;
+                        ++dense_now;
+                    }
+                    prev_ok = e.okey;
+                    prev_ok_set = true;
+                    std::string val;
+                    switch (wf.kind) {
+                        case openads::sql::WindowFnKind::RowNumber:
+                            val = std::to_string(pos); break;
+                        case openads::sql::WindowFnKind::Rank:
+                            val = std::to_string(rank_now); break;
+                        case openads::sql::WindowFnKind::DenseRank:
+                            val = std::to_string(dense_now); break;
+                    }
+                    auto& slot = window_vals[e.recno];
+                    if (slot.size() <
+                        parsed.value().window_items.size()) {
+                        slot.resize(
+                            parsed.value().window_items.size());
+                    }
+                    slot[wi] = std::move(val);
+                }
+            }
+        }
+
         // Build temp DBF.
         namespace fs = std::filesystem;
         char nb[64];
@@ -7568,10 +7680,18 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     }
                 } else if (o.win_idx >= 0) {
                     from_synth = true;
-                    char buf[16];
-                    std::snprintf(buf, sizeof(buf), "%u",
-                                  static_cast<unsigned>(emitted + 1));
-                    val = buf;
+                    auto wit = window_vals.find(r);
+                    if (wit != window_vals.end() &&
+                        static_cast<std::size_t>(o.win_idx) <
+                            wit->second.size() &&
+                        !wit->second[o.win_idx].empty()) {
+                        val = wit->second[o.win_idx];
+                    } else {
+                        char buf[16];
+                        std::snprintf(buf, sizeof(buf), "%u",
+                                      static_cast<unsigned>(emitted + 1));
+                        val = buf;
+                    }
                 } else if (o.arith_idx >= 0) {
                     from_synth = true;
                     const auto& ae = parsed.value().arith_items[o.arith_idx];

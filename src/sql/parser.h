@@ -126,15 +126,18 @@ struct ScalarFnCall {
     std::string              alias;      // optional column alias
 };
 
-// M10.47 — window function in a projection slot. First cut: only
-// `ROW_NUMBER() OVER ()` — assigns the 1-based position of the row
-// in the materialised result. PARTITION BY / ORDER BY inside the
-// OVER are accepted by the parser but ignored at execution.
-enum class WindowFnKind { RowNumber };
+// M10.47 / M10.49 / M10.50 — window function in a projection slot.
+// Kinds: ROW_NUMBER (1-based), RANK (gaps), DENSE_RANK (no gaps).
+// PARTITION BY restarts the counter per partition; ORDER BY drives
+// the within-partition ordering RANK / DENSE_RANK use to detect
+// ties.
+enum class WindowFnKind { RowNumber, Rank, DenseRank };
 
 struct WindowFnCall {
-    WindowFnKind  kind = WindowFnKind::RowNumber;
-    std::string   alias;
+    WindowFnKind             kind = WindowFnKind::RowNumber;
+    std::vector<std::string> partition_by;
+    std::optional<OrderBy>   order_by;
+    std::string              alias;
 };
 
 // M10.40 — binary arithmetic on numeric columns / literals in a
@@ -244,6 +247,11 @@ struct InsertStmt {
     // is empty and the executor runs the inner SELECT for each
     // result row.
     std::string                  select_sql;
+    // M10.52 — `INSERT INTO t (cols) VALUES (...), (...), ...`.
+    // When non-empty, the executor appends one row per entry; in
+    // that case `values` is left untouched (per-row data lives in
+    // `rows`).
+    std::vector<std::vector<InsertLiteral>> rows;
 };
 
 util::Result<InsertStmt> parse_insert(const std::string& sql);

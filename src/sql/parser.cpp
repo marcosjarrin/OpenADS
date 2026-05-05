@@ -102,6 +102,24 @@ public:
                 break;
             }
         }
+        // M10.51 — qualified column ref: <alias>.<col>. Drop the
+        // alias and return only the column name; the engine resolves
+        // bare names against the (single, possibly joined) cursor.
+        if (pos_ < s_.size() && s_[pos_] == '.') {
+            ++pos_;
+            std::string col;
+            while (pos_ < s_.size()) {
+                char c = s_[pos_];
+                if (std::isalnum(static_cast<unsigned char>(c)) ||
+                    c == '_') {
+                    col.push_back(c);
+                    ++pos_;
+                } else {
+                    break;
+                }
+            }
+            if (!col.empty()) out = std::move(col);
+        }
         return out;
     }
 
@@ -680,8 +698,13 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                                 upper == "AVG"   || upper == "MIN" ||
                                 upper == "MAX") && c.peek_char('(');
 
-            // M10.47 — `ROW_NUMBER() OVER (...)` window function.
-            if (upper == "ROW_NUMBER" && c.peek_char('(')) {
+            // M10.47 / M10.49 / M10.50 — window functions:
+            // ROW_NUMBER / RANK / DENSE_RANK. OVER clause may carry
+            // PARTITION BY <col>[, ...] and ORDER BY <col> [ASC|DESC].
+            bool is_window =
+                (upper == "ROW_NUMBER" || upper == "RANK" ||
+                 upper == "DENSE_RANK") && c.peek_char('(');
+            if (is_window) {
                 if (aggregate_mode) {
                     return util::Error{7200, 0,
                         "mixing window fn + aggregates in SELECT not supported",
@@ -690,26 +713,52 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
                 c.match_char('(');
                 if (!c.match_char(')')) {
                     return util::Error{7200, 0,
-                        "expected ')' after ROW_NUMBER", sql};
+                        "expected ')' after window function name", sql};
                 }
+                WindowFnCall wf;
+                if      (upper == "ROW_NUMBER") wf.kind = WindowFnKind::RowNumber;
+                else if (upper == "RANK")       wf.kind = WindowFnKind::Rank;
+                else                            wf.kind = WindowFnKind::DenseRank;
                 if (c.match_keyword("OVER")) {
                     if (!c.match_char('(')) {
                         return util::Error{7200, 0,
                             "expected '(' after OVER", sql};
                     }
-                    int depth = 1;
-                    while (depth > 0) {
-                        if (c.eof()) {
+                    if (c.match_keyword("PARTITION")) {
+                        if (!c.match_keyword("BY")) {
                             return util::Error{7200, 0,
-                                "unterminated OVER clause", sql};
+                                "expected BY after PARTITION", sql};
                         }
-                        char ch = c.consume_char();
-                        if (ch == '(') ++depth;
-                        else if (ch == ')') --depth;
+                        for (;;) {
+                            std::string col = c.read_identifier();
+                            if (col.empty()) {
+                                return util::Error{7200, 0,
+                                    "expected column in PARTITION BY", sql};
+                            }
+                            wf.partition_by.push_back(std::move(col));
+                            if (!c.match_char(',')) break;
+                        }
+                    }
+                    if (c.match_keyword("ORDER")) {
+                        if (!c.match_keyword("BY")) {
+                            return util::Error{7200, 0,
+                                "expected BY after ORDER (window OVER)", sql};
+                        }
+                        OrderBy ob;
+                        ob.column = c.read_identifier();
+                        if (ob.column.empty()) {
+                            return util::Error{7200, 0,
+                                "expected column in ORDER BY (window)", sql};
+                        }
+                        if      (c.match_keyword("DESC")) ob.descending = true;
+                        else if (c.match_keyword("ASC"))  ob.descending = false;
+                        wf.order_by = std::move(ob);
+                    }
+                    if (!c.match_char(')')) {
+                        return util::Error{7200, 0,
+                            "expected ')' to close OVER", sql};
                     }
                 }
-                WindowFnCall wf;
-                wf.kind = WindowFnKind::RowNumber;
                 if (c.match_keyword("AS")) {
                     wf.alias = c.read_identifier();
                 }
@@ -1599,35 +1648,47 @@ util::Result<InsertStmt> parse_insert(const std::string& sql) {
     if (!c.match_keyword("VALUES")) {
         return util::Error{7200, 0, "expected VALUES or SELECT", sql};
     }
-    if (!c.match_char('(')) {
-        return util::Error{7200, 0,
-            "expected '(' to open VALUES list", sql};
-    }
+    // M10.52 — `VALUES (...), (...), ...` — multi-row form. Each
+    // tuple lands in `stmt.rows`; the legacy `stmt.values` carries
+    // the first tuple for back-compat with the single-row path.
     for (;;) {
-        InsertLiteral lit;
-        if (c.peek_char('\'')) {
-            auto s = c.read_string_literal();
-            if (!s) return s.error();
-            lit.is_numeric = false;
-            lit.text       = std::move(s).value();
-        } else {
-            auto n = c.read_numeric_literal();
-            if (!n) return n.error();
-            lit.is_numeric = true;
-            lit.number     = n.value();
+        if (!c.match_char('(')) {
+            return util::Error{7200, 0,
+                "expected '(' to open VALUES list", sql};
         }
-        stmt.values.push_back(std::move(lit));
-        if (c.match_char(',')) continue;
-        break;
+        std::vector<InsertLiteral> row;
+        for (;;) {
+            InsertLiteral lit;
+            if (c.peek_char('\'')) {
+                auto s = c.read_string_literal();
+                if (!s) return s.error();
+                lit.is_numeric = false;
+                lit.text       = std::move(s).value();
+            } else {
+                auto n = c.read_numeric_literal();
+                if (!n) return n.error();
+                lit.is_numeric = true;
+                lit.number     = n.value();
+            }
+            row.push_back(std::move(lit));
+            if (c.match_char(',')) continue;
+            break;
+        }
+        if (!c.match_char(')')) {
+            return util::Error{7200, 0,
+                "expected ')' to close VALUES list", sql};
+        }
+        if (stmt.columns.size() != row.size()) {
+            return util::Error{7200, 0,
+                "INSERT column count must match VALUES count", sql};
+        }
+        stmt.rows.push_back(std::move(row));
+        if (!c.match_char(',')) break;
     }
-    if (!c.match_char(')')) {
-        return util::Error{7200, 0,
-            "expected ')' to close VALUES list", sql};
-    }
-
-    if (stmt.columns.size() != stmt.values.size()) {
-        return util::Error{7200, 0,
-            "INSERT column count must match VALUES count", sql};
+    // Single-row callers expect `stmt.values`; preserve back-compat.
+    if (stmt.rows.size() == 1) {
+        stmt.values = stmt.rows.front();
+        stmt.rows.clear();
     }
 
     c.match_char(';');
