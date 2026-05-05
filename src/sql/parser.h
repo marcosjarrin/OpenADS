@@ -95,6 +95,27 @@ struct HavingExpr {
     std::unique_ptr<HavingExpr>              child;      // Not
 };
 
+// M10.38 — `CASE WHEN <expr> THEN <lit> [WHEN <expr> THEN <lit>...]
+// [ELSE <lit>] END` projection item. Evaluated per row; result is
+// always a string (C(30)).
+struct CaseLiteral {
+    bool        is_numeric = false;
+    std::string text;
+    double      number     = 0.0;
+};
+
+struct CaseBranch {
+    std::unique_ptr<WhereExpr>  cond;
+    CaseLiteral                 then_value;
+};
+
+struct CaseExpr {
+    std::vector<CaseBranch>     branches;
+    bool                        has_else = false;
+    CaseLiteral                 else_value;
+    std::string                 alias;          // optional column alias
+};
+
 // M10.13 — `INNER JOIN <table> ON <left_col> = <right_col>`.
 struct JoinClause {
     std::string  table;
@@ -112,7 +133,13 @@ struct SelectStmt {
     bool                       distinct = false;
     // Empty `projection` means `SELECT *` (every column visible);
     // otherwise the cursor exposes only the listed columns in order.
+    // M10.38 — entries beginning with `$CASE_<n>` are placeholders;
+    // the CaseExpr lives in `case_items` keyed by `<n>`.
     std::vector<std::string>   projection;
+    // M10.38 — CASE expressions referenced from the projection list.
+    // The index in this vector matches the `$CASE_<n>` placeholder
+    // in `projection`.
+    std::vector<CaseExpr>      case_items;
     // Aggregate calls in the projection (M10.10). Mutually exclusive
     // with `projection` — apps either select columns or aggregate.
     std::vector<Aggregate>     aggregates;

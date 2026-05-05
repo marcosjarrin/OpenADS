@@ -6705,6 +6705,262 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         tbl->set_recno_sequence(std::move(seq));
     }
 
+    // M10.38 — projection contains a CASE expression. Materialise the
+    // post-WHERE / post-ORDER-BY / post-DISTINCT / post-LIMIT row set
+    // into a temp DBF whose schema mirrors the projection list (CASE
+    // items become C(30); regular columns preserve source type +
+    // length), evaluating each row's CASE branches inline.
+    bool has_case = false;
+    for (auto& p : parsed.value().projection) {
+        if (p.size() >= 6 && p.compare(0, 6, "$CASE_") == 0) {
+            has_case = true; break;
+        }
+    }
+    if (has_case) {
+        struct OutCol {
+            std::string  name;
+            char         raw_type = 'C';
+            std::uint8_t length   = 0;
+            std::int32_t src_field = -1;
+            std::int32_t case_idx  = -1;
+        };
+        std::vector<OutCol> outs;
+        outs.reserve(parsed.value().projection.size());
+        for (std::size_t i = 0; i < parsed.value().projection.size(); ++i) {
+            const auto& p = parsed.value().projection[i];
+            OutCol o;
+            if (p.size() >= 6 && p.compare(0, 6, "$CASE_") == 0) {
+                std::size_t idx = std::stoul(p.substr(6));
+                o.case_idx = static_cast<std::int32_t>(idx);
+                const auto& ce = parsed.value().case_items[idx];
+                if (!ce.alias.empty()) o.name = ce.alias;
+                else {
+                    char nm[16];
+                    std::snprintf(nm, sizeof(nm), "CASE%zu", idx + 1);
+                    o.name = nm;
+                }
+                o.raw_type = 'C';
+                o.length   = 30;
+            } else {
+                std::int32_t fi = tbl->field_index(p);
+                if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                        p.c_str());
+                const auto& fd = tbl->field_descriptor(
+                    static_cast<std::uint16_t>(fi));
+                o.name      = fd.name;
+                o.raw_type  = static_cast<char>(fd.raw_type);
+                o.length    = fd.length;
+                o.src_field = fi;
+            }
+            outs.push_back(std::move(o));
+        }
+
+        // Compile each CASE branch's condition against tbl.
+        using CondPred = std::function<bool(openads::engine::Table&)>;
+        std::function<openads::util::Result<CondPred>(
+            const openads::sql::WhereExpr&)> compile_cond;
+        compile_cond = [&](const openads::sql::WhereExpr& node)
+            -> openads::util::Result<CondPred>
+        {
+            using K = openads::sql::WhereExpr::Kind;
+            if (node.kind == K::And || node.kind == K::Or) {
+                std::vector<CondPred> ks;
+                for (auto& cn : node.children) {
+                    auto r = compile_cond(*cn);
+                    if (!r) return r.error();
+                    ks.push_back(std::move(r).value());
+                }
+                bool is_and = (node.kind == K::And);
+                return CondPred{[ks = std::move(ks), is_and]
+                                (openads::engine::Table& t) {
+                    if (is_and) {
+                        for (auto& k : ks) if (!k(t)) return false;
+                        return true;
+                    }
+                    for (auto& k : ks) if (k(t)) return true;
+                    return false;
+                }};
+            }
+            if (node.kind == K::Not) {
+                auto inner = compile_cond(*node.child);
+                if (!inner) return inner.error();
+                return CondPred{[p = std::move(inner).value()]
+                                (openads::engine::Table& t)
+                                { return !p(t); }};
+            }
+            if (node.kind != K::Cmp) {
+                return openads::util::Error{
+                    openads::AE_FUNCTION_NOT_AVAILABLE, 0,
+                    "CASE WHEN supports Cmp / AND / OR / NOT only", ""};
+            }
+            const auto& w = node.cmp;
+            std::int32_t fi = tbl->field_index(w.column);
+            if (fi < 0) return openads::util::Error{
+                openads::AE_COLUMN_NOT_FOUND, 0,
+                w.column.c_str(), ""};
+            std::uint16_t f = static_cast<std::uint16_t>(fi);
+            openads::sql::WhereOp op = w.op;
+            std::string lit = w.literal;
+            std::string lit2 = w.literal2;
+            bool is_num = w.is_numeric;
+            double num  = w.number;
+            double num2 = w.number2;
+            return CondPred{[f, op, lit, lit2, is_num, num, num2]
+                            (openads::engine::Table& t) {
+                auto v = t.read_field(f);
+                if (!v) return false;
+                if (op == openads::sql::WhereOp::Between) {
+                    if (is_num) {
+                        double d = v.value().as_double;
+                        return d >= num && d <= num2;
+                    }
+                    auto& sv = v.value().as_string;
+                    return sv.compare(lit)  >= 0 &&
+                           sv.compare(lit2) <= 0;
+                }
+                if (op == openads::sql::WhereOp::Like) {
+                    auto sv = v.value().as_string;
+                    while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                    return sql_like_match(sv, lit);
+                }
+                int cmp = 0;
+                if (is_num) {
+                    double d = v.value().as_double;
+                    if      (d < num) cmp = -1;
+                    else if (d > num) cmp =  1;
+                } else {
+                    cmp = v.value().as_string.compare(lit);
+                }
+                switch (op) {
+                    case openads::sql::WhereOp::Eq: return cmp == 0;
+                    case openads::sql::WhereOp::Ne: return cmp != 0;
+                    case openads::sql::WhereOp::Lt: return cmp <  0;
+                    case openads::sql::WhereOp::Gt: return cmp >  0;
+                    case openads::sql::WhereOp::Le: return cmp <= 0;
+                    case openads::sql::WhereOp::Ge: return cmp >= 0;
+                    default: return false;
+                }
+            }};
+        };
+        struct CompiledCase {
+            std::vector<CondPred>           branch_preds;
+            std::vector<std::string>        branch_values;
+            bool                            has_else = false;
+            std::string                     else_value;
+        };
+        std::vector<CompiledCase> ccases;
+        ccases.reserve(parsed.value().case_items.size());
+        for (auto& ce : parsed.value().case_items) {
+            CompiledCase cc;
+            for (auto& br : ce.branches) {
+                auto p = compile_cond(*br.cond);
+                if (!p) return fail(p.error());
+                cc.branch_preds.push_back(std::move(p).value());
+                cc.branch_values.push_back(br.then_value.text);
+            }
+            cc.has_else  = ce.has_else;
+            cc.else_value = ce.has_else ? ce.else_value.text : std::string();
+            ccases.push_back(std::move(cc));
+        }
+
+        // Build the row list — honor any installed recno_sequence,
+        // else walk the filtered cursor.
+        std::vector<std::uint32_t> walk_seq;
+        if (tbl->has_recno_sequence()) {
+            walk_seq = tbl->recno_sequence();
+        } else {
+            std::uint32_t rcount = tbl->record_count();
+            for (std::uint32_t r = 1; r <= rcount; ++r) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                if (tbl->is_deleted()) continue;
+                if (!tbl->passes_filter()) continue;
+                walk_seq.push_back(r);
+            }
+        }
+
+        // Build temp DBF.
+        namespace fs = std::filesystem;
+        char nb[64];
+        std::snprintf(nb, sizeof(nb), "_case_%llx.dbf",
+                      static_cast<unsigned long long>(
+                          openads::platform::monotonic_nanos()));
+        fs::path dbf = fs::path(c->data_dir()) / nb;
+        std::vector<std::uint8_t> file;
+        std::array<std::uint8_t, 32> hdr{};
+        hdr[0] = 0x03;
+        std::uint16_t hl = static_cast<std::uint16_t>(
+            32 + 32 * outs.size() + 1);
+        std::uint32_t rl = 1;
+        for (auto& o : outs) rl += o.length;
+        hdr[8]  = static_cast<std::uint8_t>( hl       & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((hl >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>( rl       & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rl >> 8) & 0xFFu);
+        file.insert(file.end(), hdr.begin(), hdr.end());
+        for (auto& o : outs) {
+            std::array<std::uint8_t, 32> fd{};
+            std::strncpy(reinterpret_cast<char*>(fd.data()),
+                         o.name.c_str(), 11);
+            fd[11] = static_cast<std::uint8_t>(o.raw_type);
+            fd[16] = o.length;
+            file.insert(file.end(), fd.begin(), fd.end());
+        }
+        file.push_back(0x0D);
+
+        std::uint32_t emitted = 0;
+        for (std::uint32_t r : walk_seq) {
+            if (auto g = tbl->goto_record(r); !g) continue;
+            file.push_back(' ');
+            for (auto& o : outs) {
+                if (o.case_idx >= 0) {
+                    const auto& cc = ccases[o.case_idx];
+                    std::string val = cc.has_else ? cc.else_value : "";
+                    for (std::size_t bi = 0; bi < cc.branch_preds.size(); ++bi) {
+                        if (cc.branch_preds[bi](*tbl)) {
+                            val = cc.branch_values[bi];
+                            break;
+                        }
+                    }
+                    if (val.size() > o.length) val.resize(o.length);
+                    for (std::uint8_t k = 0; k < o.length; ++k) {
+                        file.push_back(k < val.size()
+                            ? static_cast<std::uint8_t>(val[k]) : ' ');
+                    }
+                } else {
+                    auto v = tbl->read_field(
+                        static_cast<std::uint16_t>(o.src_field));
+                    std::string raw = v ? v.value().as_string : std::string();
+                    for (std::uint8_t k = 0; k < o.length; ++k) {
+                        file.push_back(k < raw.size()
+                            ? static_cast<std::uint8_t>(raw[k]) : ' ');
+                    }
+                }
+            }
+            ++emitted;
+        }
+        file.push_back(0x1A);
+        file[4] = static_cast<std::uint8_t>( emitted        & 0xFFu);
+        file[5] = static_cast<std::uint8_t>((emitted >>  8) & 0xFFu);
+        file[6] = static_cast<std::uint8_t>((emitted >> 16) & 0xFFu);
+        file[7] = static_cast<std::uint8_t>((emitted >> 24) & 0xFFu);
+        {
+            std::ofstream out(dbf, std::ios::binary);
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                "case temp DBF open for write failed");
+            out.write(reinterpret_cast<const char*>(file.data()),
+                      static_cast<std::streamsize>(file.size()));
+        }
+        std::string rel = dbf.filename().string();
+        auto cth = c->open_table(rel, openads::engine::TableType::Cdx,
+                                 openads::engine::OpenMode::Read);
+        if (!cth) return fail(cth.error());
+        openads::engine::Table* ctbl = c->lookup_table(cth.value());
+        if (!ctbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        ADSHANDLE gh_case = s.registry.register_object(HandleKind::Table, ctbl);
+        *phCursor = gh_case;
+        return ok();
+    }
+
     ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
 
     // M10.8: stash the projection (column → underlying field index)

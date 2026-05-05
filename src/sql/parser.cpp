@@ -494,6 +494,75 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         // supported in this milestone.
         bool aggregate_mode = false;
         for (;;) {
+            // M10.38 — projection item may be `CASE WHEN ... END`.
+            if (c.match_keyword("CASE")) {
+                if (aggregate_mode) {
+                    return util::Error{7200, 0,
+                        "mixing CASE + aggregates in SELECT not supported", sql};
+                }
+                CaseExpr ce;
+                while (c.match_keyword("WHEN")) {
+                    auto cond = parse_or_expr(c, sql);
+                    if (!cond) return cond.error();
+                    if (!c.match_keyword("THEN")) {
+                        return util::Error{7200, 0,
+                            "expected THEN in CASE", sql};
+                    }
+                    CaseLiteral lit;
+                    if (c.peek_char('\'')) {
+                        auto s = c.read_string_literal();
+                        if (!s) return s.error();
+                        lit.text       = std::move(s).value();
+                        lit.is_numeric = false;
+                    } else {
+                        auto n = c.read_numeric_literal();
+                        if (!n) return n.error();
+                        lit.is_numeric = true;
+                        lit.number     = n.value();
+                        char tmp[64];
+                        std::snprintf(tmp, sizeof(tmp), "%g", n.value());
+                        lit.text       = tmp;
+                    }
+                    CaseBranch br;
+                    br.cond       = std::move(cond).value();
+                    br.then_value = std::move(lit);
+                    ce.branches.push_back(std::move(br));
+                }
+                if (c.match_keyword("ELSE")) {
+                    CaseLiteral lit;
+                    if (c.peek_char('\'')) {
+                        auto s = c.read_string_literal();
+                        if (!s) return s.error();
+                        lit.text       = std::move(s).value();
+                        lit.is_numeric = false;
+                    } else {
+                        auto n = c.read_numeric_literal();
+                        if (!n) return n.error();
+                        lit.is_numeric = true;
+                        lit.number     = n.value();
+                        char tmp[64];
+                        std::snprintf(tmp, sizeof(tmp), "%g", n.value());
+                        lit.text       = tmp;
+                    }
+                    ce.has_else   = true;
+                    ce.else_value = std::move(lit);
+                }
+                if (!c.match_keyword("END")) {
+                    return util::Error{7200, 0,
+                        "expected END to close CASE", sql};
+                }
+                if (c.match_keyword("AS")) {
+                    ce.alias = c.read_identifier();
+                }
+                std::size_t idx = stmt.case_items.size();
+                stmt.case_items.push_back(std::move(ce));
+                char placeholder[32];
+                std::snprintf(placeholder, sizeof(placeholder),
+                              "$CASE_%zu", idx);
+                stmt.projection.push_back(placeholder);
+                if (c.match_char(',')) continue;
+                break;
+            }
             std::string head = c.read_identifier();
             if (head.empty()) {
                 return util::Error{7200, 0,
