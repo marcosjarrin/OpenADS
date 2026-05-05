@@ -114,6 +114,49 @@ TEST_CASE("M10.14 INNER JOIN materialises matched rows") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.34 JOIN + GROUP BY — COUNT/SUM per group") {
+    auto dir = fs::temp_directory_path() / "openads_m10_34";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord.dbf",
+        {{"ID",  {'C', 4}}, {"CUST", {'C', 4}}},
+        {{"O01", "C001"},
+         {"O02", "C001"},
+         {"O03", "C002"},
+         {"O04", "C002"},
+         {"O05", "C002"},
+         {"O06", "ZZZZ"}});                       // unmatched
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", {'C', 4}}, {"NAME", {'C', 8}}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Group joined rows by R_NAME (right-side name).
+    UNSIGNED8 sql[260] =
+        "SELECT COUNT(*) FROM ord.dbf JOIN cus.dbf ON CUST = CUST "
+        "GROUP BY R_NAME";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);                              // Alice (2) + Bob (3)
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.23 JOIN + aggregate — COUNT(*) over merged cursor") {
     auto dir = fs::temp_directory_path() / "openads_m10_23_jagg";
     std::error_code ec;
