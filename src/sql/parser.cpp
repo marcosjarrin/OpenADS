@@ -308,12 +308,27 @@ parse_cmp(Cursor& c, const std::string& sql) {
             std::make_unique<SelectStmt>(std::move(sub).value());
     } else {
         auto n = c.read_numeric_literal();
-        if (!n) return n.error();
-        node->cmp.is_numeric = true;
-        node->cmp.number     = n.value();
-        char tmp[64];
-        std::snprintf(tmp, sizeof(tmp), "%.17g", n.value());
-        node->cmp.literal    = tmp;
+        if (n) {
+            node->cmp.is_numeric = true;
+            node->cmp.number     = n.value();
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.17g", n.value());
+            node->cmp.literal    = tmp;
+        } else {
+            // M10.24: bare identifier on RHS — outer-column reference
+            // for a correlated subquery (`b.x = a.y`). The executor
+            // reads it from the outer cursor at evaluation time.
+            std::string id = c.read_identifier();
+            if (id.empty()) {
+                return util::Error{7200, 0,
+                    "expected string literal, number, or column "
+                    "reference on RHS of comparison", sql};
+            }
+            node->cmp.is_outer_ref = true;
+            node->cmp.outer_column = id;
+            node->cmp.is_numeric   = false;
+            node->cmp.literal      = id;       // diagnostic fallback
+        }
     }
     return node;
 }

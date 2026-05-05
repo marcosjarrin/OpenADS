@@ -4713,37 +4713,96 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             (openads::engine::Table& t) { return !p(t); }};
             }
             if (node.kind == Kind::Exists) {
-                // M10.17: uncorrelated EXISTS — open the subquery's
-                // table, walk all live rows, return constant true if
-                // at least one row exists. Subquery's optional WHERE
-                // is intentionally NOT compiled here yet (apps can
-                // use IN for filtered membership in the meantime).
+                // M10.17 / M10.24 — EXISTS / NOT EXISTS. Honors
+                // subquery's WHERE (M10.24); when that WHERE has
+                // outer-column references (e.g.
+                // `EXISTS (SELECT * FROM b WHERE b.x = a.y)`), the
+                // predicate re-evaluates per outer row, binding outer
+                // values from the live `tbl` cursor.
                 if (!node.exists_subquery) {
                     return openads::util::Error{
                         openads::AE_PARSE_ERROR, 0,
                         "EXISTS subquery missing", ""};
                 }
-                const auto& sq = *node.exists_subquery;
-                auto sh = c->open_table(sq.table,
-                                        openads::engine::TableType::Cdx,
-                                        openads::engine::OpenMode::Read);
-                if (!sh) return sh.error();
-                openads::engine::Table* stbl = c->lookup_table(sh.value());
-                if (stbl == nullptr) {
-                    return openads::util::Error{
-                        openads::AE_INTERNAL_ERROR, 0,
-                        "EXISTS post-open", ""};
-                }
-                bool any = false;
-                std::uint32_t srcount = stbl->record_count();
-                for (std::uint32_t r = 1; r <= srcount; ++r) {
-                    if (auto g = stbl->goto_record(r); !g) continue;
-                    if (stbl->is_deleted()) continue;
-                    any = true;
-                    break;
-                }
-                c->close_table(sh.value());
-                return Pred{[any](openads::engine::Table&) { return any; }};
+                // Move ownership of the subquery into a shared_ptr so
+                // the captured WhereExpr* outlives the parsed
+                // SelectStmt (which is local to AdsExecuteSQLDirect).
+                auto sub = std::shared_ptr<openads::sql::SelectStmt>(
+                    const_cast<openads::sql::WhereExpr&>(node)
+                        .exists_subquery.release());
+                openads::engine::Table* outer_tbl = tbl;
+                std::string sub_table = sub->table;
+                return Pred{[c, sub, outer_tbl, sub_table]
+                            (openads::engine::Table&) -> bool {
+                    auto sh = c->open_table(sub_table,
+                                            openads::engine::TableType::Cdx,
+                                            openads::engine::OpenMode::Read);
+                    if (!sh) return false;
+                    openads::engine::Table* stbl = c->lookup_table(sh.value());
+                    if (!stbl) { c->close_table(sh.value()); return false; }
+                    auto trim = [](std::string s) {
+                        while (!s.empty() && s.back() == ' ') s.pop_back();
+                        return s;
+                    };
+                    std::function<bool(const openads::sql::WhereExpr&)> evalw;
+                    evalw = [&](const openads::sql::WhereExpr& n) -> bool {
+                        using K = openads::sql::WhereExpr::Kind;
+                        if (n.kind == K::And) {
+                            for (auto& cn : n.children)
+                                if (!evalw(*cn)) return false;
+                            return true;
+                        }
+                        if (n.kind == K::Or) {
+                            for (auto& cn : n.children)
+                                if (evalw(*cn)) return true;
+                            return false;
+                        }
+                        if (n.kind == K::Not) return !evalw(*n.child);
+                        if (n.kind != K::Cmp) return false;
+                        const auto& w = n.cmp;
+                        std::int32_t fi = stbl->field_index(w.column);
+                        if (fi < 0) return false;
+                        auto v = stbl->read_field(
+                            static_cast<std::uint16_t>(fi));
+                        if (!v) return false;
+                        int cmp = 0;
+                        if (w.is_outer_ref) {
+                            std::int32_t ofi =
+                                outer_tbl->field_index(w.outer_column);
+                            if (ofi < 0) return false;
+                            auto ov = outer_tbl->read_field(
+                                static_cast<std::uint16_t>(ofi));
+                            if (!ov) return false;
+                            cmp = trim(v.value().as_string)
+                                      .compare(trim(ov.value().as_string));
+                        } else if (w.is_numeric) {
+                            double d = v.value().as_double;
+                            if      (d < w.number) cmp = -1;
+                            else if (d > w.number) cmp =  1;
+                        } else {
+                            cmp = trim(v.value().as_string).compare(w.literal);
+                        }
+                        switch (w.op) {
+                            case openads::sql::WhereOp::Eq: return cmp == 0;
+                            case openads::sql::WhereOp::Ne: return cmp != 0;
+                            case openads::sql::WhereOp::Lt: return cmp <  0;
+                            case openads::sql::WhereOp::Gt: return cmp >  0;
+                            case openads::sql::WhereOp::Le: return cmp <= 0;
+                            case openads::sql::WhereOp::Ge: return cmp >= 0;
+                            default: return false;
+                        }
+                    };
+                    bool any = false;
+                    std::uint32_t srcount = stbl->record_count();
+                    for (std::uint32_t r = 1; r <= srcount; ++r) {
+                        if (auto g = stbl->goto_record(r); !g) continue;
+                        if (stbl->is_deleted()) continue;
+                        if (!sub->where) { any = true; break; }
+                        if (evalw(*sub->where)) { any = true; break; }
+                    }
+                    c->close_table(sh.value());
+                    return any;
+                }};
             }
             if (node.kind == Kind::In) {
                 // M10.15: materialise the IN set at compile time. For

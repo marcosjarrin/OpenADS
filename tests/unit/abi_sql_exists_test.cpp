@@ -150,3 +150,48 @@ TEST_CASE("M10.17 NOT EXISTS inverts") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M10.24 correlated EXISTS — outer-column ref in subquery WHERE") {
+    auto dir = fs::temp_directory_path() / "openads_m10_24_corr";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // 3 customers; only 2 have orders.
+    write_dbf(dir / "cus.dbf",
+        {{"CUST", 4}, {"NAME", 8}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"},
+         {"C003", "Eve"}});
+    write_dbf(dir / "ord.dbf",
+        {{"OID", 4}, {"CUST", 4}},
+        {{"O01", "C001"},
+         {"O02", "C002"}});                      // none for C003
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Customers with at least one order — correlated outer-ref `CUST`.
+    UNSIGNED8 sql[300] =
+        "SELECT * FROM cus.dbf WHERE EXISTS "
+        "(SELECT * FROM ord.dbf WHERE CUST = CUST)";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    CHECK(row_count_of(hCur) == 2);              // C001, C002 — not C003
+
+    UNSIGNED8 sql2[300] =
+        "SELECT * FROM cus.dbf WHERE NOT EXISTS "
+        "(SELECT * FROM ord.dbf WHERE CUST = CUST)";
+    ADSHANDLE hCur2 = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql2, &hCur2) == 0);
+    CHECK(row_count_of(hCur2) == 1);             // C003 only
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

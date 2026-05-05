@@ -34,6 +34,12 @@ struct WhereCmp {
     // When present, the literal / number fields are populated at
     // compile time from the subquery's first projected value.
     std::unique_ptr<SelectStmt> subquery;
+    // M10.24: correlated subquery RHS — `<col> op <outer_column>`.
+    // When set, the executor reads `outer_column` from the outer
+    // cursor's current row at each evaluation instead of using
+    // `literal`/`number`.
+    bool        is_outer_ref = false;
+    std::string outer_column;
 };
 
 // M10.15 — `<col> IN (<lit>, <lit>, …)` or `<col> IN (<sub-SELECT>)`.
