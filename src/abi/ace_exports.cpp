@@ -3913,6 +3913,279 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
+    // M10.26 — top-level `UNION [ALL]` between SELECTs. Each member
+    // must currently be a `SELECT * FROM <t> [WHERE ...]` form (no
+    // joins, aggregates, projection lists, GROUP BY, or ORDER BY
+    // inside members — those compose with UNION in a follow-up).
+    // First member's schema is reused for the merged cursor.
+    {
+        struct UnionPart { std::string sql_text; bool all = false; };
+        std::vector<UnionPart> uparts;
+        {
+            std::size_t start = 0;
+            int depth = 0;
+            bool in_q = false;
+            bool prev_all = false;
+            auto kw_at = [&](std::size_t i, const char* kw) {
+                std::size_t L = std::strlen(kw);
+                if (i + L > sql.size()) return false;
+                for (std::size_t k = 0; k < L; ++k)
+                    if (std::toupper(static_cast<unsigned char>(sql[i+k])) !=
+                        kw[k]) return false;
+                bool lb = (i == 0) ||
+                    (!std::isalnum(static_cast<unsigned char>(sql[i-1])) &&
+                     sql[i-1] != '_');
+                bool rb = (i + L == sql.size()) ||
+                    (!std::isalnum(static_cast<unsigned char>(sql[i+L])) &&
+                     sql[i+L] != '_');
+                return lb && rb;
+            };
+            for (std::size_t i = 0; i < sql.size(); ) {
+                char ch = sql[i];
+                if (in_q) {
+                    if (ch == '\'') in_q = false;
+                    ++i; continue;
+                }
+                if (ch == '\'') { in_q = true; ++i; continue; }
+                if (ch == '(')  { ++depth; ++i; continue; }
+                if (ch == ')')  { --depth; ++i; continue; }
+                if (depth == 0 && kw_at(i, "UNION")) {
+                    uparts.push_back({sql.substr(start, i - start), prev_all});
+                    i += 5;
+                    while (i < sql.size() &&
+                           std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+                    prev_all = false;
+                    if (kw_at(i, "ALL")) {
+                        prev_all = true;
+                        i += 3;
+                        while (i < sql.size() &&
+                               std::isspace(static_cast<unsigned char>(sql[i]))) ++i;
+                    }
+                    start = i;
+                    continue;
+                }
+                ++i;
+            }
+            if (start < sql.size()) {
+                uparts.push_back({sql.substr(start), prev_all});
+            }
+        }
+
+        if (uparts.size() > 1) {
+            auto& s = state();
+            std::lock_guard<std::mutex> lk(s.mu);
+
+            auto first_p = openads::sql::parse_select(uparts[0].sql_text);
+            if (!first_p) return fail(first_p.error());
+            auto member_ok = [](const openads::sql::SelectStmt& st) {
+                return !st.inner_join && st.aggregates.empty() &&
+                       st.group_by.empty() && st.projection.empty() &&
+                       !st.order_by;
+            };
+            if (!member_ok(first_p.value())) {
+                return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "UNION members must be `SELECT * FROM t [WHERE ...]`");
+            }
+            auto fh = c->open_table(first_p.value().table,
+                                    openads::engine::TableType::Cdx,
+                                    openads::engine::OpenMode::Read);
+            if (!fh) return fail(fh.error());
+            openads::engine::Table* ftbl = c->lookup_table(fh.value());
+            if (!ftbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+
+            std::uint16_t nfields = ftbl->field_count();
+            std::uint32_t rec_len = 1;
+            std::vector<openads::drivers::DbfField> schema;
+            schema.reserve(nfields);
+            for (std::uint16_t i = 0; i < nfields; ++i) {
+                const auto& fd = ftbl->field_descriptor(i);
+                schema.push_back(fd);
+                rec_len += fd.length;
+            }
+
+            std::vector<std::uint8_t> file;
+            std::array<std::uint8_t, 32> hdr{};
+            hdr[0] = 0x03;
+            std::uint16_t header_len = static_cast<std::uint16_t>(
+                32 + 32 * nfields + 1);
+            hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
+            hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+            hdr[10] = static_cast<std::uint8_t>( rec_len          & 0xFFu);
+            hdr[11] = static_cast<std::uint8_t>((rec_len    >> 8) & 0xFFu);
+            file.insert(file.end(), hdr.begin(), hdr.end());
+            for (auto& fd : schema) {
+                std::array<std::uint8_t, 32> bytes{};
+                std::strncpy(reinterpret_cast<char*>(bytes.data()),
+                             fd.name.c_str(), 11);
+                bytes[11] = static_cast<std::uint8_t>(fd.raw_type);
+                bytes[16] = fd.length;
+                bytes[17] = fd.decimals;
+                file.insert(file.end(), bytes.begin(), bytes.end());
+            }
+            file.push_back(0x0D);
+
+            // The first member's `all` flag is meaningless (it has no
+            // UNION keyword preceding it); only the join-flags between
+            // members decide whether dedup applies.
+            bool any_distinct = false;
+            for (std::size_t i = 1; i < uparts.size(); ++i)
+                if (!uparts[i].all) any_distinct = true;
+            std::unordered_set<std::string> seen;
+            std::uint32_t emitted = 0;
+
+            auto walk_member = [&](openads::engine::Table* mtbl,
+                                   const openads::sql::SelectStmt& stm)
+                -> openads::util::Result<std::monostate>
+            {
+                std::function<bool(openads::engine::Table&)> filt;
+                if (stm.where) {
+                    using Pred = std::function<bool(openads::engine::Table&)>;
+                    std::function<openads::util::Result<Pred>(
+                        const openads::sql::WhereExpr&)> compile;
+                    compile = [&](const openads::sql::WhereExpr& node)
+                              -> openads::util::Result<Pred> {
+                        using Kind = openads::sql::WhereExpr::Kind;
+                        if (node.kind == Kind::And || node.kind == Kind::Or) {
+                            std::vector<Pred> ks;
+                            for (auto& cn : node.children) {
+                                auto r = compile(*cn);
+                                if (!r) return r.error();
+                                ks.push_back(std::move(r).value());
+                            }
+                            bool is_and = (node.kind == Kind::And);
+                            return Pred{[ks = std::move(ks), is_and]
+                                        (openads::engine::Table& t) {
+                                if (is_and) {
+                                    for (auto& k : ks) if (!k(t)) return false;
+                                    return true;
+                                }
+                                for (auto& k : ks) if (k(t)) return true;
+                                return false;
+                            }};
+                        }
+                        if (node.kind == Kind::Not) {
+                            auto inner = compile(*node.child);
+                            if (!inner) return inner.error();
+                            return Pred{[p = std::move(inner).value()]
+                                        (openads::engine::Table& t)
+                                        { return !p(t); }};
+                        }
+                        if (node.kind != Kind::Cmp) {
+                            return openads::util::Error{
+                                openads::AE_FUNCTION_NOT_AVAILABLE, 0,
+                                "UNION member WHERE supports Cmp/AND/OR/NOT only", ""};
+                        }
+                        const auto& w = node.cmp;
+                        std::int32_t fi = mtbl->field_index(w.column);
+                        if (fi < 0) return openads::util::Error{
+                            openads::AE_COLUMN_NOT_FOUND, 0,
+                            w.column.c_str(), ""};
+                        std::uint16_t f = static_cast<std::uint16_t>(fi);
+                        openads::sql::WhereOp op = w.op;
+                        std::string lit = w.literal;
+                        bool is_num = w.is_numeric;
+                        double num  = w.number;
+                        return Pred{[f, op, lit, is_num, num]
+                                    (openads::engine::Table& t) {
+                            auto v = t.read_field(f);
+                            if (!v) return false;
+                            int cmp = 0;
+                            if (is_num) {
+                                double d = v.value().as_double;
+                                if      (d < num) cmp = -1;
+                                else if (d > num) cmp =  1;
+                            } else {
+                                cmp = v.value().as_string.compare(lit);
+                            }
+                            switch (op) {
+                                case openads::sql::WhereOp::Eq: return cmp == 0;
+                                case openads::sql::WhereOp::Ne: return cmp != 0;
+                                case openads::sql::WhereOp::Lt: return cmp <  0;
+                                case openads::sql::WhereOp::Gt: return cmp >  0;
+                                case openads::sql::WhereOp::Le: return cmp <= 0;
+                                case openads::sql::WhereOp::Ge: return cmp >= 0;
+                                default: return false;
+                            }
+                        }};
+                    };
+                    auto compiled = compile(*stm.where);
+                    if (!compiled) return compiled.error();
+                    filt = std::move(compiled).value();
+                }
+                std::uint32_t rcount = mtbl->record_count();
+                for (std::uint32_t r = 1; r <= rcount; ++r) {
+                    if (auto g = mtbl->goto_record(r); !g) continue;
+                    if (mtbl->is_deleted()) continue;
+                    if (filt && !filt(*mtbl)) continue;
+                    auto raw = mtbl->driver()->read_record_raw(r);
+                    if (!raw) continue;
+                    auto& bytes = raw.value();
+                    if (bytes.size() != rec_len) continue;
+                    std::string key(
+                        reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size());
+                    if (any_distinct) {
+                        if (!seen.insert(key).second) continue;
+                    }
+                    file.insert(file.end(), bytes.begin(), bytes.end());
+                    ++emitted;
+                }
+                return std::monostate{};
+            };
+
+            auto wm = walk_member(ftbl, first_p.value());
+            c->close_table(fh.value());
+            if (!wm) return fail(wm.error());
+
+            for (std::size_t i = 1; i < uparts.size(); ++i) {
+                auto p = openads::sql::parse_select(uparts[i].sql_text);
+                if (!p) return fail(p.error());
+                if (!member_ok(p.value())) {
+                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                        "UNION members must be `SELECT * FROM t [WHERE ...]`");
+                }
+                auto h = c->open_table(p.value().table,
+                                       openads::engine::TableType::Cdx,
+                                       openads::engine::OpenMode::Read);
+                if (!h) return fail(h.error());
+                openads::engine::Table* mt = c->lookup_table(h.value());
+                if (!mt) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+                auto wmi = walk_member(mt, p.value());
+                c->close_table(h.value());
+                if (!wmi) return fail(wmi.error());
+            }
+
+            file.push_back(0x1A);
+            file[4] = static_cast<std::uint8_t>( emitted        & 0xFFu);
+            file[5] = static_cast<std::uint8_t>((emitted >>  8) & 0xFFu);
+            file[6] = static_cast<std::uint8_t>((emitted >> 16) & 0xFFu);
+            file[7] = static_cast<std::uint8_t>((emitted >> 24) & 0xFFu);
+
+            namespace fs = std::filesystem;
+            char nb[64];
+            std::snprintf(nb, sizeof(nb), "_uni_%llx.dbf",
+                          static_cast<unsigned long long>(
+                              openads::platform::monotonic_nanos()));
+            fs::path uni_dbf = fs::path(c->data_dir()) / nb;
+            {
+                std::ofstream out(uni_dbf, std::ios::binary);
+                if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                    "union temp DBF: open for write failed");
+                out.write(reinterpret_cast<const char*>(file.data()),
+                          static_cast<std::streamsize>(file.size()));
+            }
+            std::string rel = uni_dbf.filename().string();
+            auto uth = c->open_table(rel, openads::engine::TableType::Cdx,
+                                     openads::engine::OpenMode::Read);
+            if (!uth) return fail(uth.error());
+            openads::engine::Table* utbl = c->lookup_table(uth.value());
+            if (!utbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+            ADSHANDLE gh = s.registry.register_object(HandleKind::Table, utbl);
+            *phCursor = gh;
+            return ok();
+        }
+    }
+
     auto parsed = openads::sql::parse_select(sql);
     if (!parsed) return fail(parsed.error());
 

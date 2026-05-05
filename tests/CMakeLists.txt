@@ -80,6 +80,7 @@ add_executable(openads_unit_tests
     unit/abi_sql_in_test.cpp
     unit/abi_sql_exists_test.cpp
     unit/abi_sql_scalar_test.cpp
+    unit/abi_sql_union_test.cpp
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE
