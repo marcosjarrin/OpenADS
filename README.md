@@ -217,7 +217,7 @@ on OpenADS without recompiling Harbour.
 
 #### Tests
 
-- **270 doctest cases / 4350 assertions** passing on Windows / MSVC
+- **271 doctest cases / 4360 assertions** passing on Windows / MSVC
   Release.
 - **Harbour smoke** harness producing a runnable `smoke.exe` that
   drives the full read + write + index + multi-tag + transaction +
@@ -334,6 +334,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.18-done` | SQL scalar subquery — `<col> op (SELECT <col> FROM <t>)`. Inner subquery's first projected value lands in the cmp's literal slot at compile time; outer-column type drives string vs numeric compare semantics. |
 | `m10.19-done` | SQL aggregate scalar subquery — `<col> op (SELECT MAX(x)/MIN/SUM/AVG/COUNT FROM t)`. The single aggregate lands in the cmp's number slot at compile time. |
 | `m10.20-done` | SQL JOIN combined with WHERE / ORDER BY in a single statement. Outer clauses compile against the merged cursor's schema (left names verbatim, right names `R_<orig>`). |
+| `m10.21-done` | SQL `RIGHT [OUTER] JOIN` — every right row survives, blank left when no match. Hash built on LEFT column; merged cursor schema stays direction-agnostic. |
 
 #### Still planned for 0.3.x
 
@@ -348,14 +349,15 @@ whose use is restricted by the Advantage SDK / ACE EULA.
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
 - **More SQL** — JOIN + aggregate combo in a single statement,
-  RIGHT / FULL OUTER joins, correlated subqueries. The shipped
-  0.3.x SQL surface covers boolean WHERE (M10.3), `INSERT` (M10.5),
+  FULL OUTER joins, correlated subqueries. The shipped 0.3.x SQL
+  surface covers boolean WHERE (M10.3), `INSERT` (M10.5),
   `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7), projection lists
   (M10.8), DDL `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates
   (M10.10), INNER JOIN (M10.13 / M10.14), IN literal / subquery
   (M10.15), LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar
-  subquery (M10.18), aggregate scalar subquery (M10.19), and
-  JOIN+WHERE / ORDER BY combos (M10.20).
+  subquery (M10.18), aggregate scalar subquery (M10.19),
+  JOIN+WHERE / ORDER BY combos (M10.20), and RIGHT OUTER JOIN
+  (M10.21).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
