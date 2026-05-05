@@ -169,3 +169,47 @@ TEST_CASE("M10.15 IN combines with AND") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M10.35 correlated IN subquery") {
+    auto dir = fs::temp_directory_path() / "openads_m10_35";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "outer.dbf",
+        {{"CUST", 4}, {"NAME", 8}},
+        {{"C001", "Alice"},
+         {"C002", "Bob"},
+         {"C003", "Carol"},
+         {"C004", "Dan"}});
+    write_dbf(dir / "inner.dbf",
+        {{"OWNER", 4}, {"PROD", 4}},
+        {{"C001", "P001"},
+         {"C002", "P002"},
+         {"C001", "P003"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // outer.CUST IN (SELECT OWNER FROM inner WHERE OWNER = CUST)
+    // keeps customers that have ≥ 1 inner row whose OWNER ties to
+    // their own CUST — C001 + C002.
+    UNSIGNED8 sql[300] =
+        "SELECT * FROM outer.dbf WHERE CUST IN "
+        "(SELECT OWNER FROM inner.dbf WHERE OWNER = CUST)";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
