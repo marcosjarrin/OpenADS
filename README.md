@@ -373,6 +373,8 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.47-done` | SQL `ROW_NUMBER() OVER (...)` in projection — first cut emits the 1-based position in the materialised result cursor; PARTITION BY / ORDER BY inside the OVER are parsed but ignored. |
 | `m11.6-done`  | VFP NULL bitmap — `parse_dbf_fields` detects flags-byte bit 1 + assigns each nullable field a `null_bit` ordinal; `Table::is_field_null` reads `_NullFlags` system column and tests the bit. |
 | `m12.1-done`  | Phase 2 wire-protocol skeleton — `network/wire.{h,cpp}` defines a length-prefixed frame (4 BE bytes + opcode + payload) with an Opcode enum reserved for Hello / Connect / OpenTable / ExecuteSQL / Fetch / Disconnect / Error. No socket layer yet. |
+| `m11.7-done`  | String collation — `AdsSetCollation(hConn, BINARY\|NOCASE)`. Connection-scoped flag stamps onto every WHERE Cmp; NOCASE lowercases ASCII A-Z before compare across Eq/Ne/Lt/Gt/Le/Ge/Between/Like. |
+| `m11.8-done`  | OEM (CP437) ↔ UTF-8 conversion — `AdsConvertOemToAnsi` / `AdsConvertAnsiToOem` round-trip text through a new `engine/codepage` module carrying the public IBM CP437 upper-half table. |
 
 #### Still planned for 0.3.x
 
