@@ -375,6 +375,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m12.1-done`  | Phase 2 wire-protocol skeleton — `network/wire.{h,cpp}` defines a length-prefixed frame (4 BE bytes + opcode + payload) with an Opcode enum reserved for Hello / Connect / OpenTable / ExecuteSQL / Fetch / Disconnect / Error. No socket layer yet. |
 | `m11.7-done`  | String collation — `AdsSetCollation(hConn, BINARY\|NOCASE)`. Connection-scoped flag stamps onto every WHERE Cmp; NOCASE lowercases ASCII A-Z before compare across Eq/Ne/Lt/Gt/Le/Ge/Between/Like. |
 | `m11.8-done`  | OEM (CP437) ↔ UTF-8 conversion — `AdsConvertOemToAnsi` / `AdsConvertAnsiToOem` round-trip text through a new `engine/codepage` module carrying the public IBM CP437 upper-half table. |
+| `m10.49-done` | SQL window OVER (PARTITION BY + ORDER BY) — pre-computes per-row values into a side map; partitions group by concatenated key, ORDER BY drives within-partition order. |
+| `m10.50-done` | SQL `RANK()` / `DENSE_RANK()` — join ROW_NUMBER in the window family; RANK skips on ties, DENSE_RANK doesn't. Tie detection via the ORDER BY key. |
+| `m10.51-done` | SQL qualified column refs — `<alias>.<col>` in WHERE / projection / JOIN ON; read_identifier consumes the suffix and resolves the bare column name. |
+| `m10.52-done` | SQL multi-row `INSERT INTO t (cols) VALUES (...), (...), ...` — appends one record per tuple. |
 
 #### Still planned for 0.3.x
 
