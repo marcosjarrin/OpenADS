@@ -6,6 +6,8 @@
 #include "drivers/ntx/ntx_driver.h"
 #include "platform/path.h"
 
+#include <cstring>
+
 #include "openads/error.h"
 
 #include <algorithm>
@@ -80,6 +82,17 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
     if (!t) return t.error();
 
     auto holder = std::make_unique<engine::Table>(std::move(t).value());
+
+    // M11.2 — propagate the connection's encryption key to the
+    // driver when the table reports encrypted (header byte 0xC3).
+    if (encryption_key_set_) {
+        if (auto* cdx = dynamic_cast<
+                openads::drivers::cdx::CdxDriver*>(holder->driver())) {
+            if (cdx->encrypted()) {
+                (void)cdx->set_encryption_key(encryption_key_);
+            }
+        }
+    }
 
     // Auto-attach a memo store if the table has M-fields.
     bool has_memo_field = false;
@@ -459,6 +472,26 @@ Connection::find_close(TableFind* find) {
     }
     finds_.erase(it);
     return {};
+}
+
+bool Connection::owns_table_ptr(const engine::Table* t) const {
+    for (auto& [_, holder] : tables_) {
+        if (holder.get() == t) return true;
+    }
+    return false;
+}
+
+void Connection::set_encryption_password(const std::string& password) {
+    // M11.2 — pragmatic key derivation for the OpenADS-only encrypted
+    // format: zero-pad the password to 32 bytes and truncate if
+    // longer. Strong passwords are the user's responsibility; this
+    // does not implement PBKDF2 / Argon2 (no SHA-256 in tree). The
+    // resulting key feeds AES-256-CTR per record.
+    encryption_key_.fill(0);
+    std::size_t n = std::min<std::size_t>(password.size(),
+                                          encryption_key_.size());
+    std::memcpy(encryption_key_.data(), password.data(), n);
+    encryption_key_set_ = true;
 }
 
 Connection::~Connection() {

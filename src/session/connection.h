@@ -9,6 +9,7 @@
 #include "session/handle_registry.h"
 #include "util/result.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -98,6 +99,16 @@ public:
                           const std::string& packed_args);
     bool has_procedure(const std::string& name) const;
 
+    // M11.2 — encryption password used by the OpenADS-encrypted DBF
+    // variant (header byte 0xC3, AES-256-CTR per record). The 32-byte
+    // key is derived deterministically from the password and applied
+    // to any encrypted table opened through this connection.
+    void set_encryption_password(const std::string& password);
+    bool has_encryption_key() const noexcept { return encryption_key_set_; }
+    const std::array<std::uint8_t, 32>&
+        encryption_key() const noexcept { return encryption_key_; }
+    bool owns_table_ptr(const engine::Table* t) const;
+
 private:
     util::Result<void> recover_orphan_tx_();
 
@@ -121,6 +132,10 @@ private:
     // M11.4 — registered AEP procedures keyed by name (case-sensitive
     // for now). DLL handles freed in destructor.
     std::unordered_map<std::string, Procedure>                 procedures_;
+
+    // M11.2 — encryption key derived from the connection password.
+    std::array<std::uint8_t, 32>                               encryption_key_{};
+    bool                                                       encryption_key_set_ = false;
 
 public:
     ~Connection();

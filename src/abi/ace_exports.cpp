@@ -12,6 +12,7 @@
 #include "drivers/dbf_common.h"
 #include "drivers/index_trait.h"
 #include "drivers/ntx/ntx_index.h"
+#include "drivers/cdx/cdx_driver.h"
 #include "drivers/cdx/cdx_index.h"
 #include "platform/time.h"
 #include "sql/parser.h"
@@ -3262,9 +3263,36 @@ UNSIGNED32 AdsIsRecordEncrypted(ADSHANDLE /*hTable*/, UNSIGNED16* pbEncrypted) {
     return ok();
 }
 
-UNSIGNED32 AdsEncryptTable(ADSHANDLE /*hTable*/) {
-    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "AdsEncryptTable pending ADS encryption-mode RE");
+// M11.2 — convert a plain CDX table to OpenADS-encrypted in place.
+// Requires AdsSetEncryptionPassword to have been called on the
+// owning connection (located by walking the registry for the
+// connection whose tables include this Table*).
+UNSIGNED32 AdsEncryptTable(ADSHANDLE hTable) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    Connection* owning = nullptr;
+    s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+        if (k != HandleKind::Connection || owning) return;
+        auto* cc = static_cast<Connection*>(p);
+        if (cc->owns_table_ptr(t)) owning = cc;
+    });
+    if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                             "table not owned by any connection");
+    if (!owning->has_encryption_key()) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "AdsSetEncryptionPassword required first");
+    }
+    auto* cdx = dynamic_cast<openads::drivers::cdx::CdxDriver*>(t->driver());
+    if (!cdx) {
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
+                    "encryption supported on CdxDriver tables only");
+    }
+    auto r = cdx->encrypt_in_place(owning->encryption_key());
+    if (!r) return fail(r.error());
+    if (auto fl = t->flush(); !fl) return fail(fl.error());
+    return ok();
 }
 
 UNSIGNED32 AdsDecryptTable(ADSHANDLE /*hTable*/) {
@@ -3322,6 +3350,25 @@ UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     }
     *pbInTx = c->in_tx() ? 1 : 0;
+    return ok();
+}
+
+// M11.2 — set the encryption password on a connection. Affects
+// every subsequent table open: encrypted tables (header byte 0xC3)
+// transparently decrypt on read / encrypt on write using AES-256-CTR
+// keyed off the (zero-padded) password bytes. OpenADS-only format —
+// not byte-compatible with SAP ADS encrypted .adt files.
+UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect,
+                                    UNSIGNED8* pucPassword) {
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(
+        hConnect, HandleKind::Connection);
+    if (!c || pucPassword == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto pw = openads::abi::to_internal(pucPassword, 0);
+    c->set_encryption_password(pw);
     return ok();
 }
 

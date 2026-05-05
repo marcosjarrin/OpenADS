@@ -24,6 +24,9 @@ struct DbfHeader {
     std::uint16_t header_length    = 0;
     std::uint16_t record_length    = 0;
     DbfFamily     family           = DbfFamily::Unknown;
+    // M11.2 — OpenADS-only encrypted DBF (header byte 0xC3). Not
+    // byte-compatible with SAP ADS encrypted .adt files.
+    bool          encrypted        = false;
 };
 
 util::Result<DbfHeader> parse_dbf_header(const std::uint8_t* data,

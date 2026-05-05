@@ -12,6 +12,7 @@ namespace {
 DbfFamily classify(std::uint8_t version) {
     switch (version) {
         case 0x03: case 0x83:
+        case 0xC3:                          // M11.2 — encrypted variant
             return DbfFamily::Clipper;
         case 0x30: case 0x31: case 0x32:
             return DbfFamily::Vfp;
@@ -49,6 +50,7 @@ util::Result<DbfHeader> parse_dbf_header(const std::uint8_t* data,
     h.header_length     = read_u16_le(data + 8);
     h.record_length     = read_u16_le(data + 10);
     h.family            = classify(h.version);
+    h.encrypted         = (h.version == 0xC3);
     return h;
 }
 

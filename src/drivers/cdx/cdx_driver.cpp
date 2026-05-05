@@ -40,6 +40,7 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     rec_count_ = hdr.value().record_count;
     rec_len_   = hdr.value().record_length;
     hdr_len_   = hdr.value().header_length;
+    encrypted_ = hdr.value().encrypted;
 
     if (hdr_len_ < 33) {
         return util::Error{5103, 0, "DBF header length below 33 bytes", path};
@@ -71,6 +72,9 @@ CdxDriver::read_record_raw(std::uint32_t recno) {
     if (got.value() < buf.size()) {
         return util::Error{5000, 0, "short read on record body", ""};
     }
+    if (encrypted_ && aes_) {
+        apply_ctr_(buf.data(), buf.size(), recno);
+    }
     return buf;
 }
 
@@ -89,6 +93,16 @@ CdxDriver::write_record_raw(std::uint32_t recno,
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
                            static_cast<std::uint64_t>(recno - 1) *
                            static_cast<std::uint64_t>(rec_len_);
+    if (encrypted_ && aes_) {
+        std::vector<std::uint8_t> tmp(buf, buf + n);
+        apply_ctr_(tmp.data(), tmp.size(), recno);
+        auto wrote = file_.write_at(offset, tmp.data(), tmp.size());
+        if (!wrote) return wrote.error();
+        if (wrote.value() != n) {
+            return util::Error{5000, 0, "short write on record body", ""};
+        }
+        return {};
+    }
     auto wrote = file_.write_at(offset, buf, n);
     if (!wrote) return wrote.error();
     if (wrote.value() != n) {
@@ -109,10 +123,20 @@ CdxDriver::append_record_raw(const std::uint8_t* buf, std::size_t n) {
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
                            static_cast<std::uint64_t>(rec_count_) *
                            static_cast<std::uint64_t>(rec_len_);
-    auto wrote = file_.write_at(offset, buf, n);
-    if (!wrote) return wrote.error();
-    if (wrote.value() != n) {
-        return util::Error{5000, 0, "short write on record body", ""};
+    if (encrypted_ && aes_) {
+        std::vector<std::uint8_t> tmp(buf, buf + n);
+        apply_ctr_(tmp.data(), tmp.size(), new_recno);
+        auto wrote = file_.write_at(offset, tmp.data(), tmp.size());
+        if (!wrote) return wrote.error();
+        if (wrote.value() != n) {
+            return util::Error{5000, 0, "short write on record body", ""};
+        }
+    } else {
+        auto wrote = file_.write_at(offset, buf, n);
+        if (!wrote) return wrote.error();
+        if (wrote.value() != n) {
+            return util::Error{5000, 0, "short write on record body", ""};
+        }
     }
     std::uint8_t eof = 0x1A;
     file_.write_at(offset + n, &eof, 1);
@@ -199,6 +223,74 @@ CdxDriver::bump_autoinc(std::uint16_t field_index) {
     auto w = file_.write_at(off, buf, sizeof(buf));
     if (!w) return w.error();
     return curr;
+}
+
+void CdxDriver::apply_ctr_(std::uint8_t* buf, std::size_t n,
+                           std::uint32_t recno) const {
+    // M11.2 — AES-256-CTR over the record body. IV layout:
+    // bytes 0..3 = recno LE, bytes 4..15 = block counter (LE).
+    // Identical for encrypt and decrypt — XOR is symmetric.
+    if (!aes_) return;
+    std::array<std::uint8_t, 16> ctr{};
+    ctr[0] = static_cast<std::uint8_t>( recno        & 0xFFu);
+    ctr[1] = static_cast<std::uint8_t>((recno >>  8) & 0xFFu);
+    ctr[2] = static_cast<std::uint8_t>((recno >> 16) & 0xFFu);
+    ctr[3] = static_cast<std::uint8_t>((recno >> 24) & 0xFFu);
+    for (std::size_t i = 0; i < n; i += 16) {
+        std::array<std::uint8_t, 16> ks = ctr;
+        aes_->encrypt_block(ks.data());
+        std::size_t blk = std::min<std::size_t>(16, n - i);
+        for (std::size_t k = 0; k < blk; ++k) {
+            buf[i + k] ^= ks[k];
+        }
+        // Increment 12-byte block counter at bytes 4..15 (LE).
+        for (int b = 4; b < 16; ++b) {
+            if (++ctr[b] != 0) break;
+        }
+    }
+}
+
+util::Result<void>
+CdxDriver::set_encryption_key(const std::array<std::uint8_t, 32>& key) {
+    auto a = engine::Aes::from_key(engine::AesKeyBits::Aes256,
+                                   std::vector<std::uint8_t>(
+                                       key.begin(), key.end()));
+    if (!a) return a.error();
+    aes_ = std::move(a).value();
+    return {};
+}
+
+util::Result<void>
+CdxDriver::encrypt_in_place(const std::array<std::uint8_t, 32>& key) {
+    // M11.2 — convert a plain DBF to OpenADS-encrypted: re-read every
+    // existing record (still plain), set encrypted state, write each
+    // record back through the encryption hook, flip header byte to
+    // 0xC3 so future opens detect the format.
+    if (mode_ == DriverOpenMode::ReadOnly) {
+        return util::Error{5000, 0, "table opened read-only", ""};
+    }
+    if (encrypted_) {
+        return util::Error{5000, 0, "table is already encrypted", ""};
+    }
+    std::vector<std::vector<std::uint8_t>> plain;
+    plain.reserve(rec_count_);
+    for (std::uint32_t r = 1; r <= rec_count_; ++r) {
+        auto rd = read_record_raw(r);
+        if (!rd) return rd.error();
+        plain.push_back(std::move(rd).value());
+    }
+    if (auto r = set_encryption_key(key); !r) return r.error();
+    encrypted_ = true;
+    for (std::uint32_t r = 1; r <= rec_count_; ++r) {
+        if (auto w = write_record_raw(r, plain[r - 1].data(),
+                                       plain[r - 1].size()); !w) {
+            return w.error();
+        }
+    }
+    std::uint8_t v = 0xC3;
+    auto wh = file_.write_at(0, &v, 1);
+    if (!wh) return wh.error();
+    return {};
 }
 
 } // namespace openads::drivers::cdx

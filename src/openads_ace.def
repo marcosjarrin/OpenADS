@@ -81,6 +81,7 @@ EXPORTS
     AdsInTransaction
     AdsCreateSavepoint
     AdsReleaseSavepoint
+    AdsSetEncryptionPassword
     AdsRollbackTransaction80
     AdsDDCreate
     AdsDDAddTable
