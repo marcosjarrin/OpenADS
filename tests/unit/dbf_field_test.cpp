@@ -78,13 +78,25 @@ TEST_CASE("Field parser stops at the 0x0D terminator") {
 
 TEST_CASE("Field parser flags unknown types as Unknown but still records them") {
     auto buf = build_descriptors({
-        {"WEIRD", 'Q', 3, 0},
+        {"WEIRD", 'Z', 3, 0},
     });
     auto parsed = parse_dbf_fields(buf.data(), buf.size());
     REQUIRE(parsed.has_value());
     REQUIRE(parsed.value().size() == 1);
     CHECK(parsed.value()[0].type == DbfFieldType::Unknown);
-    CHECK(parsed.value()[0].raw_type == 'Q');
+    CHECK(parsed.value()[0].raw_type == 'Z');
+}
+
+TEST_CASE("M11.1 VFP V (Varchar) and Q (Varbinary) classify") {
+    auto buf = build_descriptors({
+        {"VVAL", 'V', 6, 0},
+        {"QVAL", 'Q', 6, 0},
+    });
+    auto parsed = parse_dbf_fields(buf.data(), buf.size());
+    REQUIRE(parsed.has_value());
+    REQUIRE(parsed.value().size() == 2);
+    CHECK(parsed.value()[0].type == DbfFieldType::Varchar);
+    CHECK(parsed.value()[1].type == DbfFieldType::Varbinary);
 }
 
 TEST_CASE("Field parser computes record offset for each field") {

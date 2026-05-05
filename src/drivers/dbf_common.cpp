@@ -66,6 +66,8 @@ DbfFieldType classify_field(char raw) {
         case 'I': return DbfFieldType::Integer;
         case 'Y': return DbfFieldType::Currency;
         case 'B': return DbfFieldType::Double;
+        case 'V': return DbfFieldType::Varchar;     // M11.1
+        case 'Q': return DbfFieldType::Varbinary;   // M11.1
         default:  return DbfFieldType::Unknown;
     }
 }
@@ -255,6 +257,26 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             v.as_string = tmp;
             break;
         }
+        case DbfFieldType::Varchar: {
+            // VFP V — fixed-width slot trimmed of trailing NULs. Apps
+            // see only the meaningful prefix; everything after the
+            // first 0x00 is padding.
+            std::size_t actual = field.length;
+            while (actual > 0 && p[actual - 1] == 0x00) --actual;
+            v.as_string = std::string(
+                reinterpret_cast<const char*>(p), actual);
+            break;
+        }
+        case DbfFieldType::Varbinary: {
+            // VFP Q — raw bytes; trailing 0x00 also trimmed for
+            // string view (binary callers should use raw_record_raw
+            // for byte-exact access).
+            std::size_t actual = field.length;
+            while (actual > 0 && p[actual - 1] == 0x00) --actual;
+            v.as_string = std::string(
+                reinterpret_cast<const char*>(p), actual);
+            break;
+        }
         case DbfFieldType::Unknown:
             v.as_string = make_string(p, field.length);
             break;
@@ -282,7 +304,14 @@ util::Result<void> encode_field_string(const DbfField& f,
     std::uint8_t* dst = rec + f.record_offset;
     std::size_t n = std::min<std::size_t>(value.size(), f.length);
     std::memcpy(dst, value.data(), n);
-    for (std::size_t i = n; i < f.length; ++i) dst[i] = ' ';
+    // M11.1 — VFP V / Q pad the unused tail with NUL so callers can
+    // recover the actual length on read; everything else (Character,
+    // Numeric, Date, ...) keeps the legacy space-pad behavior.
+    std::uint8_t pad =
+        (f.type == DbfFieldType::Varchar ||
+         f.type == DbfFieldType::Varbinary)
+            ? 0x00 : ' ';
+    for (std::size_t i = n; i < f.length; ++i) dst[i] = pad;
     return {};
 }
 

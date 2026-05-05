@@ -40,6 +40,8 @@ enum class DbfFieldType {
     Integer,    // VFP I (4-byte int)
     Currency,   // VFP Y
     Double,     // VFP B
+    Varchar,    // VFP V — variable-length character; M11.1
+    Varbinary,  // VFP Q — variable-length binary; M11.1
     Unknown
 };
 

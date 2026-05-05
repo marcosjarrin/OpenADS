@@ -123,3 +123,48 @@ TEST_CASE("M10.2 VFP Integer / Currency / Double encode round-trips") {
         CHECK(v.value().as_double == doctest::Approx(2.7182818));
     }
 }
+
+TEST_CASE("M11.1 VFP Varchar (V) decodes trimmed of trailing NUL pad") {
+    openads::drivers::DbfField f;
+    f.raw_type = 'V';
+    f.type     = openads::drivers::DbfFieldType::Varchar;
+    f.length = 6; f.record_offset = 1;
+    std::vector<std::uint8_t> rec(7, 0);
+    rec[0] = ' ';                                      // deletion byte
+    rec[1] = 'A'; rec[2] = 'B'; rec[3] = 'C';
+    auto v = openads::drivers::decode_field(f, rec.data(), rec.size());
+    REQUIRE(v.has_value());
+    CHECK(v.value().as_string == "ABC");
+}
+
+TEST_CASE("M11.1 VFP Varbinary (Q) preserves bytes up to NUL pad") {
+    openads::drivers::DbfField f;
+    f.raw_type = 'Q';
+    f.type     = openads::drivers::DbfFieldType::Varbinary;
+    f.length = 4; f.record_offset = 1;
+    std::vector<std::uint8_t> rec(5, 0);
+    rec[0] = ' ';
+    rec[1] = 0xDE; rec[2] = 0xAD;                       // 2 bytes used
+    auto v = openads::drivers::decode_field(f, rec.data(), rec.size());
+    REQUIRE(v.has_value());
+    REQUIRE(v.value().as_string.size() == 2);
+    CHECK(static_cast<std::uint8_t>(v.value().as_string[0]) == 0xDE);
+    CHECK(static_cast<std::uint8_t>(v.value().as_string[1]) == 0xAD);
+}
+
+TEST_CASE("M11.1 VFP V / Q round-trip via encode_field_string") {
+    openads::drivers::DbfField f;
+    f.raw_type = 'V';
+    f.type     = openads::drivers::DbfFieldType::Varchar;
+    f.length = 8; f.record_offset = 1;
+    std::vector<std::uint8_t> rec(9, ' ');
+    REQUIRE(openads::drivers::encode_field_string(
+        f, rec.data(), rec.size(), "hi").has_value());
+    CHECK(rec[1] == 'h');
+    CHECK(rec[2] == 'i');
+    CHECK(rec[3] == 0x00);
+    CHECK(rec[8] == 0x00);
+    auto v = openads::drivers::decode_field(f, rec.data(), rec.size());
+    REQUIRE(v.has_value());
+    CHECK(v.value().as_string == "hi");
+}
