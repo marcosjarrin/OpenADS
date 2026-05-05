@@ -335,6 +335,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.19-done` | SQL aggregate scalar subquery — `<col> op (SELECT MAX(x)/MIN/SUM/AVG/COUNT FROM t)`. The single aggregate lands in the cmp's number slot at compile time. |
 | `m10.20-done` | SQL JOIN combined with WHERE / ORDER BY in a single statement. Outer clauses compile against the merged cursor's schema (left names verbatim, right names `R_<orig>`). |
 | `m10.21-done` | SQL `RIGHT [OUTER] JOIN` — every right row survives, blank left when no match. Hash built on LEFT column; merged cursor schema stays direction-agnostic. |
+| `m10.22-done` | SQL `FULL [OUTER] JOIN` — union of LEFT + RIGHT semantics; left walk emits matched + LEFT-style fillers and tracks which right recnos were matched, then a follow-up scan emits unmatched right rows with a blank left filler. |
 
 #### Still planned for 0.3.x
 
@@ -349,15 +350,15 @@ whose use is restricted by the Advantage SDK / ACE EULA.
   ready (M4); the on-record byte boundary lands once a clean-room
   description is available.
 - **More SQL** — JOIN + aggregate combo in a single statement,
-  FULL OUTER joins, correlated subqueries. The shipped 0.3.x SQL
-  surface covers boolean WHERE (M10.3), `INSERT` (M10.5),
-  `ORDER BY` (M10.6), `UPDATE` / `DELETE` (M10.7), projection lists
-  (M10.8), DDL `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates
-  (M10.10), INNER JOIN (M10.13 / M10.14), IN literal / subquery
-  (M10.15), LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar
-  subquery (M10.18), aggregate scalar subquery (M10.19),
-  JOIN+WHERE / ORDER BY combos (M10.20), and RIGHT OUTER JOIN
-  (M10.21).
+  correlated subqueries. The shipped 0.3.x SQL surface covers
+  boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY` (M10.6),
+  `UPDATE` / `DELETE` (M10.7), projection lists (M10.8), DDL
+  `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates (M10.10),
+  INNER JOIN (M10.13 / M10.14), IN literal / subquery (M10.15),
+  LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar subquery
+  (M10.18), aggregate scalar subquery (M10.19), JOIN+WHERE /
+  ORDER BY combos (M10.20), RIGHT OUTER JOIN (M10.21), and
+  FULL OUTER JOIN (M10.22).
 - **AEP host** — load + run external stored procedures via the
   documented Extended-Procedure hosting protocol.
 
