@@ -83,6 +83,20 @@ add_executable(openads_unit_tests
     unit/abi_sql_union_test.cpp
     unit/abi_sql_distinct_limit_test.cpp
     unit/abi_sql_case_test.cpp
+    unit/abi_aep_test.cpp
+)
+
+# M11.4 — side DLL with stored procedures used by abi_aep_test.
+add_library(openads_test_aep_proc SHARED
+    fixtures/test_aep_proc.cpp
+)
+set_target_properties(openads_test_aep_proc PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:openads_unit_tests>
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:openads_unit_tests>
+)
+add_dependencies(openads_unit_tests openads_test_aep_proc)
+target_compile_definitions(openads_unit_tests PRIVATE
+    OPENADS_TEST_AEP_DLL="$<TARGET_FILE:openads_test_aep_proc>"
 )
 
 target_include_directories(openads_unit_tests SYSTEM PRIVATE

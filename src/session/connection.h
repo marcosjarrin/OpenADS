@@ -5,6 +5,7 @@
 #include "engine/table.h"
 #include "engine/tx.h"
 #include "engine/tx_log.h"
+#include "platform/dll.h"
 #include "session/handle_registry.h"
 #include "util/result.h"
 
@@ -71,6 +72,32 @@ public:
     util::Result<std::string> find_next_table(TableFind* find);
     util::Result<void>        find_close(TableFind* find);
 
+    // M11.4 — AEP host. Procedures are registered against a
+    // connection (DLL handle owned here, freed at disconnect) and
+    // invoked through execute_procedure. Procedure ABI:
+    //   extern "C" int proc(const char* args,
+    //                       char* out_buf, std::size_t out_cap);
+    // `args` is a 0x1F-separated UTF-8 string; `out_buf` is the
+    // procedure's writable result buffer; the return value lands as
+    // the proc's status code (0 on success).
+    using ExtProcFn =
+        int (*)(const char* args, char* out_buf, std::size_t out_cap);
+    struct Procedure {
+        std::string         dll_path;
+        std::string         symbol;
+        platform::DllHandle dll;
+        ExtProcFn           fn = nullptr;
+    };
+
+    util::Result<void>
+        register_procedure(const std::string& name,
+                           const std::string& dll_path,
+                           const std::string& symbol);
+    util::Result<std::string>
+        execute_procedure(const std::string& name,
+                          const std::string& packed_args);
+    bool has_procedure(const std::string& name) const;
+
 private:
     util::Result<void> recover_orphan_tx_();
 
@@ -90,6 +117,13 @@ private:
     int                                                        tx_nest_depth_ = 0;
 
     std::optional<engine::DataDict>                            dd_;
+
+    // M11.4 — registered AEP procedures keyed by name (case-sensitive
+    // for now). DLL handles freed in destructor.
+    std::unordered_map<std::string, Procedure>                 procedures_;
+
+public:
+    ~Connection();
 };
 
 } // namespace openads::session

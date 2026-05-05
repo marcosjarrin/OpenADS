@@ -3709,6 +3709,87 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
+    // M11.4 — `CREATE PROCEDURE <name> AS '<dll_path>::<symbol>'`.
+    // Loads the DLL, resolves the symbol, registers the proc on the
+    // connection. Returns no cursor.
+    if (openads::sql::sql_is_create_procedure(sql)) {
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        auto cp = openads::sql::parse_create_procedure(sql);
+        if (!cp) return fail(cp.error());
+        auto rr = c->register_procedure(cp.value().name,
+                                        cp.value().dll_path,
+                                        cp.value().symbol);
+        if (!rr) return fail(rr.error());
+        *phCursor = 0;
+        return ok();
+    }
+
+    // M11.4 — `EXECUTE PROCEDURE <name>(<arg>, ...)`. Packs args by
+    // 0x1F separators, calls the proc's C entry point, materialises
+    // the proc's result string in a 1-row temp DBF (column RESULT
+    // C(255)) and returns it as the cursor.
+    if (openads::sql::sql_is_execute_procedure(sql)) {
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        auto ep = openads::sql::parse_execute_procedure(sql);
+        if (!ep) return fail(ep.error());
+        std::string packed;
+        for (std::size_t i = 0; i < ep.value().args.size(); ++i) {
+            if (i != 0) packed.push_back('\x1f');
+            packed.append(ep.value().args[i].text);
+        }
+        auto out = c->execute_procedure(ep.value().name, packed);
+        if (!out) return fail(out.error());
+        std::string& s_out = out.value();
+
+        // Build a 1-row temp DBF with one C(255) column = "RESULT".
+        namespace fs = std::filesystem;
+        char nb[64];
+        std::snprintf(nb, sizeof(nb), "_call_%llx.dbf",
+                      static_cast<unsigned long long>(
+                          openads::platform::monotonic_nanos()));
+        fs::path dbf = fs::path(c->data_dir()) / nb;
+        std::vector<std::uint8_t> file;
+        std::array<std::uint8_t, 32> hdr{};
+        hdr[0] = 0x03;
+        hdr[4] = 1;
+        std::uint16_t hl = 32 + 32 + 1;
+        std::uint16_t rl = 1 + 255;
+        hdr[8]  = static_cast<std::uint8_t>( hl       & 0xFFu);
+        hdr[9]  = static_cast<std::uint8_t>((hl >> 8) & 0xFFu);
+        hdr[10] = static_cast<std::uint8_t>( rl       & 0xFFu);
+        hdr[11] = static_cast<std::uint8_t>((rl >> 8) & 0xFFu);
+        file.insert(file.end(), hdr.begin(), hdr.end());
+        std::array<std::uint8_t, 32> fd{};
+        std::strncpy(reinterpret_cast<char*>(fd.data()), "RESULT", 11);
+        fd[11] = 'C'; fd[16] = 255;
+        file.insert(file.end(), fd.begin(), fd.end());
+        file.push_back(0x0D);
+        file.push_back(' ');
+        for (std::size_t i = 0; i < 255; ++i) {
+            file.push_back(i < s_out.size()
+                ? static_cast<std::uint8_t>(s_out[i]) : ' ');
+        }
+        file.push_back(0x1A);
+        {
+            std::ofstream f(dbf, std::ios::binary);
+            if (!f) return fail(openads::AE_INTERNAL_ERROR,
+                "EXECUTE PROCEDURE temp DBF open failed");
+            f.write(reinterpret_cast<const char*>(file.data()),
+                    static_cast<std::streamsize>(file.size()));
+        }
+        std::string rel = dbf.filename().string();
+        auto th = c->open_table(rel, openads::engine::TableType::Cdx,
+                                openads::engine::OpenMode::Read);
+        if (!th) return fail(th.error());
+        openads::engine::Table* tbl = c->lookup_table(th.value());
+        if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        ADSHANDLE gh = s.registry.register_object(HandleKind::Table, tbl);
+        *phCursor = gh;
+        return ok();
+    }
+
     if (openads::sql::sql_is_update(sql)) {
         auto upd = openads::sql::parse_update(sql);
         if (!upd) return fail(upd.error());

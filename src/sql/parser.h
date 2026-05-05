@@ -232,5 +232,31 @@ bool sql_is_update(const std::string& sql);
 bool sql_is_delete(const std::string& sql);
 bool sql_is_create_table(const std::string& sql);
 bool sql_is_create_index(const std::string& sql);
+bool sql_is_create_procedure(const std::string& sql);
+bool sql_is_execute_procedure(const std::string& sql);
+
+// M11.4 — `CREATE PROCEDURE <name> AS '<dll_path>::<symbol>'`.
+// Registers an external function; later invoked via EXECUTE PROCEDURE.
+struct CreateProcedureStmt {
+    std::string  name;
+    std::string  dll_path;
+    std::string  symbol;
+};
+util::Result<CreateProcedureStmt> parse_create_procedure(const std::string& sql);
+
+// M11.4 — `EXECUTE PROCEDURE <name>(<arg>, <arg>, ...)`. Args are
+// string literals or numeric literals; the executor passes them
+// joined by 0x1F to the loaded DLL function.
+struct ExecuteProcedureArg {
+    bool        is_numeric = false;
+    std::string text;
+    double      number     = 0.0;
+};
+
+struct ExecuteProcedureStmt {
+    std::string                       name;
+    std::vector<ExecuteProcedureArg>  args;
+};
+util::Result<ExecuteProcedureStmt> parse_execute_procedure(const std::string& sql);
 
 } // namespace openads::sql

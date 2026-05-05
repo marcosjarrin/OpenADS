@@ -461,4 +461,63 @@ Connection::find_close(TableFind* find) {
     return {};
 }
 
+Connection::~Connection() {
+    // M11.4 — free every registered procedure's DLL handle.
+    for (auto& [_, proc] : procedures_) {
+        platform::dll_close(proc.dll);
+    }
+}
+
+util::Result<void>
+Connection::register_procedure(const std::string& name,
+                               const std::string& dll_path,
+                               const std::string& symbol) {
+    auto it = procedures_.find(name);
+    if (it != procedures_.end()) {
+        platform::dll_close(it->second.dll);
+        procedures_.erase(it);
+    }
+    auto h = platform::dll_load(dll_path);
+    if (!h) return h.error();
+    auto sym = platform::dll_symbol(h.value(), symbol);
+    if (!sym) {
+        platform::dll_close(h.value());
+        return sym.error();
+    }
+    Procedure p;
+    p.dll_path = dll_path;
+    p.symbol   = symbol;
+    p.dll      = h.value();
+    p.fn       = reinterpret_cast<ExtProcFn>(sym.value());
+    procedures_.emplace(name, std::move(p));
+    return {};
+}
+
+bool Connection::has_procedure(const std::string& name) const {
+    return procedures_.find(name) != procedures_.end();
+}
+
+util::Result<std::string>
+Connection::execute_procedure(const std::string& name,
+                              const std::string& packed_args) {
+    auto it = procedures_.find(name);
+    if (it == procedures_.end()) {
+        return util::Error{5000, 0, "procedure not registered", name};
+    }
+    if (!it->second.fn) {
+        return util::Error{5000, 0, "procedure has null fn pointer", name};
+    }
+    constexpr std::size_t cap = 1024;
+    std::string out;
+    out.resize(cap, '\0');
+    int rc = it->second.fn(packed_args.c_str(), out.data(), cap);
+    if (rc != 0) {
+        return util::Error{rc, 0,
+                           "procedure returned non-zero", name};
+    }
+    auto z = out.find('\0');
+    if (z != std::string::npos) out.resize(z);
+    return out;
+}
+
 } // namespace openads::session

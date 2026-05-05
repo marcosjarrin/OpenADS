@@ -915,6 +915,99 @@ bool sql_is_create_index(const std::string& sql) {
     return c.match_keyword("CREATE") && c.match_keyword("INDEX");
 }
 
+bool sql_is_create_procedure(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("CREATE") && c.match_keyword("PROCEDURE");
+}
+
+bool sql_is_execute_procedure(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("EXECUTE") && c.match_keyword("PROCEDURE");
+}
+
+util::Result<CreateProcedureStmt>
+parse_create_procedure(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("CREATE")) {
+        return util::Error{7200, 0, "expected CREATE", sql};
+    }
+    if (!c.match_keyword("PROCEDURE")) {
+        return util::Error{7200, 0, "expected PROCEDURE", sql};
+    }
+    CreateProcedureStmt stmt;
+    stmt.name = c.read_identifier();
+    if (stmt.name.empty()) {
+        return util::Error{7200, 0, "expected procedure name", sql};
+    }
+    if (!c.match_keyword("AS")) {
+        return util::Error{7200, 0, "expected AS", sql};
+    }
+    auto lit = c.read_string_literal();
+    if (!lit) return lit.error();
+    std::string spec = std::move(lit).value();
+    auto sep = spec.find("::");
+    if (sep == std::string::npos) {
+        return util::Error{7200, 0,
+            "procedure spec must be '<dll_path>::<symbol>'", sql};
+    }
+    stmt.dll_path = spec.substr(0, sep);
+    stmt.symbol   = spec.substr(sep + 2);
+    if (stmt.dll_path.empty() || stmt.symbol.empty()) {
+        return util::Error{7200, 0,
+            "procedure spec must be '<dll_path>::<symbol>'", sql};
+    }
+    c.match_char(';');
+    return stmt;
+}
+
+util::Result<ExecuteProcedureStmt>
+parse_execute_procedure(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("EXECUTE")) {
+        return util::Error{7200, 0, "expected EXECUTE", sql};
+    }
+    if (!c.match_keyword("PROCEDURE")) {
+        return util::Error{7200, 0, "expected PROCEDURE", sql};
+    }
+    ExecuteProcedureStmt stmt;
+    stmt.name = c.read_identifier();
+    if (stmt.name.empty()) {
+        return util::Error{7200, 0, "expected procedure name", sql};
+    }
+    if (!c.match_char('(')) {
+        return util::Error{7200, 0,
+            "expected '(' after procedure name", sql};
+    }
+    if (!c.match_char(')')) {
+        for (;;) {
+            ExecuteProcedureArg a;
+            if (c.peek_char('\'')) {
+                auto s = c.read_string_literal();
+                if (!s) return s.error();
+                a.text       = std::move(s).value();
+                a.is_numeric = false;
+            } else {
+                auto n = c.read_numeric_literal();
+                if (!n) return n.error();
+                a.is_numeric = true;
+                a.number     = n.value();
+                char tmp[64];
+                std::snprintf(tmp, sizeof(tmp), "%g", n.value());
+                a.text       = tmp;
+            }
+            stmt.args.push_back(std::move(a));
+            if (c.match_char(',')) continue;
+            break;
+        }
+        if (!c.match_char(')')) {
+            return util::Error{7200, 0,
+                "expected ')' to close argument list", sql};
+        }
+    }
+    c.match_char(';');
+    return stmt;
+}
+
 util::Result<CreateTableStmt>
 parse_create_table(const std::string& sql) {
     Cursor c(sql);

@@ -51,12 +51,14 @@ if(WIN32)
         platform/file_win32.cpp
         platform/lock_win32.cpp
         platform/mmap_win32.cpp
+        platform/dll_win32.cpp
     )
 else()
     target_sources(openads_core PRIVATE
         platform/file_posix.cpp
         platform/lock_posix.cpp
         platform/mmap_posix.cpp
+        platform/dll_posix.cpp
     )
 endif()
 
