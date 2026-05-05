@@ -78,12 +78,21 @@ struct Aggregate {
     std::string   column;   // empty for CountStar
 };
 
-// M10.25 — `HAVING <agg>(<col_or_*>) <op> <number>` (single comparison
-// for now; references an aggregate slot in the projection).
-struct HavingClause {
+// M10.25 — `HAVING <agg>(<col_or_*>) <op> <number>` leaf comparison.
+struct HavingCmp {
     Aggregate agg;
     WhereOp   op  = WhereOp::Eq;
     double    num = 0.0;
+};
+
+// M10.30 — full boolean tree over HAVING comparisons (AND / OR / NOT
+// / parens). Each leaf is a HavingCmp.
+struct HavingExpr {
+    enum class Kind { Cmp, And, Or, Not };
+    Kind                                     kind = Kind::Cmp;
+    HavingCmp                                cmp;
+    std::vector<std::unique_ptr<HavingExpr>> children;   // And / Or
+    std::unique_ptr<HavingExpr>              child;      // Not
 };
 
 // M10.13 — `INNER JOIN <table> ON <left_col> = <right_col>`.
@@ -113,9 +122,9 @@ struct SelectStmt {
     std::unique_ptr<WhereExpr> where;
     // Optional ORDER BY — single column ascending or descending (M10.6).
     std::optional<OrderBy>     order_by;
-    // M10.25 — GROUP BY columns + optional HAVING.
+    // M10.25 — GROUP BY columns + optional HAVING (M10.30 tree).
     std::vector<std::string>      group_by;
-    std::optional<HavingClause>   having;
+    std::unique_ptr<HavingExpr>   having;
     // M10.32 — LIMIT [OFFSET]. `limit < 0` means no limit; `offset`
     // skips that many surviving rows before counting toward limit.
     std::int64_t                  limit  = -1;

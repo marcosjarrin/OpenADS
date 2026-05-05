@@ -5033,30 +5033,53 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 gbs.push_back(std::move(gc));
             }
 
-            std::int32_t having_slot = -1;
-            if (parsed.value().having) {
-                const auto& ha = parsed.value().having->agg;
+            // M10.30 — HAVING is now a boolean tree of HavingCmp leaves.
+            // Resolve each leaf to a slot at compile time (validation
+            // only); per-group evaluation re-walks the tree.
+            auto resolve_slot = [&](const openads::sql::HavingCmp& ha)
+                                  -> std::int32_t {
                 for (std::size_t i = 0; i < slots.size(); ++i) {
-                    if (slots[i].def.kind == ha.kind &&
-                        slots[i].def.column == ha.column) {
-                        having_slot = static_cast<std::int32_t>(i);
-                        break;
+                    if (slots[i].def.kind == ha.agg.kind &&
+                        slots[i].def.column == ha.agg.column) {
+                        return static_cast<std::int32_t>(i);
                     }
                 }
-                if (having_slot < 0 &&
-                    ha.kind == openads::sql::AggregateKind::CountStar) {
+                if (ha.agg.kind == openads::sql::AggregateKind::CountStar) {
                     for (std::size_t i = 0; i < slots.size(); ++i) {
                         if (slots[i].def.kind ==
                             openads::sql::AggregateKind::CountStar) {
-                            having_slot = static_cast<std::int32_t>(i);
-                            break;
+                            return static_cast<std::int32_t>(i);
                         }
                     }
                 }
-                if (having_slot < 0) {
+                return -1;
+            };
+            if (parsed.value().having) {
+                std::function<openads::util::Result<std::monostate>(
+                    const openads::sql::HavingExpr&)> validate;
+                validate = [&](const openads::sql::HavingExpr& n)
+                            -> openads::util::Result<std::monostate> {
+                    using K = openads::sql::HavingExpr::Kind;
+                    if (n.kind == K::And || n.kind == K::Or) {
+                        for (auto& cn : n.children) {
+                            auto r = validate(*cn);
+                            if (!r) return r.error();
+                        }
+                        return std::monostate{};
+                    }
+                    if (n.kind == K::Not) return validate(*n.child);
+                    if (resolve_slot(n.cmp) < 0) {
+                        return openads::util::Error{
+                            openads::AE_PARSE_ERROR, 0,
+                            "HAVING aggregate must match one in projection",
+                            ""};
+                    }
+                    return std::monostate{};
+                };
+                auto vr = validate(*parsed.value().having);
+                if (!vr) {
                     c->close_table(th.value());
-                    return fail(openads::AE_PARSE_ERROR,
-                        "HAVING aggregate must match one in projection");
+                    return fail(vr.error());
                 }
             }
 
@@ -5176,24 +5199,42 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             file.push_back(0x0D);
 
+            std::function<bool(const openads::sql::HavingExpr&,
+                               const GroupAcc&)> eval_having;
+            eval_having = [&](const openads::sql::HavingExpr& n,
+                              const GroupAcc& acc) -> bool {
+                using K = openads::sql::HavingExpr::Kind;
+                if (n.kind == K::And) {
+                    for (auto& cn : n.children)
+                        if (!eval_having(*cn, acc)) return false;
+                    return true;
+                }
+                if (n.kind == K::Or) {
+                    for (auto& cn : n.children)
+                        if (eval_having(*cn, acc)) return true;
+                    return false;
+                }
+                if (n.kind == K::Not) return !eval_having(*n.child, acc);
+                std::int32_t si = resolve_slot(n.cmp);
+                if (si < 0) return false;
+                double v   = agg_at(acc, static_cast<std::size_t>(si));
+                double rhs = n.cmp.num;
+                switch (n.cmp.op) {
+                    case openads::sql::WhereOp::Eq: return v == rhs;
+                    case openads::sql::WhereOp::Ne: return v != rhs;
+                    case openads::sql::WhereOp::Lt: return v <  rhs;
+                    case openads::sql::WhereOp::Gt: return v >  rhs;
+                    case openads::sql::WhereOp::Le: return v <= rhs;
+                    case openads::sql::WhereOp::Ge: return v >= rhs;
+                    default: return false;
+                }
+            };
+
             std::uint32_t emitted = 0;
             for (auto& key : insertion_order) {
                 auto& acc = groups[key];
-                if (having_slot >= 0) {
-                    double v = agg_at(acc,
-                        static_cast<std::size_t>(having_slot));
-                    double n = parsed.value().having->num;
-                    bool keep = false;
-                    switch (parsed.value().having->op) {
-                        case openads::sql::WhereOp::Eq: keep = v == n; break;
-                        case openads::sql::WhereOp::Ne: keep = v != n; break;
-                        case openads::sql::WhereOp::Lt: keep = v <  n; break;
-                        case openads::sql::WhereOp::Gt: keep = v >  n; break;
-                        case openads::sql::WhereOp::Le: keep = v <= n; break;
-                        case openads::sql::WhereOp::Ge: keep = v >= n; break;
-                        default: keep = false;
-                    }
-                    if (!keep) continue;
+                if (parsed.value().having) {
+                    if (!eval_having(*parsed.value().having, acc)) continue;
                 }
                 file.push_back(' ');
                 for (std::size_t i = 0; i < gbs.size(); ++i) {
@@ -5620,6 +5661,214 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             term.literal2    = w.literal2;
             term.number2     = w.number2;
             if (w.subquery) {
+                // M10.29 — correlated scalar subquery. If the
+                // subquery's WHERE references an outer column, we
+                // re-evaluate the subquery per outer row instead of
+                // materialising a single value at compile time.
+                bool correlated = false;
+                if (w.subquery->where) {
+                    std::function<void(const openads::sql::WhereExpr&)> scan;
+                    scan = [&](const openads::sql::WhereExpr& n) {
+                        using K = openads::sql::WhereExpr::Kind;
+                        if (correlated) return;
+                        if (n.kind == K::And || n.kind == K::Or) {
+                            for (auto& cn : n.children) scan(*cn);
+                            return;
+                        }
+                        if (n.kind == K::Not) { scan(*n.child); return; }
+                        if (n.kind == K::Cmp && n.cmp.is_outer_ref)
+                            correlated = true;
+                    };
+                    scan(*w.subquery->where);
+                }
+                if (correlated) {
+                    auto sub = std::shared_ptr<openads::sql::SelectStmt>(
+                        const_cast<openads::sql::WhereCmp&>(w)
+                            .subquery.release());
+                    openads::engine::Table* outer_tbl = tbl;
+                    std::uint16_t outer_field =
+                        static_cast<std::uint16_t>(fidx);
+                    bool outer_is_numeric_local =
+                        tbl->field_descriptor(outer_field).type !=
+                            openads::drivers::DbfFieldType::Character;
+                    openads::sql::WhereOp op_local = w.op;
+                    std::string sub_table = sub->table;
+                    return Pred{[c, sub, outer_tbl, outer_field,
+                                 outer_is_numeric_local, op_local, sub_table]
+                                (openads::engine::Table&) -> bool {
+                        auto sh = c->open_table(
+                            sub_table,
+                            openads::engine::TableType::Cdx,
+                            openads::engine::OpenMode::Read);
+                        if (!sh) return false;
+                        openads::engine::Table* stbl =
+                            c->lookup_table(sh.value());
+                        if (!stbl) {
+                            c->close_table(sh.value()); return false;
+                        }
+                        auto trim = [](std::string s) {
+                            while (!s.empty() && s.back() == ' ')
+                                s.pop_back();
+                            return s;
+                        };
+                        std::function<bool(const openads::sql::WhereExpr&)>
+                            evalw;
+                        evalw = [&](const openads::sql::WhereExpr& n) -> bool {
+                            using K = openads::sql::WhereExpr::Kind;
+                            if (n.kind == K::And) {
+                                for (auto& cn : n.children)
+                                    if (!evalw(*cn)) return false;
+                                return true;
+                            }
+                            if (n.kind == K::Or) {
+                                for (auto& cn : n.children)
+                                    if (evalw(*cn)) return true;
+                                return false;
+                            }
+                            if (n.kind == K::Not) return !evalw(*n.child);
+                            if (n.kind != K::Cmp) return false;
+                            const auto& wn = n.cmp;
+                            std::int32_t fi = stbl->field_index(wn.column);
+                            if (fi < 0) return false;
+                            auto v = stbl->read_field(
+                                static_cast<std::uint16_t>(fi));
+                            if (!v) return false;
+                            int cmp = 0;
+                            if (wn.is_outer_ref) {
+                                std::int32_t ofi =
+                                    outer_tbl->field_index(wn.outer_column);
+                                if (ofi < 0) return false;
+                                auto ov = outer_tbl->read_field(
+                                    static_cast<std::uint16_t>(ofi));
+                                if (!ov) return false;
+                                cmp = trim(v.value().as_string)
+                                          .compare(trim(ov.value().as_string));
+                            } else if (wn.is_numeric) {
+                                double d = v.value().as_double;
+                                if      (d < wn.number) cmp = -1;
+                                else if (d > wn.number) cmp =  1;
+                            } else {
+                                cmp = trim(v.value().as_string)
+                                          .compare(wn.literal);
+                            }
+                            switch (wn.op) {
+                                case openads::sql::WhereOp::Eq: return cmp == 0;
+                                case openads::sql::WhereOp::Ne: return cmp != 0;
+                                case openads::sql::WhereOp::Lt: return cmp <  0;
+                                case openads::sql::WhereOp::Gt: return cmp >  0;
+                                case openads::sql::WhereOp::Le: return cmp <= 0;
+                                case openads::sql::WhereOp::Ge: return cmp >= 0;
+                                default: return false;
+                            }
+                        };
+                        double scalar_num = 0.0;
+                        std::string scalar_str;
+                        bool found = false;
+                        std::uint32_t srcount = stbl->record_count();
+                        if (sub->aggregates.size() == 1 &&
+                            sub->projection.empty()) {
+                            const auto& a = sub->aggregates[0];
+                            std::int32_t scol = -1;
+                            if (a.kind !=
+                                openads::sql::AggregateKind::CountStar) {
+                                scol = stbl->field_index(a.column);
+                                if (scol < 0) {
+                                    c->close_table(sh.value()); return false;
+                                }
+                            }
+                            std::uint64_t cnt = 0;
+                            double sum  = 0.0;
+                            double minv =  std::numeric_limits<double>::infinity();
+                            double maxv = -std::numeric_limits<double>::infinity();
+                            for (std::uint32_t r = 1; r <= srcount; ++r) {
+                                if (auto g = stbl->goto_record(r); !g) continue;
+                                if (stbl->is_deleted()) continue;
+                                if (sub->where && !evalw(*sub->where)) continue;
+                                if (a.kind ==
+                                    openads::sql::AggregateKind::CountStar) {
+                                    ++cnt; continue;
+                                }
+                                auto v = stbl->read_field(
+                                    static_cast<std::uint16_t>(scol));
+                                if (!v) continue;
+                                ++cnt;
+                                double d = v.value().as_double;
+                                sum += d;
+                                if (d < minv) minv = d;
+                                if (d > maxv) maxv = d;
+                            }
+                            switch (a.kind) {
+                                case openads::sql::AggregateKind::CountStar:
+                                case openads::sql::AggregateKind::Count:
+                                    scalar_num = static_cast<double>(cnt); break;
+                                case openads::sql::AggregateKind::Sum:
+                                    scalar_num = sum; break;
+                                case openads::sql::AggregateKind::Avg:
+                                    scalar_num = cnt
+                                        ? sum / static_cast<double>(cnt)
+                                        : 0.0; break;
+                                case openads::sql::AggregateKind::Min:
+                                    scalar_num = cnt ? minv : 0.0; break;
+                                case openads::sql::AggregateKind::Max:
+                                    scalar_num = cnt ? maxv : 0.0; break;
+                            }
+                            found = true;
+                            char tmp[64];
+                            std::snprintf(tmp, sizeof(tmp),
+                                          "%.17g", scalar_num);
+                            scalar_str = tmp;
+                        } else if (sub->projection.size() == 1 &&
+                                   sub->aggregates.empty()) {
+                            std::int32_t scol =
+                                stbl->field_index(sub->projection[0]);
+                            if (scol < 0) {
+                                c->close_table(sh.value()); return false;
+                            }
+                            for (std::uint32_t r = 1; r <= srcount; ++r) {
+                                if (auto g = stbl->goto_record(r); !g) continue;
+                                if (stbl->is_deleted()) continue;
+                                if (sub->where && !evalw(*sub->where)) continue;
+                                auto v = stbl->read_field(
+                                    static_cast<std::uint16_t>(scol));
+                                if (!v) continue;
+                                scalar_str = v.value().as_string;
+                                scalar_num = v.value().as_double;
+                                while (!scalar_str.empty() &&
+                                       scalar_str.back() == ' ')
+                                    scalar_str.pop_back();
+                                found = true;
+                                break;
+                            }
+                        } else {
+                            c->close_table(sh.value());
+                            return false;
+                        }
+                        c->close_table(sh.value());
+                        if (!found) return false;
+                        auto ov = outer_tbl->read_field(outer_field);
+                        if (!ov) return false;
+                        int cmp = 0;
+                        if (outer_is_numeric_local) {
+                            double d = ov.value().as_double;
+                            if      (d < scalar_num) cmp = -1;
+                            else if (d > scalar_num) cmp =  1;
+                        } else {
+                            std::string os = ov.value().as_string;
+                            while (!os.empty() && os.back() == ' ')
+                                os.pop_back();
+                            cmp = os.compare(scalar_str);
+                        }
+                        switch (op_local) {
+                            case openads::sql::WhereOp::Eq: return cmp == 0;
+                            case openads::sql::WhereOp::Ne: return cmp != 0;
+                            case openads::sql::WhereOp::Lt: return cmp <  0;
+                            case openads::sql::WhereOp::Gt: return cmp >  0;
+                            case openads::sql::WhereOp::Le: return cmp <= 0;
+                            case openads::sql::WhereOp::Ge: return cmp >= 0;
+                            default: return false;
+                        }
+                    }};
+                }
                 // M10.18: scalar subquery — materialise once at
                 // compile time. Open the subquery's table, walk for
                 // the first non-deleted record, read the projection's

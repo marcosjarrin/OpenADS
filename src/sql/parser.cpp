@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -653,59 +654,133 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         }
     }
     if (c.match_keyword("HAVING")) {
-        std::string head = c.read_identifier();
-        std::string upper;
-        upper.reserve(head.size());
-        for (char ch : head) {
-            upper.push_back(static_cast<char>(std::toupper(
-                static_cast<unsigned char>(ch))));
-        }
-        if (upper != "COUNT" && upper != "SUM" && upper != "AVG" &&
-            upper != "MIN"   && upper != "MAX") {
-            return util::Error{7200, 0,
-                "HAVING expects an aggregate call (COUNT/SUM/AVG/MIN/MAX)", sql};
-        }
-        if (!c.match_char('(')) {
-            return util::Error{7200, 0,
-                "expected '(' after aggregate name in HAVING", sql};
-        }
-        HavingClause hc;
-        if (upper == "COUNT") hc.agg.kind = AggregateKind::Count;
-        if (upper == "SUM")   hc.agg.kind = AggregateKind::Sum;
-        if (upper == "AVG")   hc.agg.kind = AggregateKind::Avg;
-        if (upper == "MIN")   hc.agg.kind = AggregateKind::Min;
-        if (upper == "MAX")   hc.agg.kind = AggregateKind::Max;
-        if (c.match_char('*')) {
-            if (upper != "COUNT") {
-                return util::Error{7200, 0,
-                    "* argument only valid for COUNT", sql};
+        // M10.30 — recursive HAVING parser. Mirror parse_where_expr's
+        // shape: OR-binds, AND-binds, NOT, parens, leaves. Each leaf
+        // is `<agg-call> <op> <number>`.
+        std::function<util::Result<std::unique_ptr<HavingExpr>>()> h_parse_or;
+        std::function<util::Result<std::unique_ptr<HavingExpr>>()> h_parse_and;
+        std::function<util::Result<std::unique_ptr<HavingExpr>>()> h_parse_primary;
+        auto h_parse_leaf =
+            [&]() -> util::Result<std::unique_ptr<HavingExpr>> {
+            std::string head = c.read_identifier();
+            std::string upper;
+            upper.reserve(head.size());
+            for (char ch : head) {
+                upper.push_back(static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(ch))));
             }
-            hc.agg.kind = AggregateKind::CountStar;
-        } else {
-            std::string col = c.read_identifier();
-            if (col.empty()) {
+            if (upper != "COUNT" && upper != "SUM" && upper != "AVG" &&
+                upper != "MIN"   && upper != "MAX") {
                 return util::Error{7200, 0,
-                    "expected column name inside HAVING aggregate", sql};
+                    "HAVING expects an aggregate call "
+                    "(COUNT/SUM/AVG/MIN/MAX)", sql};
             }
-            hc.agg.column = std::move(col);
-        }
-        if (!c.match_char(')')) {
-            return util::Error{7200, 0,
-                "expected ')' to close HAVING aggregate", sql};
-        }
-        if      (c.match_seq("<=")) hc.op = WhereOp::Le;
-        else if (c.match_seq(">=")) hc.op = WhereOp::Ge;
-        else if (c.match_seq("<>")) hc.op = WhereOp::Ne;
-        else if (c.match_seq("!=")) hc.op = WhereOp::Ne;
-        else if (c.match_char('=')) hc.op = WhereOp::Eq;
-        else if (c.match_char('<')) hc.op = WhereOp::Lt;
-        else if (c.match_char('>')) hc.op = WhereOp::Gt;
-        else return util::Error{7200, 0,
-            "expected =, !=, <>, <, >, <= or >= after HAVING aggregate", sql};
-        auto n = c.read_numeric_literal();
-        if (!n) return n.error();
-        hc.num = n.value();
-        stmt.having = std::move(hc);
+            if (!c.match_char('(')) {
+                return util::Error{7200, 0,
+                    "expected '(' after aggregate name in HAVING", sql};
+            }
+            auto node = std::make_unique<HavingExpr>();
+            node->kind = HavingExpr::Kind::Cmp;
+            if (upper == "COUNT") node->cmp.agg.kind = AggregateKind::Count;
+            if (upper == "SUM")   node->cmp.agg.kind = AggregateKind::Sum;
+            if (upper == "AVG")   node->cmp.agg.kind = AggregateKind::Avg;
+            if (upper == "MIN")   node->cmp.agg.kind = AggregateKind::Min;
+            if (upper == "MAX")   node->cmp.agg.kind = AggregateKind::Max;
+            if (c.match_char('*')) {
+                if (upper != "COUNT") {
+                    return util::Error{7200, 0,
+                        "* argument only valid for COUNT", sql};
+                }
+                node->cmp.agg.kind = AggregateKind::CountStar;
+            } else {
+                std::string col = c.read_identifier();
+                if (col.empty()) {
+                    return util::Error{7200, 0,
+                        "expected column name inside HAVING aggregate", sql};
+                }
+                node->cmp.agg.column = std::move(col);
+            }
+            if (!c.match_char(')')) {
+                return util::Error{7200, 0,
+                    "expected ')' to close HAVING aggregate", sql};
+            }
+            if      (c.match_seq("<=")) node->cmp.op = WhereOp::Le;
+            else if (c.match_seq(">=")) node->cmp.op = WhereOp::Ge;
+            else if (c.match_seq("<>")) node->cmp.op = WhereOp::Ne;
+            else if (c.match_seq("!=")) node->cmp.op = WhereOp::Ne;
+            else if (c.match_char('=')) node->cmp.op = WhereOp::Eq;
+            else if (c.match_char('<')) node->cmp.op = WhereOp::Lt;
+            else if (c.match_char('>')) node->cmp.op = WhereOp::Gt;
+            else return util::Error{7200, 0,
+                "expected =, !=, <>, <, >, <= or >= after HAVING aggregate", sql};
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            node->cmp.num = n.value();
+            return node;
+        };
+        h_parse_primary = [&]() -> util::Result<std::unique_ptr<HavingExpr>> {
+            if (c.match_keyword("NOT")) {
+                auto inner = h_parse_primary();
+                if (!inner) return inner.error();
+                std::unique_ptr<HavingExpr> ip;
+                ip.reset(inner.value().release());
+                auto node = std::make_unique<HavingExpr>();
+                node->kind  = HavingExpr::Kind::Not;
+                node->child = std::move(ip);
+                return node;
+            }
+            if (c.match_char('(')) {
+                auto inner = h_parse_or();
+                if (!inner) return inner.error();
+                if (!c.match_char(')')) {
+                    return util::Error{7200, 0,
+                        "expected ')' in HAVING expression", sql};
+                }
+                std::unique_ptr<HavingExpr> ip;
+                ip.reset(inner.value().release());
+                return ip;
+            }
+            return h_parse_leaf();
+        };
+        h_parse_and = [&]() -> util::Result<std::unique_ptr<HavingExpr>> {
+            auto left = h_parse_primary();
+            if (!left) return left.error();
+            std::unique_ptr<HavingExpr> lhs;
+            lhs.reset(left.value().release());
+            while (c.match_keyword("AND")) {
+                auto right = h_parse_primary();
+                if (!right) return right.error();
+                std::unique_ptr<HavingExpr> rhs;
+                rhs.reset(right.value().release());
+                auto node = std::make_unique<HavingExpr>();
+                node->kind = HavingExpr::Kind::And;
+                node->children.push_back(std::move(lhs));
+                node->children.push_back(std::move(rhs));
+                lhs = std::move(node);
+            }
+            return lhs;
+        };
+        h_parse_or = [&]() -> util::Result<std::unique_ptr<HavingExpr>> {
+            auto left = h_parse_and();
+            if (!left) return left.error();
+            std::unique_ptr<HavingExpr> lhs;
+            lhs.reset(left.value().release());
+            while (c.match_keyword("OR")) {
+                auto right = h_parse_and();
+                if (!right) return right.error();
+                std::unique_ptr<HavingExpr> rhs;
+                rhs.reset(right.value().release());
+                auto node = std::make_unique<HavingExpr>();
+                node->kind = HavingExpr::Kind::Or;
+                node->children.push_back(std::move(lhs));
+                node->children.push_back(std::move(rhs));
+                lhs = std::move(node);
+            }
+            return lhs;
+        };
+        auto root = h_parse_or();
+        if (!root) return root.error();
+        stmt.having.reset(root.value().release());
     }
 
     // Optional ORDER BY — single column ascending or descending (M10.6).

@@ -218,6 +218,53 @@ TEST_CASE("M10.19 aggregate scalar subquery — COUNT(*)") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.29 correlated scalar subquery — per-row re-eval") {
+    auto dir = fs::temp_directory_path() / "openads_m10_29";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // outer: (CUST, AMT)
+    // inner: (CUST, LIMIT_)
+    // predicate: outer.AMT > (SELECT LIMIT_ FROM b WHERE CUST = CUST)
+    write_dbf_typed(dir / "a.dbf",
+        {{"CUST", 'C', 4}, {"AMT", 'N', 4}},
+        {{"C001", "  10"},
+         {"C001", "  50"},
+         {"C002", "  30"},
+         {"C002", "  90"}});
+    write_dbf_typed(dir / "b.dbf",
+        {{"CUST", 'C', 4}, {"LIMIT_", 'N', 4}},
+        {{"C001", "  20"},
+         {"C002", "  60"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Rows where AMT exceeds the per-customer limit:
+    //   C001 / 50 > 20 → keep (recno 2)
+    //   C001 / 10        no
+    //   C002 / 90 > 60 → keep (recno 4)
+    //   C002 / 30        no
+    UNSIGNED8 sql[300] =
+        "SELECT * FROM a.dbf WHERE AMT > "
+        "(SELECT LIMIT_ FROM b.dbf WHERE CUST = CUST)";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    auto got = walk(hCur);
+    CHECK(got == std::set<UNSIGNED32>{2, 4});
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.18 scalar subquery with no row → predicate matches nothing") {
     auto dir = fs::temp_directory_path() / "openads_m10_18_empty";
     std::error_code ec;

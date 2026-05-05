@@ -240,6 +240,49 @@ TEST_CASE("M10.25 GROUP BY single column + COUNT/SUM") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.30 GROUP BY + multi-comparison HAVING tree") {
+    auto dir = fs::temp_directory_path() / "openads_m10_30_having";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_grp_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // 5-row CITY+AMT data:
+    //   NYC,10  NYC,20  LON,30  LON,40  PAR,5
+    // SUM by city: NYC=30, LON=70, PAR=5.
+    // HAVING COUNT(*) > 1 AND SUM(AMT) > 50 → only LON.
+    UNSIGNED8 sql[260] =
+        "SELECT COUNT(*), SUM(AMT) FROM data.dbf "
+        "GROUP BY CITY HAVING COUNT(*) > 1 AND SUM(AMT) > 50";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 1);                                 // LON only
+
+    // OR-form: COUNT(*) > 1 OR SUM(AMT) > 100 → NYC + LON survive
+    // (NYC has 2 rows; LON also has 2; PAR has 1 and SUM=5).
+    UNSIGNED8 sql2[260] =
+        "SELECT COUNT(*), SUM(AMT) FROM data.dbf "
+        "GROUP BY CITY HAVING COUNT(*) > 1 OR SUM(AMT) > 100";
+    ADSHANDLE hCur2 = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql2, &hCur2) == 0);
+    UNSIGNED32 cnt2 = 0;
+    REQUIRE(AdsGetRecordCount(hCur2, 0, &cnt2) == 0);
+    CHECK(cnt2 == 2);                                // NYC + LON
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.25 GROUP BY + HAVING filters groups") {
     auto dir = fs::temp_directory_path() / "openads_m10_25_having";
     std::error_code ec;
