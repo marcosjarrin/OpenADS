@@ -4517,51 +4517,116 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         openads::AE_INTERNAL_ERROR, 0,
                         "scalar subquery post-open", ""};
                 }
-                if (sq.projection.empty() || !sq.aggregates.empty()) {
-                    c->close_table(sh.value());
-                    return openads::util::Error{
-                        openads::AE_PARSE_ERROR, 0,
-                        "scalar subquery must project a single column "
-                        "(aggregates and SELECT * deferred)", ""};
-                }
-                std::int32_t scol = stbl->field_index(sq.projection[0]);
-                if (scol < 0) {
-                    c->close_table(sh.value());
-                    return openads::util::Error{
-                        openads::AE_COLUMN_NOT_FOUND, 0,
-                        sq.projection[0].c_str(), ""};
-                }
-                bool found = false;
-                std::uint32_t srcount = stbl->record_count();
-                // Mirror the compare semantics on the outer column's
-                // type — character outer columns compare by string,
-                // numeric outer columns by double.
                 bool outer_is_numeric =
                     tbl->field_descriptor(static_cast<std::uint16_t>(fidx))
                         .type != openads::drivers::DbfFieldType::Character;
-                for (std::uint32_t r = 1; r <= srcount; ++r) {
-                    if (auto g = stbl->goto_record(r); !g) continue;
-                    if (stbl->is_deleted()) continue;
-                    auto v = stbl->read_field(
-                        static_cast<std::uint16_t>(scol));
-                    if (!v) continue;
-                    term.literal    = v.value().as_string;
-                    term.is_numeric = outer_is_numeric;
-                    term.number     = v.value().as_double;
-                    // Trim trailing spaces on string compare to match
-                    // the natural read-back trim semantics.
-                    while (!term.literal.empty() &&
-                           term.literal.back() == ' ') {
-                        term.literal.pop_back();
+
+                // M10.19 — aggregate scalar subquery
+                // (`= (SELECT MAX(x) FROM t)`). Single aggregate slot
+                // computes against the inner table; numeric result
+                // lands directly in the cmp's number/literal.
+                if (sq.aggregates.size() == 1 && sq.projection.empty()) {
+                    const auto& a = sq.aggregates[0];
+                    std::int32_t scol = -1;
+                    if (a.kind != openads::sql::AggregateKind::CountStar) {
+                        scol = stbl->field_index(a.column);
+                        if (scol < 0) {
+                            c->close_table(sh.value());
+                            return openads::util::Error{
+                                openads::AE_COLUMN_NOT_FOUND, 0,
+                                a.column.c_str(), ""};
+                        }
                     }
-                    found = true;
-                    break;
-                }
-                c->close_table(sh.value());
-                if (!found) {
-                    // No row → predicate matches nothing; encode as
-                    // a guaranteed-false comparison.
-                    return Pred{[](openads::engine::Table&) { return false; }};
+                    std::uint64_t cnt = 0;
+                    double sum = 0.0;
+                    double minv =  std::numeric_limits<double>::infinity();
+                    double maxv = -std::numeric_limits<double>::infinity();
+                    std::uint32_t srcount = stbl->record_count();
+                    for (std::uint32_t r = 1; r <= srcount; ++r) {
+                        if (auto g = stbl->goto_record(r); !g) continue;
+                        if (stbl->is_deleted()) continue;
+                        if (a.kind == openads::sql::AggregateKind::CountStar) {
+                            ++cnt;
+                            continue;
+                        }
+                        auto v = stbl->read_field(
+                            static_cast<std::uint16_t>(scol));
+                        if (!v) continue;
+                        ++cnt;
+                        double d = v.value().as_double;
+                        sum += d;
+                        if (d < minv) minv = d;
+                        if (d > maxv) maxv = d;
+                    }
+                    c->close_table(sh.value());
+                    double result = 0.0;
+                    switch (a.kind) {
+                        case openads::sql::AggregateKind::CountStar:
+                        case openads::sql::AggregateKind::Count:
+                            result = static_cast<double>(cnt);
+                            break;
+                        case openads::sql::AggregateKind::Sum: result = sum; break;
+                        case openads::sql::AggregateKind::Avg:
+                            result = cnt ? sum / static_cast<double>(cnt) : 0.0;
+                            break;
+                        case openads::sql::AggregateKind::Min:
+                            result = cnt ? minv : 0.0; break;
+                        case openads::sql::AggregateKind::Max:
+                            result = cnt ? maxv : 0.0; break;
+                    }
+                    term.is_numeric = outer_is_numeric;
+                    term.number     = result;
+                    char tmp[64];
+                    std::snprintf(tmp, sizeof(tmp), "%.17g", result);
+                    term.literal = tmp;
+                    if (!outer_is_numeric) {
+                        // String comparison: drop trailing zeros so
+                        // "42.000" compares clean against the column.
+                        std::snprintf(tmp, sizeof(tmp), "%g", result);
+                        term.literal = tmp;
+                    }
+                } else if (!sq.projection.empty() && sq.aggregates.empty()) {
+                    if (sq.projection.size() != 1) {
+                        c->close_table(sh.value());
+                        return openads::util::Error{
+                            openads::AE_PARSE_ERROR, 0,
+                            "scalar subquery must project a single column", ""};
+                    }
+                    std::int32_t scol = stbl->field_index(sq.projection[0]);
+                    if (scol < 0) {
+                        c->close_table(sh.value());
+                        return openads::util::Error{
+                            openads::AE_COLUMN_NOT_FOUND, 0,
+                            sq.projection[0].c_str(), ""};
+                    }
+                    bool found = false;
+                    std::uint32_t srcount = stbl->record_count();
+                    for (std::uint32_t r = 1; r <= srcount; ++r) {
+                        if (auto g = stbl->goto_record(r); !g) continue;
+                        if (stbl->is_deleted()) continue;
+                        auto v = stbl->read_field(
+                            static_cast<std::uint16_t>(scol));
+                        if (!v) continue;
+                        term.literal    = v.value().as_string;
+                        term.is_numeric = outer_is_numeric;
+                        term.number     = v.value().as_double;
+                        while (!term.literal.empty() &&
+                               term.literal.back() == ' ') {
+                            term.literal.pop_back();
+                        }
+                        found = true;
+                        break;
+                    }
+                    c->close_table(sh.value());
+                    if (!found) {
+                        return Pred{[](openads::engine::Table&) { return false; }};
+                    }
+                } else {
+                    c->close_table(sh.value());
+                    return openads::util::Error{
+                        openads::AE_PARSE_ERROR, 0,
+                        "scalar subquery must project exactly one "
+                        "column or one aggregate", ""};
                 }
             }
             if (w.op == openads::sql::WhereOp::Contains) {
