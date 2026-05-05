@@ -127,11 +127,16 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
 }
 
 util::Result<void> Connection::begin_tx() {
+    // M11.3 — nested BEGIN simply increments depth without starting
+    // a fresh inner transaction. Only the outermost call activates
+    // tx_ and writes the begin record to the log.
     if (tx_.active()) {
-        return util::Error{5000, 0, "transaction already active", ""};
+        ++tx_nest_depth_;
+        return {};
     }
     std::uint64_t tid = next_tx_id_++;
     tx_.activate(tid, &tx_log_);
+    tx_nest_depth_ = 1;
     if (auto r = tx_log_.append_begin(tid); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         holder->attach_tx(&tx_, static_cast<engine::Tx::TableId>(h));
@@ -147,6 +152,12 @@ util::Result<void> Connection::commit_tx() {
     if (!tx_.active()) {
         return util::Error{5000, 0, "no active transaction", ""};
     }
+    // M11.3 — nested COMMIT just decrements depth; only the outermost
+    // commit flushes pending writes and truncates the log.
+    if (tx_nest_depth_ > 1) {
+        --tx_nest_depth_;
+        return {};
+    }
     if (auto r = tx_log_.append_commit(tx_.id()); !r) return r.error();
     for (auto& [h, holder] : tables_) {
         (void)h;
@@ -154,6 +165,7 @@ util::Result<void> Connection::commit_tx() {
         (void)holder->flush();
     }
     tx_.clear();
+    tx_nest_depth_ = 0;
     (void)tx_log_.truncate();
     return {};
 }
@@ -190,6 +202,10 @@ util::Result<void> Connection::rollback_tx() {
         (void)holder->flush();
     }
     tx_.clear();
+    // M11.3 — rollback aborts every nested level in one shot, matching
+    // ADS / SQL Server semantics where an inner ROLLBACK kills the
+    // entire transaction regardless of nesting depth.
+    tx_nest_depth_ = 0;
     (void)tx_log_.truncate();
     return {};
 }
@@ -231,6 +247,20 @@ Connection::rollback_to_savepoint(const std::string& name) {
         }
     }
     tx_.truncate_ops_to(idx);
+    return {};
+}
+
+util::Result<void>
+Connection::release_savepoint(const std::string& name) {
+    // M11.3 — drop the named savepoint marker, keeping its operations
+    // as part of the outer transaction. Standard SQL "RELEASE
+    // SAVEPOINT" semantics.
+    if (!tx_.active()) {
+        return util::Error{5000, 0, "no active transaction", ""};
+    }
+    if (!tx_.release_savepoint(name)) {
+        return util::Error{5000, 0, "savepoint not found", name};
+    }
     return {};
 }
 

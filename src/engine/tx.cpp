@@ -46,4 +46,17 @@ void Tx::truncate_ops_to(std::size_t idx) {
     }
 }
 
+bool Tx::release_savepoint(const std::string& name) {
+    // M11.3 — drop the most recent savepoint with this name; ops are
+    // kept (the changes between create + release stay part of the
+    // outer transaction).
+    for (auto it = savepoints_.rbegin(); it != savepoints_.rend(); ++it) {
+        if (it->first == name) {
+            savepoints_.erase(std::next(it).base());
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace openads::engine

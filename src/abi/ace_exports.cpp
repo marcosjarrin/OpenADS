@@ -3335,6 +3335,21 @@ UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     return ok();
 }
 
+// M11.3 — release a savepoint without rolling back. The work done
+// since CreateSavepoint stays part of the enclosing transaction.
+UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lk(s.mu);
+    Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!c || pucName == nullptr) {
+        return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    }
+    auto name = openads::abi::to_internal(pucName, 0);
+    auto r = c->release_savepoint(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint) {
     auto& s = state();
     std::lock_guard<std::mutex> lk(s.mu);

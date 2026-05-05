@@ -80,6 +80,7 @@ EXPORTS
     AdsRollbackTransaction
     AdsInTransaction
     AdsCreateSavepoint
+    AdsReleaseSavepoint
     AdsRollbackTransaction80
     AdsDDCreate
     AdsDDAddTable

@@ -140,3 +140,137 @@ TEST_CASE("AdsRollbackTransaction80 with null savepoint = full rollback") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M11.3 AdsReleaseSavepoint drops marker, keeps work") {
+    const auto dir = fs::temp_directory_path() / "openads_m11_3_release";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    REQUIRE(AdsBeginTransaction(hConn) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 v1[8]   = "BBBBB";
+    REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
+
+    UNSIGNED8 sp_name[16] = "sp1";
+    REQUIRE(AdsCreateSavepoint(hConn, sp_name) == 0);
+    UNSIGNED8 v2[8] = "CCCCC";
+    REQUIRE(AdsSetString(hTable, fld, v2, 5) == 0);
+
+    // Release sp1 — marker disappears, second update remains.
+    REQUIRE(AdsReleaseSavepoint(hConn, sp_name) == 0);
+
+    // Rolling back to sp1 now must fail (marker gone).
+    CHECK(AdsRollbackTransaction80(hConn, sp_name) != 0);
+
+    REQUIRE(AdsCommitTransaction(hConn) == 0);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "CCCCC");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M11.3 nested BEGIN / COMMIT only flushes outermost") {
+    const auto dir = fs::temp_directory_path() / "openads_m11_3_nest";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    REQUIRE(AdsBeginTransaction(hConn) == 0);            // depth = 1
+    REQUIRE(AdsBeginTransaction(hConn) == 0);            // depth = 2
+    UNSIGNED16 inTx = 0;
+    REQUIRE(AdsInTransaction(hConn, &inTx) == 0);
+    CHECK(inTx == 1);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 v1[8]   = "BBBBB";
+    REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
+
+    REQUIRE(AdsCommitTransaction(hConn) == 0);           // depth = 1
+    REQUIRE(AdsInTransaction(hConn, &inTx) == 0);
+    CHECK(inTx == 1);                                     // still active
+
+    REQUIRE(AdsCommitTransaction(hConn) == 0);           // depth = 0 → flush
+    REQUIRE(AdsInTransaction(hConn, &inTx) == 0);
+    CHECK(inTx == 0);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BBBBB");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M11.3 nested BEGIN + ROLLBACK kills entire transaction") {
+    const auto dir = fs::temp_directory_path() / "openads_m11_3_nest_rb";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    make_dbf(dir, "data.dbf");
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    REQUIRE(AdsBeginTransaction(hConn) == 0);            // depth = 1
+    REQUIRE(AdsBeginTransaction(hConn) == 0);            // depth = 2
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 fld[16] = "TAG";
+    UNSIGNED8 v1[8]   = "BBBBB";
+    REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
+
+    // Inner ROLLBACK aborts entire transaction at any depth.
+    REQUIRE(AdsRollbackTransaction(hConn) == 0);
+    UNSIGNED16 inTx = 1;
+    REQUIRE(AdsInTransaction(hConn, &inTx) == 0);
+    CHECK(inTx == 0);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8 buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "AAAAA");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

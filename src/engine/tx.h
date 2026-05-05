@@ -58,6 +58,9 @@ public:
     const std::vector<OrderedOp>& ops() const noexcept { return ops_; }
     std::size_t savepoint_index(const std::string& name) const;
     void truncate_ops_to(std::size_t idx);
+    // M11.3 — drop a named savepoint marker without rolling back.
+    // Returns true if the savepoint existed.
+    bool release_savepoint(const std::string& name);
 
     bool active() const noexcept { return active_; }
 

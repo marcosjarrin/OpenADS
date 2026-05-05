@@ -46,7 +46,9 @@ public:
     util::Result<void> rollback_tx();
     util::Result<void> create_savepoint(const std::string& name);
     util::Result<void> rollback_to_savepoint(const std::string& name);
+    util::Result<void> release_savepoint(const std::string& name);
     bool               in_tx() const noexcept { return tx_.active(); }
+    int                tx_nest_depth() const noexcept { return tx_nest_depth_; }
 
     // Data Dictionary surface (M6).
     bool has_dd() const noexcept { return dd_.has_value(); }
@@ -82,6 +84,10 @@ private:
     engine::LsnMap                                             lsn_map_;
     engine::Tx                                                 tx_;
     std::uint64_t                                              next_tx_id_ = 1;
+    // M11.3 — nested BEGIN/COMMIT depth. Outer BEGIN sets it to 1;
+    // each nested BEGIN bumps it; each nested COMMIT decrements;
+    // only the outermost commit triggers real flush + log truncate.
+    int                                                        tx_nest_depth_ = 0;
 
     std::optional<engine::DataDict>                            dd_;
 };
