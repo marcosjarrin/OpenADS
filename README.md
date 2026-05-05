@@ -369,6 +369,10 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.45-done` | SQL date arithmetic on YYYYMMDD strings — `DATEDIFF(a, b)` (days), `DATEADD(col, n)` (returns YYYYMMDD). |
 | `m10.46-done` | SQL derived tables — `FROM (SELECT ...) [AS alias]`. Inner SELECT runs through the recursive dispatcher; outer WHERE / ORDER BY / projection apply on top of its cursor. |
 | `m10.48-done` | SQL Common Table Expression — `WITH name AS (SELECT ...) SELECT ... FROM name`. Rewritten in parse_select to a derived-table form by inline-substituting `name` with `(<inner>)`. |
+| `m10.44-done` | SQL `<col> IS [NOT] NULL` — first checks the VFP NULL bitmap (M11.6); falls back to a trim-trailing-space check that treats all-blank cells as NULL for non-bitmap-bearing DBFs. |
+| `m10.47-done` | SQL `ROW_NUMBER() OVER (...)` in projection — first cut emits the 1-based position in the materialised result cursor; PARTITION BY / ORDER BY inside the OVER are parsed but ignored. |
+| `m11.6-done`  | VFP NULL bitmap — `parse_dbf_fields` detects flags-byte bit 1 + assigns each nullable field a `null_bit` ordinal; `Table::is_field_null` reads `_NullFlags` system column and tests the bit. |
+| `m12.1-done`  | Phase 2 wire-protocol skeleton — `network/wire.{h,cpp}` defines a length-prefixed frame (4 BE bytes + opcode + payload) with an Opcode enum reserved for Hello / Connect / OpenTable / ExecuteSQL / Fetch / Disconnect / Error. No socket layer yet. |
 
 #### Still planned for 0.3.x
 
