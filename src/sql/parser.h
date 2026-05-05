@@ -18,7 +18,7 @@ namespace openads::sql {
 // joins, aggregates, subqueries, ORDER BY, INSERT / UPDATE / DELETE
 // land in subsequent milestones.
 
-enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge, Contains };
+enum class WhereOp { Eq, Ne, Lt, Gt, Le, Ge, Contains, Between, Like };
 
 // Forward declaration so WhereCmp + InClause + WhereExpr can hold
 // optional sub-SelectStmts without seeing the full struct yet.
@@ -40,6 +40,11 @@ struct WhereCmp {
     // `literal`/`number`.
     bool        is_outer_ref = false;
     std::string outer_column;
+    // M10.33 — BETWEEN's upper bound (`<col> BETWEEN lit1 AND lit2`).
+    // When op == WhereOp::Between, `literal`/`number` hold the lower
+    // bound and `literal2`/`number2` hold the upper bound.
+    std::string literal2;
+    double      number2 = 0.0;
 };
 
 // M10.15 — `<col> IN (<lit>, <lit>, …)` or `<col> IN (<sub-SELECT>)`.
@@ -93,6 +98,9 @@ struct JoinClause {
 
 struct SelectStmt {
     std::string                table;
+    // M10.31 — DISTINCT keyword right after SELECT. When set, the
+    // result cursor dedups by projected column values.
+    bool                       distinct = false;
     // Empty `projection` means `SELECT *` (every column visible);
     // otherwise the cursor exposes only the listed columns in order.
     std::vector<std::string>   projection;
@@ -108,6 +116,10 @@ struct SelectStmt {
     // M10.25 — GROUP BY columns + optional HAVING.
     std::vector<std::string>      group_by;
     std::optional<HavingClause>   having;
+    // M10.32 — LIMIT [OFFSET]. `limit < 0` means no limit; `offset`
+    // skips that many surviving rows before counting toward limit.
+    std::int64_t                  limit  = -1;
+    std::int64_t                  offset = 0;
 };
 
 util::Result<SelectStmt> parse_select(const std::string& sql);

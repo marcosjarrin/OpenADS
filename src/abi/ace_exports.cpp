@@ -321,6 +321,31 @@ UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
 extern "C++" {
 namespace {
 
+// M10.33 — standard SQL LIKE pattern. `%` matches any sequence
+// (including empty), `_` matches a single character. Greedy match
+// with backtracking — adequate for short DBF cells.
+static inline bool sql_like_match(const std::string& s,
+                                  const std::string& pat) {
+    std::size_t si = 0, pi = 0;
+    std::size_t star = std::string::npos, ss = 0;
+    while (si < s.size()) {
+        if (pi < pat.size() &&
+            (pat[pi] == '_' || pat[pi] == s[si])) {
+            ++si; ++pi;
+        } else if (pi < pat.size() && pat[pi] == '%') {
+            star = pi++;
+            ss   = si;
+        } else if (star != std::string::npos) {
+            pi = star + 1;
+            si = ++ss;
+        } else {
+            return false;
+        }
+    }
+    while (pi < pat.size() && pat[pi] == '%') ++pi;
+    return pi == pat.size();
+}
+
 // Map an rddads type name (Character, Numeric, Date, ...) to the
 // DBF field-descriptor type byte plus a default length / decimals
 // when those aren't explicit in the field-def string.
@@ -1059,7 +1084,29 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                              UNSIGNED32* pulRecordCount) {
     Table* t = get_table(hTable);
     if (!t || pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    *pulRecordCount = t->record_count();
+    // M10.31 / M10.32 — when SQL has materialised a traversal sequence
+    // (DISTINCT / LIMIT / OFFSET / ORDER BY), report that sequence's
+    // length so apps that drive walking by record-count get the
+    // post-clause row count.
+    if (t->has_recno_sequence()) {
+        *pulRecordCount = static_cast<UNSIGNED32>(t->recno_sequence().size());
+    } else if (t->has_filter()) {
+        // M10.33 — WHERE-filtered cursor without an installed
+        // sequence (no ORDER BY / DISTINCT / LIMIT). Count
+        // matching live rows on demand so BETWEEN / LIKE / regular
+        // predicates surface their cardinality through GetRecordCount.
+        std::uint32_t rc = t->record_count();
+        std::uint32_t pass = 0;
+        for (std::uint32_t r = 1; r <= rc; ++r) {
+            if (auto g = t->goto_record(r); !g) continue;
+            if (t->is_deleted()) continue;
+            if (!t->passes_filter()) continue;
+            ++pass;
+        }
+        *pulRecordCount = pass;
+    } else {
+        *pulRecordCount = t->record_count();
+    }
     return ok();
 }
 
@@ -5211,6 +5258,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             bool                                is_numeric = false;
             double                              number = 0.0;
             std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
+            // M10.33 — BETWEEN upper bound.
+            std::string                         literal2;
+            double                              number2 = 0.0;
         };
 
         // Compile the AST into a Predicate functor.
@@ -5427,6 +5477,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             term.literal     = w.literal;
             term.is_numeric  = w.is_numeric;
             term.number      = w.number;
+            term.literal2    = w.literal2;
+            term.number2     = w.number2;
             if (w.subquery) {
                 // M10.18: scalar subquery — materialise once at
                 // compile time. Open the subquery's table, walk for
@@ -5576,6 +5628,20 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
+                if (term.op == openads::sql::WhereOp::Between) {
+                    if (term.is_numeric) {
+                        double d = v.value().as_double;
+                        return d >= term.number && d <= term.number2;
+                    }
+                    auto& sv = v.value().as_string;
+                    return sv.compare(term.literal)  >= 0 &&
+                           sv.compare(term.literal2) <= 0;
+                }
+                if (term.op == openads::sql::WhereOp::Like) {
+                    auto sv = v.value().as_string;
+                    while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                    return sql_like_match(sv, term.literal);
+                }
                 int cmp = 0;
                 if (term.is_numeric) {
                     double d = v.value().as_double;
@@ -5592,8 +5658,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     case openads::sql::WhereOp::Le: return cmp <= 0;
                     case openads::sql::WhereOp::Ge: return cmp >= 0;
                     case openads::sql::WhereOp::Contains: return true;
+                    default: return false;
                 }
-                return false;
             }};
         };
 
@@ -5667,6 +5733,70 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         for (auto& kv : rows) seq.push_back(kv.recno);
         // ORDER BY supersedes the row filter — the materialised list
         // already excludes WHERE-rejected rows.
+        tbl->clear_filter();
+        tbl->set_recno_sequence(std::move(seq));
+    }
+
+    // M10.31 — DISTINCT. M10.32 — LIMIT [OFFSET]. Both operate on the
+    // post-WHERE / post-ORDER-BY traversal sequence; if neither
+    // ORDER BY nor a recno_sequence is present yet, walk the
+    // filtered cursor to materialise one first.
+    bool need_seq_post = parsed.value().distinct ||
+                         parsed.value().limit  >= 0 ||
+                         parsed.value().offset > 0;
+    if (need_seq_post) {
+        std::vector<std::uint32_t> seq;
+        if (tbl->has_recno_sequence()) {
+            seq = tbl->recno_sequence();
+        } else {
+            std::uint32_t rcount = tbl->record_count();
+            seq.reserve(rcount);
+            for (std::uint32_t r = 1; r <= rcount; ++r) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                if (tbl->is_deleted()) continue;
+                if (!tbl->passes_filter()) continue;
+                seq.push_back(r);
+            }
+        }
+        if (parsed.value().distinct) {
+            std::vector<std::uint16_t> proj_indices;
+            if (parsed.value().projection.empty()) {
+                std::uint16_t nf = tbl->field_count();
+                proj_indices.reserve(nf);
+                for (std::uint16_t i = 0; i < nf; ++i) proj_indices.push_back(i);
+            } else {
+                for (auto& cn : parsed.value().projection) {
+                    std::int32_t fi = tbl->field_index(cn);
+                    if (fi < 0) return fail(openads::AE_COLUMN_NOT_FOUND,
+                                            cn.c_str());
+                    proj_indices.push_back(static_cast<std::uint16_t>(fi));
+                }
+            }
+            std::unordered_set<std::string> seen;
+            std::vector<std::uint32_t> dedup;
+            dedup.reserve(seq.size());
+            for (auto r : seq) {
+                if (auto g = tbl->goto_record(r); !g) continue;
+                std::string key;
+                for (auto fi : proj_indices) {
+                    auto v = tbl->read_field(fi);
+                    if (v) key.append(v.value().as_string);
+                    key.push_back('\x1f');
+                }
+                if (seen.insert(std::move(key)).second) dedup.push_back(r);
+            }
+            seq = std::move(dedup);
+        }
+        std::int64_t off = parsed.value().offset > 0 ? parsed.value().offset : 0;
+        if (off > static_cast<std::int64_t>(seq.size())) {
+            seq.clear();
+        } else if (off > 0) {
+            seq.erase(seq.begin(), seq.begin() + static_cast<std::size_t>(off));
+        }
+        if (parsed.value().limit >= 0 &&
+            static_cast<std::size_t>(parsed.value().limit) < seq.size()) {
+            seq.resize(static_cast<std::size_t>(parsed.value().limit));
+        }
         tbl->clear_filter();
         tbl->set_recno_sequence(std::move(seq));
     }

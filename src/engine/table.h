@@ -127,6 +127,11 @@ public:
     bool has_recno_sequence() const noexcept {
         return !recno_sequence_.empty();
     }
+    // M10.31 / M10.32 — read-only access so DISTINCT / LIMIT / OFFSET
+    // can post-process an ORDER-BY-installed sequence.
+    const std::vector<std::uint32_t>& recno_sequence() const noexcept {
+        return recno_sequence_;
+    }
 
     // Memo surface (M4).
     void               attach_memo(std::unique_ptr<drivers::IMemoStore> memo);

@@ -259,6 +259,56 @@ parse_cmp(Cursor& c, const std::string& sql) {
         return node;
     }
 
+    // M10.33 — `<col> BETWEEN <lit> AND <lit>` and `<col> LIKE '<pattern>'`.
+    if (c.match_keyword("BETWEEN")) {
+        node->cmp.op = WhereOp::Between;
+        // Lower bound.
+        if (c.peek_char('\'')) {
+            auto lit = c.read_string_literal();
+            if (!lit) return lit.error();
+            node->cmp.literal    = std::move(lit).value();
+            node->cmp.is_numeric = false;
+        } else {
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            node->cmp.is_numeric = true;
+            node->cmp.number     = n.value();
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.17g", n.value());
+            node->cmp.literal    = tmp;
+        }
+        if (!c.match_keyword("AND")) {
+            return util::Error{7200, 0,
+                "expected AND between BETWEEN bounds", sql};
+        }
+        // Upper bound.
+        if (c.peek_char('\'')) {
+            auto lit = c.read_string_literal();
+            if (!lit) return lit.error();
+            node->cmp.literal2 = std::move(lit).value();
+        } else {
+            auto n = c.read_numeric_literal();
+            if (!n) return n.error();
+            node->cmp.number2 = n.value();
+            char tmp[64];
+            std::snprintf(tmp, sizeof(tmp), "%.17g", n.value());
+            node->cmp.literal2 = tmp;
+        }
+        return node;
+    }
+    if (c.match_keyword("LIKE")) {
+        node->cmp.op = WhereOp::Like;
+        if (!c.peek_char('\'')) {
+            return util::Error{7200, 0,
+                "expected string literal after LIKE", sql};
+        }
+        auto lit = c.read_string_literal();
+        if (!lit) return lit.error();
+        node->cmp.literal    = std::move(lit).value();
+        node->cmp.is_numeric = false;
+        return node;
+    }
+
     if      (c.match_seq("<=")) node->cmp.op = WhereOp::Le;
     else if (c.match_seq(">=")) node->cmp.op = WhereOp::Ge;
     else if (c.match_seq("<>")) node->cmp.op = WhereOp::Ne;
@@ -430,6 +480,8 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         return util::Error{7200, 0, "expected SELECT", sql};
     }
     SelectStmt stmt;
+    // M10.31 — optional DISTINCT immediately after SELECT.
+    if (c.match_keyword("DISTINCT")) stmt.distinct = true;
     if (c.match_char('*')) {
         // SELECT * — projection stays empty (every column visible).
     } else {
@@ -671,6 +723,18 @@ util::Result<SelectStmt> parse_select(const std::string& sql) {
         if      (c.match_keyword("DESC")) ob.descending = true;
         else if (c.match_keyword("ASC"))  ob.descending = false;
         stmt.order_by = std::move(ob);
+    }
+
+    // M10.32 — `LIMIT N [OFFSET M]`. Sits at the tail of the SELECT.
+    if (c.match_keyword("LIMIT")) {
+        auto n = c.read_numeric_literal();
+        if (!n) return n.error();
+        stmt.limit = static_cast<std::int64_t>(n.value());
+        if (c.match_keyword("OFFSET")) {
+            auto o = c.read_numeric_literal();
+            if (!o) return o.error();
+            stmt.offset = static_cast<std::int64_t>(o.value());
+        }
     }
 
     c.match_char(';');
