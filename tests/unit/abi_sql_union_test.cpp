@@ -121,6 +121,84 @@ TEST_CASE("M10.26 UNION — dedups across two tables") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M10.36 UNION with aggregate inside members") {
+    auto dir = fs::temp_directory_path() / "openads_m10_36_agg";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "a.dbf", {{"TAG", 4}}, {{"AAAA"}, {"AAAA"}, {"BBBB"}});
+    write_dbf(dir / "b.dbf", {{"TAG", 4}}, {{"CCCC"}, {"DDDD"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Each member runs COUNT(*) → single row each → merged 2 rows.
+    UNSIGNED8 sql[260] =
+        "SELECT COUNT(*) FROM a.dbf "
+        "UNION ALL "
+        "SELECT COUNT(*) FROM b.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.36 UNION with JOIN inside members") {
+    auto dir = fs::temp_directory_path() / "openads_m10_36_join";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "ord1.dbf",
+        {{"ID", 4}, {"CUST", 4}},
+        {{"O01", "C001"}, {"O02", "C002"}});
+    write_dbf(dir / "cus1.dbf",
+        {{"CUST", 4}, {"NAME", 8}},
+        {{"C001", "Alice"}, {"C002", "Bob"}});
+    write_dbf(dir / "ord2.dbf",
+        {{"ID", 4}, {"CUST", 4}},
+        {{"O11", "C003"}});
+    write_dbf(dir / "cus2.dbf",
+        {{"CUST", 4}, {"NAME", 8}},
+        {{"C003", "Carol"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Member 1: ord1 JOIN cus1 → 2 rows. Member 2: ord2 JOIN cus2 → 1 row.
+    UNSIGNED8 sql[400] =
+        "SELECT * FROM ord1.dbf JOIN cus1.dbf ON CUST = CUST "
+        "UNION ALL "
+        "SELECT * FROM ord2.dbf JOIN cus2.dbf ON CUST = CUST";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 3);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M10.27 UNION with projection in members") {
     auto dir = fs::temp_directory_path() / "openads_m10_27_proj";
     std::error_code ec;

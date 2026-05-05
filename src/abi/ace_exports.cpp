@@ -41,7 +41,10 @@ using openads::session::Handle;
 using openads::session::HandleKind;
 
 struct ProcessState {
-    std::mutex                                                    mu;
+    // M10.36 — recursive_mutex so UNION dispatch can re-enter
+    // AdsExecuteSQLDirect (used to materialise each member's cursor)
+    // while still holding the outer lock.
+    std::recursive_mutex                                          mu;
     openads::session::HandleRegistry                              registry;
     std::unordered_map<Handle, std::unique_ptr<Connection>>       conns;
 };
@@ -215,7 +218,7 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     auto holder = std::make_unique<Connection>(std::move(opened).value());
     Connection* raw = holder.get();
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Handle h = s.registry.register_object(HandleKind::Connection, raw);
     s.conns.emplace(h, std::move(holder));
     *phConnect = h;
@@ -224,7 +227,7 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
 
 UNSIGNED32 AdsDisconnect(ADSHANDLE hConnect) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     // Purge any index bindings whose Table* belongs to a table owned
     // by this connection — otherwise the bindings outlive the conns
     // entry that owned the Table and leave dangling pointers behind.
@@ -266,7 +269,7 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
     if (phTable == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                         "phTable is null");
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto* conn = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (conn == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
                                      "unknown connection");
@@ -847,7 +850,7 @@ UNSIGNED32 AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
 
 UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConn,
                             HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -880,7 +883,7 @@ UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
 
 UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     // Flush the table (driver + active order + extra index views)
     // before releasing the handle. Without an explicit transaction,
     // this is the only point at which mutations made since open
@@ -1526,7 +1529,7 @@ UNSIGNED32 lock_with_retry(std::function<openads::util::Result<void>()> fn) {
 
 UNSIGNED32 AdsSetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32 ulCycle) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     lock_policy().cycle_ms = ulCycle;
     return ok();
 }
@@ -1534,14 +1537,14 @@ UNSIGNED32 AdsSetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32 ulCycle) {
 UNSIGNED32 AdsGetLockCycle(ADSHANDLE /*hConnect*/, UNSIGNED32* pulCycle) {
     if (pulCycle == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     *pulCycle = lock_policy().cycle_ms;
     return ok();
 }
 
 UNSIGNED32 AdsSetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16 usRetryCount) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     lock_policy().retry_count = usRetryCount;
     return ok();
 }
@@ -1549,7 +1552,7 @@ UNSIGNED32 AdsSetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16 usRetryCount)
 UNSIGNED32 AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCount) {
     if (pusRetryCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     *pusRetryCount = lock_policy().retry_count;
     return ok();
 }
@@ -2145,7 +2148,7 @@ openads::drivers::IIndex* iindex_for_binding(IndexBinding& b) {
 
 UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto& m = index_bindings();
     auto it = m.find(hIndex);
     if (it == m.end()) {
@@ -2167,7 +2170,7 @@ UNSIGNED32 AdsAddCustomKey(ADSHANDLE hIndex) {
 
 UNSIGNED32 AdsDeleteCustomKey(ADSHANDLE hIndex) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto& m = index_bindings();
     auto it = m.find(hIndex);
     if (it == m.end()) {
@@ -2330,7 +2333,7 @@ UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
 
 UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto* idx = iindex_for_handle(hIndex);
     Table* t  = lookup_table_by_index(hIndex);
     if (!idx || !t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
@@ -2723,7 +2726,7 @@ UNSIGNED32 AdsGetIndexName(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto it = index_bindings().find(hIndex);
     if (it == index_bindings().end()) {
         return fail(openads::AE_INTERNAL_ERROR, "unknown index");
@@ -3283,7 +3286,7 @@ UNSIGNED32 AdsDecryptRecord(ADSHANDLE /*hTable*/) {
 
 UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto r = c->begin_tx();
@@ -3293,7 +3296,7 @@ UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
 
 UNSIGNED32 AdsCommitTransaction(ADSHANDLE hConnect) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto r = c->commit_tx();
@@ -3303,7 +3306,7 @@ UNSIGNED32 AdsCommitTransaction(ADSHANDLE hConnect) {
 
 UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto r = c->rollback_tx();
@@ -3313,7 +3316,7 @@ UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect) {
 
 UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c || pbInTx == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -3324,7 +3327,7 @@ UNSIGNED32 AdsInTransaction(ADSHANDLE hConnect, UNSIGNED16* pbInTx) {
 
 UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c || pucName == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -3339,7 +3342,7 @@ UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
 // since CreateSavepoint stays part of the enclosing transaction.
 UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c || pucName == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -3352,7 +3355,7 @@ UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
 
 UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     if (pucSavepoint == nullptr) {
@@ -3405,7 +3408,7 @@ UNSIGNED32 AdsFindFirstTable(ADSHANDLE   hConnect,
                              UNSIGNED16* pusFileNameLen,
                              ADSHANDLE*  phFind) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (c == nullptr || phFind == nullptr || pusFileNameLen == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -3429,7 +3432,7 @@ UNSIGNED32 AdsFindNextTable(ADSHANDLE   hConnect,
                             UNSIGNED8*  pucFileName,
                             UNSIGNED16* pusFileNameLen) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (c == nullptr || pusFileNameLen == nullptr) {
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
@@ -3445,7 +3448,7 @@ UNSIGNED32 AdsFindNextTable(ADSHANDLE   hConnect,
 
 UNSIGNED32 AdsFindClose(ADSHANDLE hConnect, ADSHANDLE hFind) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (c == nullptr) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto* find = s.registry.lookup<Connection::TableFind>(hFind, HandleKind::Find);
@@ -3476,7 +3479,7 @@ UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
     auto holder = std::make_unique<Connection>(std::move(opened).value());
     Connection* raw = holder.get();
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Handle h = s.registry.register_object(HandleKind::Connection, raw);
     s.conns.emplace(h, std::move(holder));
     *phConnect = h;
@@ -3489,7 +3492,7 @@ UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                          UNSIGNED8* /*pucValidationExpression*/,
                          UNSIGNED8* /*pucValidationMessage*/) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     if (!c->has_dd()) {
@@ -3509,7 +3512,7 @@ UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
 UNSIGNED32 AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
                             UNSIGNED16 /*usDeleteFiles*/) {
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     if (!c->has_dd()) {
@@ -3551,7 +3554,7 @@ ADSHANDLE next_stmt_handle() {
 UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
     if (phStatement == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
@@ -4035,72 +4038,140 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 
         if (uparts.size() > 1) {
             auto& s = state();
-            std::lock_guard<std::mutex> lk(s.mu);
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
 
-            // M10.27 — accept member projection lists (each member
-            // must produce the same number of columns; first member's
-            // projected columns drive the merged schema).
-            // M10.28 — accept ORDER BY only on the LAST member; the
-            // sort applies to the merged result.
-            auto member_ok = [](const openads::sql::SelectStmt& st,
-                                bool is_last) {
-                return !st.inner_join && st.aggregates.empty() &&
-                       st.group_by.empty() && (is_last || !st.order_by);
-            };
-
-            std::vector<openads::sql::SelectStmt> stmts;
-            stmts.reserve(uparts.size());
-            for (std::size_t i = 0; i < uparts.size(); ++i) {
-                auto p = openads::sql::parse_select(uparts[i].sql_text);
-                if (!p) return fail(p.error());
-                bool is_last = (i == uparts.size() - 1);
-                if (!member_ok(p.value(), is_last)) {
-                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                        "UNION members must be `SELECT [DISTINCT] [cols|*] "
-                        "FROM t [WHERE ...]` (last may carry ORDER BY)");
+            // M10.36 — every UNION member runs through the full
+            // SELECT-execute pipeline as a recursive call to
+            // AdsExecuteSQLDirect (allowed by the recursive_mutex on
+            // s.mu). Members may now carry JOIN, GROUP BY, aggregates,
+            // CASE WHEN, DISTINCT, LIMIT — anything a plain SELECT
+            // accepts. The first member's cursor schema (whatever the
+            // pipeline produces — temp DBF for joins/aggregates,
+            // source schema for SELECT *) drives the merged schema;
+            // later members align by column name against it.
+            //
+            // Last member's ORDER BY still becomes the merged sort
+            // (M10.28 semantics). We capture it from a parse, then
+            // let the recursive call run as-is — its sort is
+            // overwritten by the final post-merge stable_sort below.
+            std::optional<openads::sql::OrderBy> final_order;
+            {
+                auto p = openads::sql::parse_select(uparts.back().sql_text);
+                if (p && p.value().order_by) {
+                    final_order = *p.value().order_by;
                 }
-                stmts.push_back(std::move(p).value());
             }
 
-            // Capture last-member ORDER BY for the merged sort.
-            std::optional<openads::sql::OrderBy> final_order = stmts.back().order_by;
+            // The first member's `all` flag is meaningless (it has no
+            // UNION keyword preceding it); only the join-flags between
+            // members decide whether dedup applies.
+            bool any_distinct = false;
+            for (std::size_t i = 1; i < uparts.size(); ++i)
+                if (!uparts[i].all) any_distinct = true;
+            std::unordered_set<std::string> seen;
 
-            // Build merged schema from the first member: full source
-            // schema for SELECT *, or one merged column per projected
-            // name (preserving raw_type / length / decimals).
             std::vector<openads::drivers::DbfField> schema;
-            {
-                auto fh0 = c->open_table(stmts[0].table,
-                                         openads::engine::TableType::Cdx,
-                                         openads::engine::OpenMode::Read);
-                if (!fh0) return fail(fh0.error());
-                openads::engine::Table* fttbl = c->lookup_table(fh0.value());
-                if (!fttbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
-                if (stmts[0].projection.empty()) {
-                    std::uint16_t nf = fttbl->field_count();
-                    schema.reserve(nf);
-                    for (std::uint16_t i = 0; i < nf; ++i) {
-                        schema.push_back(fttbl->field_descriptor(i));
+            std::uint32_t rec_len = 0;
+            std::vector<std::vector<std::uint8_t>> rows;
+
+            for (std::size_t mi = 0; mi < uparts.size(); ++mi) {
+                // Recurse into the full SELECT executor for this
+                // member. The member SQL goes through every dispatch
+                // (UNION, JOIN, GROUP BY, aggregate, CASE, ...) and
+                // lands as a registered cursor handle we can walk.
+                std::vector<UNSIGNED8> mbuf(uparts[mi].sql_text.size() + 1);
+                std::memcpy(mbuf.data(), uparts[mi].sql_text.c_str(),
+                            uparts[mi].sql_text.size() + 1);
+                ADSHANDLE memberCur = 0;
+                UNSIGNED32 rrc =
+                    AdsExecuteSQLDirect(hStatement, mbuf.data(), &memberCur);
+                if (rrc != 0) return rrc;
+                openads::engine::Table* mt =
+                    s.registry.lookup<openads::engine::Table>(
+                        memberCur, HandleKind::Table);
+                if (!mt) {
+                    return fail(openads::AE_INTERNAL_ERROR,
+                                "UNION member cursor lookup failed");
+                }
+
+                if (mi == 0) {
+                    auto* proj = projection_for(memberCur);
+                    if (proj) {
+                        schema.reserve(proj->size());
+                        for (auto idx : *proj) {
+                            schema.push_back(mt->field_descriptor(idx));
+                        }
+                    } else {
+                        std::uint16_t nf = mt->field_count();
+                        schema.reserve(nf);
+                        for (std::uint16_t k = 0; k < nf; ++k) {
+                            schema.push_back(mt->field_descriptor(k));
+                        }
+                    }
+                    rec_len = 1;
+                    for (auto& fd : schema) rec_len += fd.length;
+                }
+
+                std::vector<std::int32_t> col_src(schema.size(), -1);
+                auto* proj_m = projection_for(memberCur);
+                if (proj_m) {
+                    if (proj_m->size() != schema.size()) {
+                        AdsCloseTable(memberCur);
+                        return fail(openads::AE_PARSE_ERROR,
+                            "UNION member projection column count differs");
+                    }
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        col_src[i] = static_cast<std::int32_t>((*proj_m)[i]);
                     }
                 } else {
-                    schema.reserve(stmts[0].projection.size());
-                    for (auto& cn : stmts[0].projection) {
-                        std::int32_t fi = fttbl->field_index(cn);
-                        if (fi < 0) {
-                            c->close_table(fh0.value());
-                            return fail(openads::AE_COLUMN_NOT_FOUND,
-                                        cn.c_str());
-                        }
-                        schema.push_back(fttbl->field_descriptor(
-                            static_cast<std::uint16_t>(fi)));
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        col_src[i] = mt->field_index(schema[i].name);
                     }
                 }
-                c->close_table(fh0.value());
+
+                std::vector<std::uint32_t> recnos;
+                if (mt->has_recno_sequence()) {
+                    recnos = mt->recno_sequence();
+                } else {
+                    std::uint32_t rc = mt->record_count();
+                    for (std::uint32_t r = 1; r <= rc; ++r) {
+                        if (auto g = mt->goto_record(r); !g) continue;
+                        if (mt->is_deleted()) continue;
+                        if (!mt->passes_filter()) continue;
+                        recnos.push_back(r);
+                    }
+                }
+                for (std::uint32_t r : recnos) {
+                    if (auto g = mt->goto_record(r); !g) continue;
+                    std::vector<std::uint8_t> rec(rec_len);
+                    rec[0] = ' ';
+                    std::size_t off = 1;
+                    for (std::size_t i = 0; i < schema.size(); ++i) {
+                        std::string sval;
+                        if (col_src[i] >= 0) {
+                            auto v = mt->read_field(
+                                static_cast<std::uint16_t>(col_src[i]));
+                            if (v) sval = v.value().as_string;
+                        }
+                        std::uint8_t L = schema[i].length;
+                        for (std::uint8_t k = 0; k < L; ++k) {
+                            rec[off + k] = k < sval.size()
+                                ? static_cast<std::uint8_t>(sval[k]) : ' ';
+                        }
+                        off += L;
+                    }
+                    if (any_distinct) {
+                        std::string key(
+                            reinterpret_cast<const char*>(rec.data()),
+                            rec.size());
+                        if (!seen.insert(std::move(key)).second) continue;
+                    }
+                    rows.push_back(std::move(rec));
+                }
+                AdsCloseTable(memberCur);
             }
 
             std::uint16_t nfields = static_cast<std::uint16_t>(schema.size());
-            std::uint32_t rec_len = 1;
-            for (auto& fd : schema) rec_len += fd.length;
 
             // Pre-build merged DBF header.
             std::vector<std::uint8_t> file;
@@ -4123,187 +4194,6 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 file.insert(file.end(), bytes.begin(), bytes.end());
             }
             file.push_back(0x0D);
-
-            // The first member's `all` flag is meaningless (it has no
-            // UNION keyword preceding it); only the join-flags between
-            // members decide whether dedup applies.
-            bool any_distinct = false;
-            for (std::size_t i = 1; i < uparts.size(); ++i)
-                if (!uparts[i].all) any_distinct = true;
-            std::unordered_set<std::string> seen;
-
-            // Rows accumulate in-memory so an optional final ORDER BY
-            // can sort them before the file is materialised.
-            std::vector<std::vector<std::uint8_t>> rows;
-
-            auto walk_member = [&](openads::engine::Table* mtbl,
-                                   const openads::sql::SelectStmt& stm)
-                -> openads::util::Result<std::monostate>
-            {
-                // Resolve each merged-schema column to a source field
-                // index. For SELECT * members, match by name; for
-                // projection members, the projection list aligns
-                // 1:1 with the merged schema (must be same length).
-                std::vector<std::int32_t> col_src(schema.size(), -1);
-                if (stm.projection.empty()) {
-                    for (std::size_t i = 0; i < schema.size(); ++i) {
-                        col_src[i] = mtbl->field_index(schema[i].name);
-                        if (col_src[i] < 0) {
-                            return openads::util::Error{
-                                openads::AE_COLUMN_NOT_FOUND, 0,
-                                schema[i].name.c_str(), ""};
-                        }
-                    }
-                } else {
-                    if (stm.projection.size() != schema.size()) {
-                        return openads::util::Error{
-                            openads::AE_PARSE_ERROR, 0,
-                            "UNION member projection column count differs", ""};
-                    }
-                    for (std::size_t i = 0; i < schema.size(); ++i) {
-                        col_src[i] = mtbl->field_index(stm.projection[i]);
-                        if (col_src[i] < 0) {
-                            return openads::util::Error{
-                                openads::AE_COLUMN_NOT_FOUND, 0,
-                                stm.projection[i].c_str(), ""};
-                        }
-                    }
-                }
-
-                std::function<bool(openads::engine::Table&)> filt;
-                if (stm.where) {
-                    using Pred = std::function<bool(openads::engine::Table&)>;
-                    std::function<openads::util::Result<Pred>(
-                        const openads::sql::WhereExpr&)> compile;
-                    compile = [&](const openads::sql::WhereExpr& node)
-                              -> openads::util::Result<Pred> {
-                        using Kind = openads::sql::WhereExpr::Kind;
-                        if (node.kind == Kind::And || node.kind == Kind::Or) {
-                            std::vector<Pred> ks;
-                            for (auto& cn : node.children) {
-                                auto r = compile(*cn);
-                                if (!r) return r.error();
-                                ks.push_back(std::move(r).value());
-                            }
-                            bool is_and = (node.kind == Kind::And);
-                            return Pred{[ks = std::move(ks), is_and]
-                                        (openads::engine::Table& t) {
-                                if (is_and) {
-                                    for (auto& k : ks) if (!k(t)) return false;
-                                    return true;
-                                }
-                                for (auto& k : ks) if (k(t)) return true;
-                                return false;
-                            }};
-                        }
-                        if (node.kind == Kind::Not) {
-                            auto inner = compile(*node.child);
-                            if (!inner) return inner.error();
-                            return Pred{[p = std::move(inner).value()]
-                                        (openads::engine::Table& t)
-                                        { return !p(t); }};
-                        }
-                        if (node.kind != Kind::Cmp) {
-                            return openads::util::Error{
-                                openads::AE_FUNCTION_NOT_AVAILABLE, 0,
-                                "UNION member WHERE supports Cmp/AND/OR/NOT only", ""};
-                        }
-                        const auto& w = node.cmp;
-                        std::int32_t fi = mtbl->field_index(w.column);
-                        if (fi < 0) return openads::util::Error{
-                            openads::AE_COLUMN_NOT_FOUND, 0,
-                            w.column.c_str(), ""};
-                        std::uint16_t f = static_cast<std::uint16_t>(fi);
-                        openads::sql::WhereOp op = w.op;
-                        std::string lit = w.literal;
-                        std::string lit2 = w.literal2;
-                        bool is_num = w.is_numeric;
-                        double num  = w.number;
-                        double num2 = w.number2;
-                        return Pred{[f, op, lit, lit2, is_num, num, num2]
-                                    (openads::engine::Table& t) {
-                            auto v = t.read_field(f);
-                            if (!v) return false;
-                            if (op == openads::sql::WhereOp::Between) {
-                                if (is_num) {
-                                    double d = v.value().as_double;
-                                    return d >= num && d <= num2;
-                                }
-                                auto& sv = v.value().as_string;
-                                return sv.compare(lit)  >= 0 &&
-                                       sv.compare(lit2) <= 0;
-                            }
-                            if (op == openads::sql::WhereOp::Like) {
-                                auto sv = v.value().as_string;
-                                while (!sv.empty() && sv.back() == ' ')
-                                    sv.pop_back();
-                                return sql_like_match(sv, lit);
-                            }
-                            int cmp = 0;
-                            if (is_num) {
-                                double d = v.value().as_double;
-                                if      (d < num) cmp = -1;
-                                else if (d > num) cmp =  1;
-                            } else {
-                                cmp = v.value().as_string.compare(lit);
-                            }
-                            switch (op) {
-                                case openads::sql::WhereOp::Eq: return cmp == 0;
-                                case openads::sql::WhereOp::Ne: return cmp != 0;
-                                case openads::sql::WhereOp::Lt: return cmp <  0;
-                                case openads::sql::WhereOp::Gt: return cmp >  0;
-                                case openads::sql::WhereOp::Le: return cmp <= 0;
-                                case openads::sql::WhereOp::Ge: return cmp >= 0;
-                                default: return false;
-                            }
-                        }};
-                    };
-                    auto compiled = compile(*stm.where);
-                    if (!compiled) return compiled.error();
-                    filt = std::move(compiled).value();
-                }
-                std::uint32_t rcount = mtbl->record_count();
-                for (std::uint32_t r = 1; r <= rcount; ++r) {
-                    if (auto g = mtbl->goto_record(r); !g) continue;
-                    if (mtbl->is_deleted()) continue;
-                    if (filt && !filt(*mtbl)) continue;
-                    // Pack a merged record by reading each schema
-                    // column's value from the source.
-                    std::vector<std::uint8_t> rec(rec_len);
-                    rec[0] = ' ';
-                    std::size_t off = 1;
-                    for (std::size_t i = 0; i < schema.size(); ++i) {
-                        auto v = mtbl->read_field(
-                            static_cast<std::uint16_t>(col_src[i]));
-                        std::string s = v ? v.value().as_string : std::string();
-                        std::uint8_t L = schema[i].length;
-                        for (std::uint8_t k = 0; k < L; ++k) {
-                            rec[off + k] = (k < s.size())
-                                ? static_cast<std::uint8_t>(s[k]) : ' ';
-                        }
-                        off += L;
-                    }
-                    if (any_distinct) {
-                        std::string key(reinterpret_cast<const char*>(rec.data()),
-                                        rec.size());
-                        if (!seen.insert(std::move(key)).second) continue;
-                    }
-                    rows.push_back(std::move(rec));
-                }
-                return std::monostate{};
-            };
-
-            for (std::size_t i = 0; i < stmts.size(); ++i) {
-                auto h = c->open_table(stmts[i].table,
-                                       openads::engine::TableType::Cdx,
-                                       openads::engine::OpenMode::Read);
-                if (!h) return fail(h.error());
-                openads::engine::Table* mt = c->lookup_table(h.value());
-                if (!mt) return fail(openads::AE_INTERNAL_ERROR, "post-open");
-                auto wmi = walk_member(mt, stmts[i]);
-                c->close_table(h.value());
-                if (!wmi) return fail(wmi.error());
-            }
 
             // M10.28 — apply ORDER BY (from last member) to merged rows.
             if (final_order) {
@@ -4399,7 +4289,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         // of a column list.
         const auto& j = *parsed.value().inner_join;
         auto& s = state();
-        std::lock_guard<std::mutex> lk(s.mu);
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
 
         auto lh = c->open_table(parsed.value().table,
                                 openads::engine::TableType::Cdx,
@@ -5262,7 +5152,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             openads::engine::OpenMode::Read);
     if (!th) return fail(th.error());
     auto& s = state();
-    std::lock_guard<std::mutex> lk(s.mu);
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     openads::engine::Table* tbl = c->lookup_table(th.value());
     if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
 
