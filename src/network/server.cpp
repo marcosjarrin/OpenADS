@@ -1,6 +1,11 @@
 #include "network/server.h"
 
+#include "engine/table.h"
+#include "session/connection.h"
+
 #include <cstring>
+#include <memory>
+#include <unordered_map>
 
 namespace openads::network {
 
@@ -101,7 +106,40 @@ void Server::accept_loop() {
     }
 }
 
+namespace {
+
+inline std::uint32_t read_u32_le(const std::uint8_t* p) {
+    return  static_cast<std::uint32_t>(p[0])        |
+           (static_cast<std::uint32_t>(p[1]) <<  8) |
+           (static_cast<std::uint32_t>(p[2]) << 16) |
+           (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
+inline void write_u32_le(std::uint32_t v, std::vector<std::uint8_t>& out) {
+    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+}
+
+} // namespace
+
 void Server::session_loop(Socket s) {
+    // M12.4 — per-session state. Connection is opened by the
+    // Connect frame; OpenTable allocates a session-scoped 32-bit
+    // table id keyed into engine handles.
+    std::unique_ptr<openads::session::Connection> sess_conn;
+    std::unordered_map<std::uint32_t, openads::session::Handle> tbls;
+    std::uint32_t next_id = 1;
+
+    auto err = [](const char* msg) {
+        Frame f;
+        f.opcode = Opcode::Error;
+        std::string e(msg);
+        f.payload.assign(e.begin(), e.end());
+        return f;
+    };
+
     while (true) {
         auto fr = read_frame(s);
         if (!fr) break;                       // connection closed
@@ -115,10 +153,15 @@ void Server::session_loop(Socket s) {
                 break;
             }
             case Opcode::Connect: {
+                std::string dir(reinterpret_cast<const char*>(
+                                    f.payload.data()),
+                                f.payload.size());
+                auto co = openads::session::Connection::open(dir);
+                if (!co) { reply = err("Connect: connection open failed"); break; }
+                sess_conn = std::make_unique<openads::session::Connection>(
+                    std::move(co).value());
                 reply.opcode = Opcode::ConnectAck;
-                std::string p = "connected:";
-                p.append(reinterpret_cast<const char*>(f.payload.data()),
-                         f.payload.size());
+                std::string p = "connected:" + dir;
                 reply.payload.assign(p.begin(), p.end());
                 break;
             }
@@ -126,10 +169,110 @@ void Server::session_loop(Socket s) {
                 sock_close(s);
                 return;
             }
+            case Opcode::OpenTable: {
+                if (!sess_conn) { reply = err("OpenTable: not connected"); break; }
+                std::string rel(reinterpret_cast<const char*>(
+                                    f.payload.data()),
+                                f.payload.size());
+                auto th = sess_conn->open_table(rel,
+                    openads::engine::TableType::Cdx,
+                    openads::engine::OpenMode::Shared);
+                if (!th) { reply = err("OpenTable: open failed"); break; }
+                std::uint32_t id = next_id++;
+                tbls.emplace(id, th.value());
+                reply.opcode = Opcode::OpenTableAck;
+                write_u32_le(id, reply.payload);
+                break;
+            }
+            case Opcode::CloseTable: {
+                if (f.payload.size() < 4) { reply = err("CloseTable: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it != tbls.end()) {
+                    sess_conn->close_table(it->second);
+                    tbls.erase(it);
+                }
+                reply.opcode = Opcode::CloseTableAck;
+                break;
+            }
+            case Opcode::GotoTop: {
+                if (f.payload.size() < 4) { reply = err("GotoTop: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GotoTop: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GotoTop: lookup failed"); break; }
+                (void)tbl->goto_top();
+                reply.opcode = Opcode::GotoTopAck;
+                break;
+            }
+            case Opcode::Skip: {
+                if (f.payload.size() < 8) { reply = err("Skip: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::int32_t step = static_cast<std::int32_t>(
+                    read_u32_le(f.payload.data() + 4));
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("Skip: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("Skip: lookup failed"); break; }
+                (void)tbl->skip(step);
+                reply.opcode = Opcode::SkipAck;
+                break;
+            }
+            case Opcode::GetField: {
+                if (f.payload.size() < 5) { reply = err("GetField: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::string fname(reinterpret_cast<const char*>(
+                                      f.payload.data() + 4),
+                                  f.payload.size() - 4);
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetField: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetField: lookup failed"); break; }
+                std::int32_t fi = tbl->field_index(fname);
+                if (fi < 0) { reply = err("GetField: column not found"); break; }
+                auto v = tbl->read_field(static_cast<std::uint16_t>(fi));
+                if (!v) { reply = err("GetField: read failed"); break; }
+                reply.opcode = Opcode::GetFieldAck;
+                auto& sval = v.value().as_string;
+                reply.payload.assign(sval.begin(), sval.end());
+                break;
+            }
+            case Opcode::GetRecordCount: {
+                if (f.payload.size() < 4) { reply = err("GetRecordCount: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetRecordCount: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetRecordCount: lookup failed"); break; }
+                std::uint32_t rc = tbl->record_count();
+                reply.opcode = Opcode::GetRecordCountAck;
+                write_u32_le(rc, reply.payload);
+                break;
+            }
+            case Opcode::AtEOF: {
+                if (f.payload.size() < 4) { reply = err("AtEOF: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("AtEOF: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("AtEOF: lookup failed"); break; }
+                reply.opcode = Opcode::AtEOFAck;
+                reply.payload.push_back(tbl->eof() ? 1 : 0);
+                break;
+            }
             default: {
-                reply.opcode = Opcode::Error;
-                std::string e = "unsupported opcode";
-                reply.payload.assign(e.begin(), e.end());
+                reply = err("unsupported opcode");
                 break;
             }
         }

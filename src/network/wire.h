@@ -30,10 +30,22 @@ enum class Opcode : std::uint8_t {
     OpenTable          = 0x20,
     OpenTableAck       = 0x21,
     CloseTable         = 0x22,
+    CloseTableAck      = 0x23,
     ExecuteSQL         = 0x30,
     ExecuteSQLAck      = 0x31,
     Fetch              = 0x32,
     FetchAck           = 0x33,
+    // M12.4 — remote table navigation + read.
+    GotoTop            = 0x40,
+    GotoTopAck         = 0x41,
+    Skip               = 0x42,
+    SkipAck            = 0x43,
+    GetField           = 0x44,
+    GetFieldAck        = 0x45,
+    GetRecordCount     = 0x46,
+    GetRecordCountAck  = 0x47,
+    AtEOF              = 0x48,
+    AtEOFAck           = 0x49,
     Error              = 0xFF,
 };
 

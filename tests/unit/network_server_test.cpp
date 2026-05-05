@@ -3,10 +3,15 @@
 #include "network/socket.h"
 #include "network/wire.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 using openads::network::Server;
 using openads::network::Socket;
@@ -43,7 +48,13 @@ TEST_CASE("M12.3 server Hello → HelloAck round-trip") {
     CHECK_FALSE(srv.running());
 }
 
-TEST_CASE("M12.3 server Connect echoes data_dir tag") {
+TEST_CASE("M12.3 server Connect against a real data dir succeeds") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_3_connect";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
     Server srv;
     REQUIRE(srv.start("127.0.0.1", 0).has_value());
 
@@ -53,21 +64,22 @@ TEST_CASE("M12.3 server Connect echoes data_dir tag") {
 
     Frame req;
     req.opcode = Opcode::Connect;
-    std::string dir = "/data/foo";
-    req.payload.assign(dir.begin(), dir.end());
+    std::string ds = dir.string();
+    req.payload.assign(ds.begin(), ds.end());
     REQUIRE(write_frame(cs, req).has_value());
     auto reply = read_frame(cs);
     REQUIRE(reply.has_value());
     CHECK(reply.value().opcode == Opcode::ConnectAck);
     std::string s(reply.value().payload.begin(),
                   reply.value().payload.end());
-    CHECK(s == std::string("connected:") + dir);
+    CHECK(s == std::string("connected:") + ds);
 
     sock_close(cs);
     srv.stop();
+    fs::remove_all(dir, ec);
 }
 
-TEST_CASE("M12.3 server unsupported opcode returns Error frame") {
+TEST_CASE("M12.3 server unknown opcode returns Error frame") {
     Server srv;
     REQUIRE(srv.start("127.0.0.1", 0).has_value());
 
@@ -76,7 +88,7 @@ TEST_CASE("M12.3 server unsupported opcode returns Error frame") {
     Socket cs = cli.value();
 
     Frame req;
-    req.opcode = Opcode::OpenTable;     // not yet implemented in M12.3
+    req.opcode = static_cast<Opcode>(0x7E);   // truly unknown
     REQUIRE(write_frame(cs, req).has_value());
     auto reply = read_frame(cs);
     REQUIRE(reply.has_value());
@@ -87,6 +99,161 @@ TEST_CASE("M12.3 server unsupported opcode returns Error frame") {
 
     sock_close(cs);
     srv.stop();
+}
+
+namespace {
+
+void m12_write_dbf(const std::filesystem::path& path,
+                   const std::vector<std::string>& tags) {
+    std::vector<std::uint8_t> file;
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = static_cast<std::uint8_t>(tags.size());
+    hdr[8]  = 32 + 32 + 1;
+    hdr[10] = 1 + 4;
+    file.insert(file.end(), hdr.begin(), hdr.end());
+    std::array<std::uint8_t, 32> fd{};
+    std::strncpy(reinterpret_cast<char*>(fd.data()), "TAG", 11);
+    fd[11] = 'C'; fd[16] = 4;
+    file.insert(file.end(), fd.begin(), fd.end());
+    file.push_back(0x0D);
+    for (auto& t : tags) {
+        file.push_back(' ');
+        for (int i = 0; i < 4; ++i)
+            file.push_back(i < (int)t.size()
+                ? static_cast<std::uint8_t>(t[i]) : ' ');
+    }
+    file.push_back(0x1A);
+    std::ofstream(path, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+}
+
+void m12_write_u32(std::vector<std::uint8_t>& v, std::uint32_t x) {
+    v.push_back(static_cast<std::uint8_t>( x        & 0xFFu));
+    v.push_back(static_cast<std::uint8_t>((x >>  8) & 0xFFu));
+    v.push_back(static_cast<std::uint8_t>((x >> 16) & 0xFFu));
+    v.push_back(static_cast<std::uint8_t>((x >> 24) & 0xFFu));
+}
+
+}  // namespace
+
+TEST_CASE("M12.4 remote OpenTable + GetRecordCount + walk + GetField") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_4";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    Socket cs = cli.value();
+
+    // Connect.
+    {
+        Frame req;
+        req.opcode = Opcode::Connect;
+        std::string ds = dir.string();
+        req.payload.assign(ds.begin(), ds.end());
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::ConnectAck);
+    }
+
+    // OpenTable.
+    std::uint32_t tid = 0;
+    {
+        Frame req;
+        req.opcode = Opcode::OpenTable;
+        std::string leaf = "data.dbf";
+        req.payload.assign(leaf.begin(), leaf.end());
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::OpenTableAck);
+        REQUIRE(rep.value().payload.size() == 4);
+        tid = static_cast<std::uint32_t>(rep.value().payload[0]) |
+              (static_cast<std::uint32_t>(rep.value().payload[1]) <<  8) |
+              (static_cast<std::uint32_t>(rep.value().payload[2]) << 16) |
+              (static_cast<std::uint32_t>(rep.value().payload[3]) << 24);
+        CHECK(tid == 1);
+    }
+
+    // GetRecordCount.
+    {
+        Frame req;
+        req.opcode = Opcode::GetRecordCount;
+        m12_write_u32(req.payload, tid);
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::GetRecordCountAck);
+        std::uint32_t rc =
+            static_cast<std::uint32_t>(rep.value().payload[0]) |
+            (static_cast<std::uint32_t>(rep.value().payload[1]) <<  8) |
+            (static_cast<std::uint32_t>(rep.value().payload[2]) << 16) |
+            (static_cast<std::uint32_t>(rep.value().payload[3]) << 24);
+        CHECK(rc == 3);
+    }
+
+    // GotoTop + GetField on row 1.
+    {
+        Frame req;
+        req.opcode = Opcode::GotoTop;
+        m12_write_u32(req.payload, tid);
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::GotoTopAck);
+    }
+    auto get_tag = [&]() {
+        Frame req;
+        req.opcode = Opcode::GetField;
+        m12_write_u32(req.payload, tid);
+        std::string fname = "TAG";
+        req.payload.insert(req.payload.end(),
+                           fname.begin(), fname.end());
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::GetFieldAck);
+        return std::string(rep.value().payload.begin(),
+                           rep.value().payload.end());
+    };
+    CHECK(get_tag() == "AAAA");
+
+    // Skip +1 → row 2.
+    {
+        Frame req;
+        req.opcode = Opcode::Skip;
+        m12_write_u32(req.payload, tid);
+        m12_write_u32(req.payload, 1);
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::SkipAck);
+    }
+    CHECK(get_tag() == "BBBB");
+
+    // CloseTable.
+    {
+        Frame req;
+        req.opcode = Opcode::CloseTable;
+        m12_write_u32(req.payload, tid);
+        REQUIRE(write_frame(cs, req).has_value());
+        auto rep = read_frame(cs);
+        REQUIRE(rep.has_value());
+        REQUIRE(rep.value().opcode == Opcode::CloseTableAck);
+    }
+
+    sock_close(cs);
+    srv.stop();
+    fs::remove_all(dir, ec);
 }
 
 TEST_CASE("M12.3 server stop() drops in-flight connection cleanly") {
