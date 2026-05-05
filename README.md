@@ -382,6 +382,7 @@ whose use is restricted by the Advantage SDK / ACE EULA.
 | `m10.53-done` | SQL `NULLIF(a,b)` / `COALESCE(a,b,...)` / `IFNULL(expr,default)` — null-handling helpers in projection (empty string = NULL by convention). |
 | `m10.54-done` | SQL aggregate `<agg>(...) FILTER (WHERE <expr>)` — per-slot row filter; CountStar with FILTER uses the filtered count, others always do. |
 | `m12.2-done`  | Phase 2 TCP socket layer — `network/socket.{h,_win32.cpp,_posix.cpp}`. listen / accept / connect / send / recv / close + ephemeral-port binding. Win32 links ws2_32. |
+| `m12.3-done`  | Phase 2 server skeleton — `network/server` spawns an accept thread + per-connection session thread. Dispatches Hello → HelloAck (version), Connect → ConnectAck (data_dir echo), Disconnect → close, others → Error frame. recv_exact / read_frame / write_frame helpers exposed for M12.4 / M12.5. |
 
 #### Still planned for 0.3.x
 
