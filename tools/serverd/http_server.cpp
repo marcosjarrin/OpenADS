@@ -4,6 +4,7 @@
 
 #include "tools/serverd/spa_index.h"
 
+#include "network/server.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 
@@ -480,8 +481,10 @@ HttpConsole::~HttpConsole() { stop(); }
 
 bool HttpConsole::start(const std::string& host,
                          std::uint16_t      port,
-                         const std::string& data_dir) {
+                         const std::string& data_dir,
+                         openads::network::Server* wire_srv) {
     data_dir_ = data_dir;
+    wire_srv_ = wire_srv;
     auto& srv = *srv_;
 
     srv.Get("/", [](const httplib::Request&, httplib::Response& res) {
@@ -577,6 +580,39 @@ bool HttpConsole::start(const std::string& host,
             [this](const httplib::Request&, httplib::Response& res) {
         json j = server_info(data_dir_);
         res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Get("/api/server/sessions",
+            [this](const httplib::Request&, httplib::Response& res) {
+        if (wire_srv_ == nullptr) {
+            res.set_content(json{{"sessions", json::array()},
+                                 {"hint", "wire server unavailable"}}
+                            .dump(), "application/json");
+            return;
+        }
+        auto now = std::chrono::system_clock::now();
+        json arr = json::array();
+        for (auto& s : wire_srv_->sessions_snapshot()) {
+            auto secs = [&](auto t){
+                return std::chrono::duration_cast<std::chrono::seconds>(
+                    now - t).count();
+            };
+            arr.push_back(json{
+                {"id",            s.id},
+                {"peer_ip",       s.peer_ip},
+                {"peer_port",     s.peer_port},
+                {"user",          s.user},
+                {"data_dir",      s.data_dir},
+                {"connected_secs", static_cast<long long>(secs(s.connected_at))},
+                {"idle_secs",      static_cast<long long>(secs(s.last_activity))},
+                {"frames_in",     s.frames_in},
+                {"frames_out",    s.frames_out},
+                {"open_tables",   s.open_tables}
+            });
+        }
+        res.set_content(json{{"sessions", arr},
+                             {"count", arr.size()}}.dump(),
+                        "application/json");
     });
 
     srv.Post("/api/tables",

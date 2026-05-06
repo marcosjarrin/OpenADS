@@ -12,6 +12,10 @@ namespace httplib {
 class Server;
 }
 
+namespace openads::network {
+class Server;
+}
+
 namespace openads::studio {
 
 // studio.web.0.1 — embedded HTTP web console hosted inside the
@@ -41,7 +45,8 @@ public:
     // as the wire server.
     bool start(const std::string& host,
                std::uint16_t      port,
-               const std::string& data_dir);
+               const std::string& data_dir,
+               openads::network::Server* wire_srv = nullptr);
     void stop();
     bool running() const noexcept { return running_.load(); }
 
@@ -50,6 +55,7 @@ private:
     std::thread                      thread_;
     std::atomic<bool>                running_{false};
     std::string                      data_dir_;
+    openads::network::Server*        wire_srv_ = nullptr;
 };
 
 } // namespace openads::studio

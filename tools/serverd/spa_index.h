@@ -140,6 +140,7 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
       <button data-tab="insert">Insert</button>
       <button data-tab="sql">SQL</button>
       <button data-tab="server">Server</button>
+      <button data-tab="sessions">Sessions</button>
     </nav>
 
     <div id="pane-browse" class="pane">
@@ -173,6 +174,18 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 
     <div id="pane-server" class="pane hidden">
       <div id="server-body" class="empty">Loading…</div>
+    </div>
+
+    <div id="pane-sessions" class="pane hidden">
+      <div class="toolbar">
+        <button class="btn btn-secondary" id="sessions-refresh">Refresh</button>
+        <label style="font-size:14px;opacity:0.85">
+          <input type="checkbox" id="sessions-auto" checked>
+          auto-refresh every 3 s
+        </label>
+        <span id="sessions-status"></span>
+      </div>
+      <div id="sessions-body" class="empty">Loading…</div>
     </div>
   </section>
 </main>
@@ -244,7 +257,7 @@ async function api(url, opts) {
 }
 
 function showTab(tab) {
-  ["browse","structure","insert","sql","server"].forEach(t => {
+  ["browse","structure","insert","sql","server","sessions"].forEach(t => {
     $("pane-" + t).classList.toggle("hidden", t !== tab);
   });
   document.querySelectorAll("nav.tabs button").forEach(b =>
@@ -253,6 +266,12 @@ function showTab(tab) {
   if (tab === "insert"    && state.table) loadInsertForm();
   if (tab === "browse"    && state.table) loadBrowse();
   if (tab === "server")                   loadServerInfo();
+  if (tab === "sessions") {
+    loadSessions();
+    startSessionsAutoRefresh();
+  } else {
+    stopSessionsAutoRefresh();
+  }
 }
 
 async function loadTables() {
@@ -623,6 +642,54 @@ async function loadServerInfo() {
   }
 }
 
+let sessionsTimer = null;
+function startSessionsAutoRefresh() {
+  stopSessionsAutoRefresh();
+  if (!$("sessions-auto").checked) return;
+  sessionsTimer = setInterval(loadSessions, 3000);
+}
+function stopSessionsAutoRefresh() {
+  if (sessionsTimer) { clearInterval(sessionsTimer); sessionsTimer = null; }
+}
+function fmtDuration(s) {
+  if (s < 60)    return s + "s";
+  if (s < 3600)  return Math.floor(s/60) + "m " + (s%60) + "s";
+  return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
+}
+async function loadSessions() {
+  try {
+    const data = await api("/api/server/sessions");
+    $("sessions-status").textContent =
+      `${data.count} active`;
+    $("sessions-status").className = "ok";
+    if (!data.sessions || data.sessions.length === 0) {
+      $("sessions-body").innerHTML =
+        `<div class="empty">No active wire sessions.</div>`;
+      return;
+    }
+    const rows = data.sessions
+      .sort((a,b) => a.connected_secs - b.connected_secs)
+      .map(s => `<tr>
+        <td>${s.id}</td>
+        <td>${esc(s.peer_ip)}:${s.peer_port}</td>
+        <td>${esc(s.user || "<i style='opacity:0.5'>(none)</i>")}</td>
+        <td>${esc(s.data_dir)}</td>
+        <td>${fmtDuration(s.connected_secs)}</td>
+        <td>${fmtDuration(s.idle_secs)}</td>
+        <td>${s.frames_in}</td>
+        <td>${s.frames_out}</td>
+        <td>${s.open_tables}</td></tr>`).join("");
+    $("sessions-body").innerHTML = `<table>
+      <thead><tr>
+        <th>ID</th><th>Peer</th><th>User</th><th>Data dir</th>
+        <th>Connected</th><th>Idle</th>
+        <th>frames in</th><th>frames out</th><th>open</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) {
+    $("sessions-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
 document.querySelectorAll("nav.tabs button").forEach(b =>
   b.addEventListener("click", () => showTab(b.dataset.tab)));
 $("server-link").addEventListener("click", () => showTab("server"));
@@ -643,6 +710,8 @@ $("ct-cancel").addEventListener("click", () =>
 $("enc-go").addEventListener("click", runEncrypt);
 $("enc-cancel").addEventListener("click", () =>
   $("modal-encrypt").classList.remove("show"));
+$("sessions-refresh").addEventListener("click", loadSessions);
+$("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
 
 // URL params let docs / scripts deep-link to a specific tab + table.
 //   /?table=employees.dbf&tab=structure

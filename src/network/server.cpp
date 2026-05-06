@@ -118,6 +118,60 @@ void Server::add_credential(const std::string& user,
 
 bool Server::require_auth() const noexcept { return !creds_.empty(); }
 
+std::vector<Server::SessionInfo> Server::sessions_snapshot() const {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    std::vector<SessionInfo> out;
+    out.reserve(sessions_info_.size());
+    for (auto& kv : sessions_info_) out.push_back(kv.second);
+    return out;
+}
+
+std::uint64_t Server::register_session(const SessionInfo& info) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    auto id = next_session_id_.fetch_add(1);
+    SessionInfo si = info;
+    si.id = id;
+    sessions_info_.emplace(id, std::move(si));
+    return id;
+}
+
+void Server::unregister_session(std::uint64_t id) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    sessions_info_.erase(id);
+}
+
+void Server::touch_session(std::uint64_t id, bool inbound, bool outbound) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    auto it = sessions_info_.find(id);
+    if (it == sessions_info_.end()) return;
+    it->second.last_activity = std::chrono::system_clock::now();
+    if (inbound)  ++it->second.frames_in;
+    if (outbound) ++it->second.frames_out;
+}
+
+void Server::set_session_user(std::uint64_t id,
+                               const std::string& user,
+                               const std::string& data_dir) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    auto it = sessions_info_.find(id);
+    if (it == sessions_info_.end()) return;
+    it->second.user     = user;
+    it->second.data_dir = data_dir;
+}
+
+void Server::add_session_table(std::uint64_t id, std::int32_t delta) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    auto it = sessions_info_.find(id);
+    if (it == sessions_info_.end()) return;
+    auto& n = it->second.open_tables;
+    if (delta < 0) {
+        std::uint32_t d = static_cast<std::uint32_t>(-delta);
+        n = (n > d) ? n - d : 0;
+    } else {
+        n += static_cast<std::uint32_t>(delta);
+    }
+}
+
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
     if (running_.load()) return {};
@@ -202,6 +256,21 @@ inline void write_u32_le(std::uint32_t v, std::vector<std::uint8_t>& out) {
 } // namespace
 
 void Server::session_loop(Socket s) {
+    // studio.web.0.4 — register an entry in the live sessions
+    // registry so the Studio "Sessions" tab can list this peer.
+    SessionInfo init;
+    if (auto pa = socket_peer_addr(s); pa) {
+        init.peer_ip   = pa.value().ip;
+        init.peer_port = pa.value().port;
+    }
+    init.connected_at  = std::chrono::system_clock::now();
+    init.last_activity = init.connected_at;
+    std::uint64_t sid = this->register_session(init);
+    struct SessionGuard {
+        Server* srv; std::uint64_t id;
+        ~SessionGuard() { if (srv) srv->unregister_session(id); }
+    } sg{this, sid};
+
     // M12.4 — per-session state. Connection is opened by the
     // Connect frame; OpenTable allocates a session-scoped 32-bit
     // table id keyed into engine handles.
@@ -257,6 +326,7 @@ void Server::session_loop(Socket s) {
     while (true) {
         auto fr = read_frame(s);
         if (!fr) break;                       // connection closed
+        this->touch_session(sid, true, false);
         const Frame& f = fr.value();
         Frame reply;
         switch (f.opcode) {
@@ -309,6 +379,7 @@ void Server::session_loop(Socket s) {
                 }
                 sess_conn = std::make_unique<openads::session::Connection>(
                     std::move(co).value());
+                this->set_session_user(sid, user, dir);
                 reply.opcode = Opcode::ConnectAck;
                 std::string ackmsg = "connected:" + dir;
                 reply.payload.assign(ackmsg.begin(), ackmsg.end());
@@ -338,6 +409,7 @@ void Server::session_loop(Socket s) {
                 }
                 std::uint32_t id = next_id++;
                 tbls.emplace(id, th.value());
+                this->add_session_table(sid, +1);
                 reply.opcode = Opcode::OpenTableAck;
                 write_u32_le(id, reply.payload);
                 break;
@@ -349,6 +421,7 @@ void Server::session_loop(Socket s) {
                 if (cit != cursor_tbls.end()) {
                     (void)AdsCloseTable(cit->second);
                     cursor_tbls.erase(cit);
+                    this->add_session_table(sid, -1);
                     reply.opcode = Opcode::CloseTableAck;
                     break;
                 }
@@ -356,6 +429,7 @@ void Server::session_loop(Socket s) {
                 if (it != tbls.end()) {
                     sess_conn->close_table(it->second);
                     tbls.erase(it);
+                    this->add_session_table(sid, -1);
                 }
                 reply.opcode = Opcode::CloseTableAck;
                 break;
@@ -733,6 +807,7 @@ void Server::session_loop(Socket s) {
             }
         }
         if (auto wr = write_frame(s, reply); !wr) break;
+        this->touch_session(sid, false, true);
     }
     cleanup();
     sock_close(s);

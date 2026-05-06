@@ -31,6 +31,15 @@ struct ListenerOptions {
 
 util::Result<Socket>      listen_tcp(const ListenerOptions& opts);
 util::Result<std::uint16_t> socket_local_port(const Socket& sock);
+
+// studio.web.0.4 — return peer "ip:port" of a connected socket
+// (as accepted from a listener). Used by the Server to populate
+// SessionInfo for the Studio sessions panel.
+struct PeerAddr {
+    std::string   ip;
+    std::uint16_t port = 0;
+};
+util::Result<PeerAddr>      socket_peer_addr(const Socket& sock);
 util::Result<Socket>      accept_one(Socket& listener);
 util::Result<Socket>      connect_tcp(const std::string& host,
                                        std::uint16_t port);

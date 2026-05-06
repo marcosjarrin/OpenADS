@@ -6,6 +6,7 @@
 #include "util/result.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -47,6 +48,23 @@ public:
                         const std::string& password);
     bool require_auth() const noexcept;
 
+    // studio.web.0.4 — observable session info exposed for the
+    // Studio "Sessions" tab. Snapshot is taken under a mutex so
+    // concurrent reads from the HTTP console are safe.
+    struct SessionInfo {
+        std::uint64_t                                       id = 0;
+        std::string                                         peer_ip;
+        std::uint16_t                                       peer_port = 0;
+        std::string                                         user;
+        std::string                                         data_dir;
+        std::chrono::system_clock::time_point               connected_at{};
+        std::chrono::system_clock::time_point               last_activity{};
+        std::uint64_t                                       frames_in   = 0;
+        std::uint64_t                                       frames_out  = 0;
+        std::uint32_t                                       open_tables = 0;
+    };
+    std::vector<SessionInfo> sessions_snapshot() const;
+
 private:
     void accept_loop();
     void session_loop(Socket s);
@@ -61,6 +79,27 @@ private:
     // M12.9 — credential map (user -> password). Read-only after
     // start() returns; set up at construction time / before start.
     std::unordered_map<std::string, std::string> creds_;
+
+    // studio.web.0.4 — live session registry. session_loop
+    // updates these counters; the HTTP console reads them via
+    // sessions_snapshot().
+    mutable std::mutex                          info_mu_;
+    std::unordered_map<std::uint64_t, SessionInfo> sessions_info_;
+    std::atomic<std::uint64_t>                  next_session_id_{1};
+
+public:
+    // Internal helpers used by session_loop; public so the
+    // anonymous-namespace functions in server.cpp can reach
+    // them without exposing extra friend declarations.
+    std::uint64_t register_session(const SessionInfo& info);
+    void          unregister_session(std::uint64_t id);
+    void          touch_session(std::uint64_t id, bool inbound,
+                                 bool outbound);
+    void          set_session_user(std::uint64_t id,
+                                    const std::string& user,
+                                    const std::string& data_dir);
+    void          add_session_table(std::uint64_t id,
+                                     std::int32_t delta);
 };
 
 // Read exactly `n` bytes into `buf` (handles partial recvs).

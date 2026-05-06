@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 #if defined(OPENADS_WITH_HTTP)
     openads::studio::HttpConsole http;
     if (http_port != 0) {
-        if (!http.start(host, http_port, data_dir)) {
+        if (!http.start(host, http_port, data_dir, &srv)) {
             std::fprintf(stderr,
                 "Studio HTTP console: bind to %s:%u failed\n",
                 host.c_str(), http_port);

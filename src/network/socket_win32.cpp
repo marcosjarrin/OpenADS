@@ -69,6 +69,21 @@ util::Result<std::uint16_t> socket_local_port(const Socket& sock) {
     return static_cast<std::uint16_t>(ntohs(addr.sin_port));
 }
 
+util::Result<PeerAddr> socket_peer_addr(const Socket& sock) {
+    sockaddr_in addr{};
+    int len = sizeof(addr);
+    if (getpeername(static_cast<SOCKET>(sock.handle),
+                    reinterpret_cast<sockaddr*>(&addr), &len) ==
+        SOCKET_ERROR) {
+        return util::Error{5000, WSAGetLastError(),
+                           "getpeername failed", ""};
+    }
+    char ipbuf[INET_ADDRSTRLEN] = {0};
+    InetNtopA(AF_INET, &addr.sin_addr, ipbuf, sizeof(ipbuf));
+    return PeerAddr{std::string(ipbuf),
+                    static_cast<std::uint16_t>(ntohs(addr.sin_port))};
+}
+
 util::Result<Socket> accept_one(Socket& listener) {
     sockaddr_in addr{};
     int len = sizeof(addr);
