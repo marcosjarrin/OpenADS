@@ -135,9 +135,15 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   <aside>
     <div class="aside-head">
       <h2>Tables</h2>
-      <button id="btn-new-table" title="New table">+</button>
+      <div style="display:flex;gap:4px">
+        <button id="btn-refresh-tables" title="Refresh">↻</button>
+        <button id="btn-upload-table"   title="Upload DBF">⇪</button>
+        <button id="btn-new-table"      title="New table">+</button>
+      </div>
     </div>
     <ul id="tables"></ul>
+    <input type="file" id="upload-input" multiple
+           style="display:none" accept=".dbf,.cdx,.ntx,.fpt,.dbt,.add">
     <h2>Server</h2>
     <ul><li id="server-link">Info</li></ul>
   </aside>
@@ -438,6 +444,20 @@ async function loadStructure() {
     $("btn-reindex").addEventListener("click", () => maintenanceOp("reindex"));
     $("btn-pack").addEventListener("click",    () => maintenanceOp("pack"));
     $("btn-zap").addEventListener("click",     () => maintenanceOp("zap"));
+    // studio.web.0.7 — render sidecar files for this table.
+    try {
+      const sc = await api(
+        `/api/tables/${encodeURIComponent(state.table)}/sidecars`);
+      if (sc.sidecars && sc.sidecars.length) {
+        const rows = sc.sidecars.map(s =>
+          `<tr><td>${esc(s.file)}</td><td>${esc(s.kind)}</td>
+           <td>${s.bytes}</td></tr>`).join("");
+        $("structure-body").insertAdjacentHTML("beforeend", `
+          <h3 style="margin-top:24px;font-size:15px;opacity:0.85">Companion files</h3>
+          <table><thead><tr><th>file</th><th>kind</th><th>bytes</th></tr></thead>
+          <tbody>${rows}</tbody></table>`);
+      }
+    } catch (e) { /* non-fatal */ }
     $("ci-form").addEventListener("submit", async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -730,15 +750,26 @@ function exportCsv() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  if (n < 1024*1024*1024) return (n/1024/1024).toFixed(2) + " MB";
+  return (n/1024/1024/1024).toFixed(2) + " GB";
+}
 async function loadServerInfo() {
   try {
-    const data = await api("/api/server/info");
+    const d = await api("/api/server/info");
     $("server-body").innerHTML = `<div class="kv">
-      <div>Engine</div><div>${esc(data.engine)} ${esc(data.version || "")}</div>
-      <div>HTTP module</div><div>${esc(data.http || "")}</div>
-      <div>Server name</div><div>${esc(data.server_name || "")}</div>
-      <div>Data dir</div><div>${esc(data.data_dir)}</div>
-      <div>Tables</div><div>${data.tables.length}</div>
+      <div>Engine</div><div>${esc(d.engine)} ${esc(d.version || "")}</div>
+      <div>HTTP module</div><div>${esc(d.http || "")}</div>
+      <div>Server name</div><div>${esc(d.server_name || "")}</div>
+      <div>Data dir</div><div>${esc(d.data_dir)}</div>
+      <div>Tables</div><div>${d.tables.length}</div>
+      <div>Dictionaries</div><div>${d.dict_count || 0}</div>
+      <div>DBF total</div><div>${fmtBytes(d.dbf_bytes || 0)}</div>
+      <div>Sidecar total</div><div>${fmtBytes(d.sidecar_bytes || 0)}</div>
+      <div>On-disk total</div><div>${fmtBytes(d.total_bytes || 0)}</div>
       </div>`;
   } catch (e) {
     $("server-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
@@ -949,6 +980,23 @@ $("sql").addEventListener("keydown", e => {
   if (e.key === "ArrowDown" && e.ctrlKey) { e.preventDefault(); recallHistory( 1); }
 });
 $("btn-new-table").addEventListener("click", openCreateModal);
+$("btn-refresh-tables").addEventListener("click", loadTables);
+$("btn-upload-table").addEventListener("click", () =>
+  $("upload-input").click());
+$("upload-input").addEventListener("change", async e => {
+  const files = e.target.files;
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("file", f, f.name);
+  try {
+    const r = await fetch("/api/upload", {method:"POST", body: fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `${r.status}`);
+    await loadTables();
+    setStatus(`uploaded ${j.count} file(s)`, "ok");
+  } catch (err) { setStatus("upload failed: " + err.message, "err"); }
+  e.target.value = "";
+});
 $("ct-add-col").addEventListener("click", addCreateCol);
 $("ct-create").addEventListener("click", runCreateTable);
 $("ct-cancel").addEventListener("click", () =>

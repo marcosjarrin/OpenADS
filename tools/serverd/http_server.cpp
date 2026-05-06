@@ -707,13 +707,38 @@ json table_create_index(const std::string& dir,
     return json{{"ok", true}, {"sql", sql}};
 }
 
+// studio.web.0.7 — companion files for a single DBF (.cdx / .ntx /
+// .fpt / .dbt / .dbv) with sizes. Useful for the Structure tab so
+// admins can see at a glance which sidecars exist + how big they
+// are without opening every index bag.
+json table_sidecars(const std::string& dir, const std::string& tname) {
+    fs::path base = fs::path(dir) / tname;
+    fs::path stem = base.parent_path() / base.stem();
+    json arr = json::array();
+    static const std::vector<std::string> exts =
+        {".cdx", ".ntx", ".fpt", ".dbt", ".dbv"};
+    std::error_code ec;
+    for (auto& ext : exts) {
+        fs::path p = stem;
+        p += ext;
+        if (!fs::exists(p, ec)) continue;
+        auto sz = fs::file_size(p, ec);
+        arr.push_back(json{
+            {"file",  p.filename().string()},
+            {"kind",  ext.substr(1)},
+            {"bytes", ec ? 0 : static_cast<std::uint64_t>(sz)}
+        });
+    }
+    return json{{"table", tname}, {"sidecars", arr}};
+}
+
 // studio.web.0.2 — server info panel.
 json server_info(const std::string& dir) {
     json out{
         {"engine",      "openads"},
         {"version",     "1.0.0-rc1"},
         {"data_dir",    dir},
-        {"http",        "studio.web.0.2"}
+        {"http",        "studio.web.0.7"}
     };
     AbiSession sess(dir);
     if (sess.ok()) {
@@ -723,7 +748,28 @@ json server_info(const std::string& dir) {
             out["server_name"] = std::string(reinterpret_cast<char*>(buf), cap);
         }
     }
-    out["tables"] = list_dbf_files(dir);
+    auto tables = list_dbf_files(dir);
+    out["tables"] = tables;
+
+    // studio.web.0.7 — aggregate stats (total tables, dbf bytes,
+    // sidecar bytes) so the Server tab can surface a one-glance
+    // health summary.
+    std::error_code ec;
+    std::uint64_t dbf_bytes = 0, sidecar_bytes = 0;
+    for (auto& t : tables) {
+        auto p = fs::path(dir) / t;
+        if (auto sz = fs::file_size(p, ec); !ec) dbf_bytes += sz;
+        // sidecars by stem
+        auto stem = p.parent_path() / p.stem();
+        for (auto& ext : {".cdx", ".ntx", ".fpt", ".dbt", ".dbv"}) {
+            fs::path sp = stem; sp += ext;
+            if (auto sz = fs::file_size(sp, ec); !ec) sidecar_bytes += sz;
+        }
+    }
+    out["dbf_bytes"]      = dbf_bytes;
+    out["sidecar_bytes"]  = sidecar_bytes;
+    out["total_bytes"]    = dbf_bytes + sidecar_bytes;
+    out["dict_count"]     = list_add_files(dir).size();
     return out;
 }
 
@@ -1084,6 +1130,42 @@ bool HttpConsole::start(const std::string& host,
         json j = table_create_index(data_dir_, req.matches[1], body);
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Get(R"(/api/tables/([^/]+)/sidecars)",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_sidecars(data_dir_, req.matches[1]);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // studio.web.0.7 — DBF + sidecar upload from the browser.
+    // multipart/form-data: one or more file fields named "file"; each
+    // file is written to the data dir under its uploaded basename
+    // (path traversal is rejected).
+    srv.Post("/api/upload",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json arr = json::array();
+        for (auto& kv : req.files) {
+            const auto& f = kv.second;
+            std::string fname = f.filename;
+            if (fname.empty()) continue;
+            // Reject path traversal.
+            if (fname.find("..") != std::string::npos ||
+                fname.find('/')  != std::string::npos ||
+                fname.find('\\') != std::string::npos) {
+                continue;
+            }
+            fs::path dest = fs::path(data_dir_) / fname;
+            std::ofstream out(dest, std::ios::binary);
+            out.write(f.content.data(),
+                      static_cast<std::streamsize>(f.content.size()));
+            arr.push_back(json{{"file", fname},
+                               {"bytes", f.content.size()}});
+        }
+        res.set_content(json{{"ok", true},
+                             {"saved", arr},
+                             {"count", arr.size()}}.dump(),
+                        "application/json");
     });
 
     srv.Post("/api/sql",
