@@ -21,7 +21,9 @@ class RemoteConnection {
 public:
     util::Result<void> connect(const std::string& host,
                                std::uint16_t port,
-                               const std::string& data_dir);
+                               const std::string& data_dir,
+                               const std::string& user     = "",
+                               const std::string& password = "");
     void               disconnect() noexcept;
     bool               valid() const noexcept { return sock_.valid(); }
 
@@ -46,6 +48,8 @@ public:
     // M12.7 — remote SQL exec. Returns cursor table-id (0 = no cursor,
     // i.e. INSERT / UPDATE / DELETE / DDL).
     util::Result<std::uint32_t> execute_sql(const std::string& sql);
+    // M12.8 — remote index ops.
+    util::Result<void>          reindex(std::uint32_t id);
 
 private:
     util::Result<Frame> request(const Frame& f);

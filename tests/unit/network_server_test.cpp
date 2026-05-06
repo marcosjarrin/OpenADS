@@ -66,7 +66,14 @@ TEST_CASE("M12.3 server Connect against a real data dir succeeds") {
     Frame req;
     req.opcode = Opcode::Connect;
     std::string ds = dir.string();
-    req.payload.assign(ds.begin(), ds.end());
+    auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+        out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+    };
+    pushlen(req.payload, static_cast<std::uint16_t>(ds.size()));
+    req.payload.insert(req.payload.end(), ds.begin(), ds.end());
+    pushlen(req.payload, 0);                       // empty user
+    pushlen(req.payload, 0);                       // empty password
     REQUIRE(write_frame(cs, req).has_value());
     auto reply = read_frame(cs);
     REQUIRE(reply.has_value());
@@ -159,7 +166,14 @@ TEST_CASE("M12.4 remote OpenTable + GetRecordCount + walk + GetField") {
         Frame req;
         req.opcode = Opcode::Connect;
         std::string ds = dir.string();
-        req.payload.assign(ds.begin(), ds.end());
+        auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+            out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+            out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+        };
+        pushlen(req.payload, static_cast<std::uint16_t>(ds.size()));
+        req.payload.insert(req.payload.end(), ds.begin(), ds.end());
+        pushlen(req.payload, 0);                   // user
+        pushlen(req.payload, 0);                   // password
         REQUIRE(write_frame(cs, req).has_value());
         auto rep = read_frame(cs);
         REQUIRE(rep.has_value());
@@ -461,6 +475,103 @@ TEST_CASE("M12.7 remote SQL exec — SELECT cursor + COUNT round-trip") {
     }
 
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.8 remote AdsReindex routes through wire") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_8";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+    // No bound indexes — Reindex over an indexless table is a no-op
+    // success. The point of the test is that the wire op and the
+    // server-side dispatch hold together end-to-end.
+    REQUIRE(AdsReindex(hTable) == 0);
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.9 server with credentials rejects bad password") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_9_bad";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA"});
+
+    Server srv;
+    srv.add_credential("admin", "letmein");
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+
+    UNSIGNED8 user[16] = "admin";
+    UNSIGNED8 wrong[16] = "nope";
+    ADSHANDLE hConn = 0;
+    CHECK(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                       user, wrong, 0, &hConn) != 0);
+    CHECK(hConn == 0);
+
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.9 server with credentials accepts matching password") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_9_ok";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA"});
+
+    Server srv;
+    srv.add_credential("admin", "letmein");
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+
+    UNSIGNED8 user[16] = "admin";
+    UNSIGNED8 pw  [16] = "letmein";
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         user, pw, 0, &hConn) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     srv.stop();
     fs::remove_all(dir, ec);

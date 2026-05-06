@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace openads::network {
@@ -38,6 +39,13 @@ public:
     bool               running() const noexcept { return running_.load(); }
     void               stop() noexcept;
 
+    // M12.9 — auth. When at least one credential is registered, every
+    // Connect frame must carry a matching user / password pair; an
+    // empty map accepts any client (back-compat / dev mode).
+    void add_credential(const std::string& user,
+                        const std::string& password);
+    bool require_auth() const noexcept;
+
 private:
     void accept_loop();
     void session_loop(Socket s);
@@ -48,6 +56,10 @@ private:
     std::thread              accept_thread_;
     std::mutex               sessions_mu_;
     std::vector<std::thread> sessions_;
+
+    // M12.9 — credential map (user -> password). Read-only after
+    // start() returns; set up at construction time / before start.
+    std::unordered_map<std::string, std::string> creds_;
 };
 
 // Read exactly `n` bytes into `buf` (handles partial recvs).

@@ -54,18 +54,32 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
 
 util::Result<void> RemoteConnection::connect(const std::string& host,
                                               std::uint16_t port,
-                                              const std::string& data_dir) {
+                                              const std::string& data_dir,
+                                              const std::string& user,
+                                              const std::string& password) {
     auto s = connect_tcp(host, port);
     if (!s) return s.error();
     sock_ = s.value();
+    auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
+        out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+    };
+    auto pushstr = [&pushlen](std::vector<std::uint8_t>& out,
+                              const std::string& s) {
+        pushlen(out, static_cast<std::uint16_t>(s.size()));
+        out.insert(out.end(), s.begin(), s.end());
+    };
     Frame req;
     req.opcode = Opcode::Connect;
-    req.payload.assign(data_dir.begin(), data_dir.end());
+    pushstr(req.payload, data_dir);
+    pushstr(req.payload, user);
+    pushstr(req.payload, password);
     auto rep = request(req);
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::ConnectAck) {
-        return util::Error{5000, 0, "Connect: server returned non-ack",
-                           data_dir};
+        std::string msg(rep.value().payload.begin(),
+                        rep.value().payload.end());
+        return util::Error{5000, 0, "Connect: " + msg, data_dir};
     }
     return {};
 }
@@ -264,6 +278,18 @@ util::Result<void> RemoteConnection::flush_table(std::uint32_t id) {
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::FlushTableAck) {
         return util::Error{5000, 0, "FlushTable: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::reindex(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::Reindex;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::ReindexAck) {
+        return util::Error{5000, 0, "Reindex: server error", ""};
     }
     return {};
 }

@@ -222,7 +222,7 @@ void purge_pending_binaries_for_table(openads::engine::Table* t);
 extern "C" {
 
 UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
-                        UNSIGNED8* /*pucUser*/, UNSIGNED8* /*pucPwd*/,
+                        UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                           "phConnect is null");
@@ -231,12 +231,18 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     // through the wire client; every Ads* function that recognises
     // the connection handle's RemoteConnection kind dispatches to
     // the server instead of touching a local Connection.
+    // M12.9 — pucUser / pucPwd are forwarded into the Connect frame;
+    // the server validates them when it has credentials registered.
     {
         std::string host, dir;
         std::uint16_t port = 0;
         if (openads::network::parse_tcp_uri(path, host, port, dir)) {
+            std::string user = pucUser ? openads::abi::to_internal(pucUser, 0)
+                                       : std::string();
+            std::string pw   = pucPwd  ? openads::abi::to_internal(pucPwd, 0)
+                                       : std::string();
             auto rc = std::make_unique<openads::network::RemoteConnection>();
-            if (auto r = rc->connect(host, port, dir); !r) {
+            if (auto r = rc->connect(host, port, dir, user, pw); !r) {
                 return fail(r.error());
             }
             auto& s = state();
@@ -3098,6 +3104,11 @@ UNSIGNED32 AdsConvertTable(ADSHANDLE   hHandle,
 }
 
 UNSIGNED32 AdsReindex(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->reindex(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->reindex();

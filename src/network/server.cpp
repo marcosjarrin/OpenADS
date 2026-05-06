@@ -61,6 +61,13 @@ util::Result<void> write_frame(Socket& s, const Frame& f) {
 
 Server::~Server() { stop(); }
 
+void Server::add_credential(const std::string& user,
+                            const std::string& password) {
+    creds_[user] = password;
+}
+
+bool Server::require_auth() const noexcept { return !creds_.empty(); }
+
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
     if (running_.load()) return {};
@@ -200,16 +207,46 @@ void Server::session_loop(Socket s) {
                 break;
             }
             case Opcode::Connect: {
-                std::string dir(reinterpret_cast<const char*>(
-                                    f.payload.data()),
-                                f.payload.size());
+                // M12.9 — Connect payload format:
+                //   [u16 dlen][dir][u16 ulen][user][u16 plen][password]
+                // All three lengths are required; user/password may be
+                // empty when the server doesn't require auth.
+                const auto& pl = f.payload;
+                std::string dir, user, pw;
+                std::size_t p = 0;
+                auto readlen = [&](std::uint16_t& out)->bool {
+                    if (p + 2 > pl.size()) return false;
+                    out = static_cast<std::uint16_t>(
+                        static_cast<std::uint16_t>(pl[p]) |
+                        (static_cast<std::uint16_t>(pl[p+1]) << 8));
+                    p += 2; return true;
+                };
+                auto readstr = [&](std::string& out, std::uint16_t n)->bool {
+                    if (p + n > pl.size()) return false;
+                    out.assign(reinterpret_cast<const char*>(pl.data() + p), n);
+                    p += n; return true;
+                };
+                std::uint16_t dl=0, ul=0, pwl=0;
+                if (!readlen(dl) || !readstr(dir, dl) ||
+                    !readlen(ul) || !readstr(user, ul) ||
+                    !readlen(pwl) || !readstr(pw, pwl)) {
+                    reply = err("Connect: bad payload");
+                    break;
+                }
+                if (require_auth()) {
+                    auto cit = creds_.find(user);
+                    if (cit == creds_.end() || cit->second != pw) {
+                        reply = err("Connect: authentication failed");
+                        break;
+                    }
+                }
                 auto co = openads::session::Connection::open(dir);
                 if (!co) { reply = err("Connect: connection open failed"); break; }
                 sess_conn = std::make_unique<openads::session::Connection>(
                     std::move(co).value());
                 reply.opcode = Opcode::ConnectAck;
-                std::string p = "connected:" + dir;
-                reply.payload.assign(p.begin(), p.end());
+                std::string ackmsg = "connected:" + dir;
+                reply.payload.assign(ackmsg.begin(), ackmsg.end());
                 break;
             }
             case Opcode::Disconnect: {
@@ -505,6 +542,20 @@ void Server::session_loop(Socket s) {
                 auto r = tbl->flush();
                 if (!r) { reply = err("FlushTable: flush failed"); break; }
                 reply.opcode = Opcode::FlushTableAck;
+                break;
+            }
+            case Opcode::Reindex: {
+                if (f.payload.size() < 4) { reply = err("Reindex: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("Reindex: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("Reindex: lookup failed"); break; }
+                auto r = tbl->reindex();
+                if (!r) { reply = err("Reindex: reindex failed"); break; }
+                reply.opcode = Opcode::ReindexAck;
                 break;
             }
             default: {
