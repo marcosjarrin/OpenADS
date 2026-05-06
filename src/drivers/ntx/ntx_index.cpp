@@ -544,7 +544,7 @@ NtxIndex::insert(std::uint32_t recno, const std::string& key) {
     bool          need_new_root = false;
     for (std::int32_t level = static_cast<std::int32_t>(stack_.size()) - 2;
          level >= 0; --level) {
-        StackFrame parent_frame = stack_[level];
+        StackFrame parent_frame = stack_[static_cast<std::size_t>(level)];
         auto pp = get_page_(parent_frame.page);
         if (!pp) return pp.error();
         Page& parent = *pp.value();

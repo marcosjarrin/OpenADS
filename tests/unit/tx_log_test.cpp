@@ -126,7 +126,7 @@ TEST_CASE("TxLog: group commit — many threads append, single fsync covers all"
 
         std::vector<std::thread> threads;
         threads.reserve(N_THREADS);
-        for (int t = 0; t < N_THREADS; ++t) {
+        for (std::size_t t = 0; t < N_THREADS; ++t) {
             threads.emplace_back([&, t]() {
                 for (std::size_t i = 0; i < N_PER_THR; ++i) {
                     std::uint64_t tx_id = static_cast<std::uint64_t>(
