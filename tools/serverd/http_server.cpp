@@ -10,6 +10,12 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+// AdsGetFieldDecimals is exported but not declared in ace.h yet —
+// forward-declare locally so we can call it from the schema endpoint.
+extern "C" UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable,
+                                            UNSIGNED8* pucField,
+                                            UNSIGNED16* pusDec);
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -58,6 +64,237 @@ std::vector<std::string> list_dbf_files(const std::string& dir) {
         if (ext == ".dbf") out.push_back(e.path().filename().string());
     }
     std::sort(out.begin(), out.end());
+    return out;
+}
+
+// studio.web.0.2 — schema for a single table:
+// returns column metadata (name, type letter, length, decimals)
+// + record count + raw file size on disk.
+json table_schema(const std::string& dir, const std::string& tname) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t n = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), n);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED16 nf = 0;
+    AdsGetNumFields(hTable, &nf);
+    json cols = json::array();
+    for (UNSIGNED16 i = 1; i <= nf; ++i) {
+        UNSIGNED8 nm[64] = {0};
+        UNSIGNED16 cap = sizeof(nm);
+        AdsGetFieldName(hTable, i, nm, &cap);
+        std::string fname(reinterpret_cast<char*>(nm), cap);
+        UNSIGNED16 ftype = 0;
+        UNSIGNED32 flen  = 0;
+        UNSIGNED16 fdec  = 0;
+        std::vector<UNSIGNED8> fbuf(fname.size() + 1);
+        std::memcpy(fbuf.data(), fname.data(), fname.size());
+        AdsGetFieldType    (hTable, fbuf.data(), &ftype);
+        AdsGetFieldLength  (hTable, fbuf.data(), &flen);
+        AdsGetFieldDecimals(hTable, fbuf.data(), &fdec);
+        cols.push_back(json{
+            {"name",     fname},
+            {"type",     ftype},
+            {"length",   flen},
+            {"decimals", fdec}
+        });
+    }
+    UNSIGNED32 rc = 0;
+    AdsGetRecordCount(hTable, 0, &rc);
+    AdsCloseTable(hTable);
+    std::error_code ec;
+    auto sz = fs::file_size(fs::path(dir) / tname, ec);
+    return json{
+        {"table",        tname},
+        {"columns",      cols},
+        {"record_count", rc},
+        {"file_bytes",   ec ? 0 : static_cast<std::uint64_t>(sz)}
+    };
+}
+
+// studio.web.0.2 — paginated row browse for a single table.
+json table_rows(const std::string& dir, const std::string& tname,
+                std::uint32_t offset, std::uint32_t limit) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED16 nf = 0;
+    AdsGetNumFields(hTable, &nf);
+    std::vector<std::string> cnames; cnames.reserve(nf);
+    for (UNSIGNED16 i = 1; i <= nf; ++i) {
+        UNSIGNED8 nm[64] = {0}; UNSIGNED16 cap = sizeof(nm);
+        AdsGetFieldName(hTable, i, nm, &cap);
+        cnames.emplace_back(reinterpret_cast<char*>(nm), cap);
+    }
+    UNSIGNED32 rc = 0;
+    AdsGetRecordCount(hTable, 0, &rc);
+    json out{{"cols", cnames}, {"rows", json::array()},
+             {"total", rc}, {"offset", offset}, {"limit", limit}};
+    if (offset >= rc) {
+        AdsCloseTable(hTable);
+        return out;
+    }
+    AdsGotoRecord(hTable, offset + 1);
+    std::uint32_t walked = 0;
+    while (walked < limit) {
+        UNSIGNED16 atend = 0;
+        AdsAtEOF(hTable, &atend);
+        if (atend) break;
+        UNSIGNED32 recno = 0;
+        AdsGetRecordNum(hTable, 0, &recno);
+        UNSIGNED16 deleted = 0;
+        AdsIsRecordDeleted(hTable, &deleted);
+        json row = json::array();
+        // First "column" is the recno + deleted flag for editing.
+        row.push_back(json{{"_recno", recno},
+                           {"_deleted", deleted != 0}});
+        for (auto& cn : cnames) {
+            std::vector<UNSIGNED8> fbuf(cn.size() + 1);
+            std::memcpy(fbuf.data(), cn.data(), cn.size());
+            UNSIGNED8 vbuf[4096] = {0};
+            UNSIGNED32 vcap = sizeof(vbuf);
+            if (AdsGetField(hTable, fbuf.data(), vbuf, &vcap, 0) != 0)
+                vcap = 0;
+            while (vcap > 0 && vbuf[vcap - 1] == ' ') --vcap;
+            row.push_back(std::string(reinterpret_cast<char*>(vbuf), vcap));
+        }
+        out["rows"].push_back(std::move(row));
+        ++walked;
+        if (AdsSkip(hTable, 1) != 0) break;
+    }
+    AdsCloseTable(hTable);
+    return out;
+}
+
+// studio.web.0.2 — append a new row by JSON {col: value, ...}.
+json table_insert(const std::string& dir, const std::string& tname,
+                  const json& values) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    if (AdsAppendRecord(hTable) != 0) {
+        AdsCloseTable(hTable);
+        return json_error("AdsAppendRecord failed", 500);
+    }
+    if (values.is_object()) {
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            std::string col = it.key();
+            std::string val = it.value().is_string()
+                ? it.value().get<std::string>()
+                : it.value().dump();
+            std::vector<UNSIGNED8> fbuf(col.size() + 1);
+            std::memcpy(fbuf.data(), col.data(), col.size());
+            std::vector<UNSIGNED8> vbuf(val.size());
+            if (!val.empty()) std::memcpy(vbuf.data(), val.data(), val.size());
+            AdsSetString(hTable, fbuf.data(),
+                         val.empty() ? nullptr : vbuf.data(),
+                         static_cast<UNSIGNED32>(val.size()));
+        }
+    }
+    AdsWriteRecord(hTable);
+    UNSIGNED32 newrec = 0;
+    AdsGetRecordNum(hTable, 0, &newrec);
+    AdsCloseTable(hTable);
+    return json{{"recno", newrec}, {"ok", true}};
+}
+
+// studio.web.0.2 — overwrite columns in an existing record.
+json table_update(const std::string& dir, const std::string& tname,
+                  std::uint32_t recno, const json& values) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    if (AdsGotoRecord(hTable, recno) != 0) {
+        AdsCloseTable(hTable);
+        return json_error("recno out of range: " + std::to_string(recno), 404);
+    }
+    if (values.is_object()) {
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            std::string col = it.key();
+            std::string val = it.value().is_string()
+                ? it.value().get<std::string>()
+                : it.value().dump();
+            std::vector<UNSIGNED8> fbuf(col.size() + 1);
+            std::memcpy(fbuf.data(), col.data(), col.size());
+            std::vector<UNSIGNED8> vbuf(val.size());
+            if (!val.empty()) std::memcpy(vbuf.data(), val.data(), val.size());
+            AdsSetString(hTable, fbuf.data(),
+                         val.empty() ? nullptr : vbuf.data(),
+                         static_cast<UNSIGNED32>(val.size()));
+        }
+    }
+    AdsWriteRecord(hTable);
+    AdsCloseTable(hTable);
+    return json{{"recno", recno}, {"ok", true}};
+}
+
+// studio.web.0.2 — mark deleted (Clipper convention) or recall.
+json table_delete(const std::string& dir, const std::string& tname,
+                  std::uint32_t recno, bool recall) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    if (AdsGotoRecord(hTable, recno) != 0) {
+        AdsCloseTable(hTable);
+        return json_error("recno out of range", 404);
+    }
+    if (recall) AdsRecallRecord(hTable);
+    else        AdsDeleteRecord(hTable);
+    AdsWriteRecord(hTable);
+    AdsCloseTable(hTable);
+    return json{{"recno", recno}, {"deleted", !recall}};
+}
+
+// studio.web.0.2 — server info panel.
+json server_info(const std::string& dir) {
+    json out{
+        {"engine",      "openads"},
+        {"version",     "1.0.0-rc1"},
+        {"data_dir",    dir},
+        {"http",        "studio.web.0.2"}
+    };
+    AbiSession sess(dir);
+    if (sess.ok()) {
+        UNSIGNED8 buf[256] = {0};
+        UNSIGNED16 cap = sizeof(buf);
+        if (AdsGetServerName(sess.conn, buf, &cap) == 0) {
+            out["server_name"] = std::string(reinterpret_cast<char*>(buf), cap);
+        }
+    }
+    out["tables"] = list_dbf_files(dir);
     return out;
 }
 
@@ -159,6 +396,81 @@ bool HttpConsole::start(const std::string& host,
         auto tables = list_dbf_files(data_dir_);
         json j{{"data_dir", data_dir_},
                {"tables",   tables}};
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Get(R"(/api/tables/([^/]+)/schema)",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_schema(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Get(R"(/api/tables/([^/]+)/rows)",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        std::uint32_t offset = 0, limit = 50;
+        if (req.has_param("offset"))
+            offset = static_cast<std::uint32_t>(
+                std::strtoul(req.get_param_value("offset").c_str(), nullptr, 10));
+        if (req.has_param("limit"))
+            limit  = static_cast<std::uint32_t>(
+                std::strtoul(req.get_param_value("limit").c_str(), nullptr, 10));
+        if (limit == 0 || limit > 5000) limit = 50;
+        json j = table_rows(data_dir_, req.matches[1], offset, limit);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Post(R"(/api/tables/([^/]+)/insert)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = table_insert(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Post(R"(/api/tables/([^/]+)/update)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        std::uint32_t recno = 0;
+        if (req.has_param("recno"))
+            recno = static_cast<std::uint32_t>(
+                std::strtoul(req.get_param_value("recno").c_str(), nullptr, 10));
+        if (recno == 0) { res.status = 400;
+            res.set_content(json_error("missing recno query param", 400).dump(),
+                            "application/json"); return; }
+        json body;
+        try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = table_update(data_dir_, req.matches[1], recno, body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Post(R"(/api/tables/([^/]+)/delete)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        std::uint32_t recno = 0;
+        if (req.has_param("recno"))
+            recno = static_cast<std::uint32_t>(
+                std::strtoul(req.get_param_value("recno").c_str(), nullptr, 10));
+        bool recall = req.has_param("recall") &&
+                      req.get_param_value("recall") == "1";
+        if (recno == 0) { res.status = 400;
+            res.set_content(json_error("missing recno query param", 400).dump(),
+                            "application/json"); return; }
+        json j = table_delete(data_dir_, req.matches[1], recno, recall);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Get("/api/server/info",
+            [this](const httplib::Request&, httplib::Response& res) {
+        json j = server_info(data_dir_);
         res.set_content(j.dump(), "application/json");
     });
 
