@@ -29,6 +29,8 @@ cmake --build build/http --target openads_serverd --config Release
 
 Then open `http://<server-host>:6263/` in any browser.
 
+![Studio home pane — table list + welcome](/OpenADS/assets/img/studio/01-home.png)
+
 ## Panes
 
 | Pane | What it does |
@@ -38,6 +40,32 @@ Then open `http://<server-host>:6263/` in any browser.
 | **Insert**    | Form auto-generated from the table schema; appends a new record. |
 | **SQL**       | Free-form SQL editor. Ctrl+Enter runs. Ctrl+Up / Ctrl+Down recalls history. CSV export. |
 | **Server**    | Engine version + data dir + table list. |
+
+### Browse
+
+![Browse pane — paginated rows of employees.dbf](/OpenADS/assets/img/studio/02-browse.png)
+
+### Structure
+
+![Structure pane — columns, record count, drop / encrypt buttons](/OpenADS/assets/img/studio/03-structure.png)
+
+### Insert
+
+![Insert pane — schema-driven form](/OpenADS/assets/img/studio/04-insert.png)
+
+### SQL
+
+![SQL pane — query + result grid](/OpenADS/assets/img/studio/05-sql.png)
+
+### Server
+
+![Server pane — engine info](/OpenADS/assets/img/studio/06-server.png)
+
+## URL deep links
+
+The SPA reads `?table=<name>&tab=<browse|structure|insert|sql|server>`
+on load so external links land directly on a specific view. The
+`SQL` tab also accepts `?q=<urlencoded-sql>` and `&autorun=1`.
 
 ## REST API
 

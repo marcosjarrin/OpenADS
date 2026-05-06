@@ -328,7 +328,8 @@ async function loadBrowse() {
   }
 }
 
-async function ensureSchema() {
+)OPENADS_SPA"
+R"OPENADS_SPA(async function ensureSchema() {
   if (state.schema && state.schema.table === state.table) return state.schema;
   state.schema = await api(
     `/api/tables/${encodeURIComponent(state.table)}/schema`);
@@ -642,7 +643,28 @@ $("ct-cancel").addEventListener("click", () =>
 $("enc-go").addEventListener("click", runEncrypt);
 $("enc-cancel").addEventListener("click", () =>
   $("modal-encrypt").classList.remove("show"));
-loadTables();
+
+// URL params let docs / scripts deep-link to a specific tab + table.
+//   /?table=employees.dbf&tab=structure
+async function applyUrlState() {
+  await loadTables();
+  const u = new URL(location.href);
+  const t = u.searchParams.get("table");
+  const tab = u.searchParams.get("tab");
+  const q   = u.searchParams.get("q");
+  const run = u.searchParams.get("autorun") === "1";
+  if (t) {
+    state.table = t;
+    document.querySelectorAll("aside li").forEach(li =>
+      li.classList.toggle("active", li.dataset.name === t));
+  }
+  if (tab) showTab(tab);
+  if (q && tab === "sql") {
+    $("sql").value = q;
+    if (run) await runSql();
+  }
+}
+applyUrlState();
 </script>
 </body>
 </html>

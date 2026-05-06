@@ -27,6 +27,8 @@ cmake --build build/http --target openads_serverd --config Release
 
 Depois abra `http://<host-servidor>:6263/`.
 
+![Aba inicial do Studio](/OpenADS/assets/img/studio/01-home.png)
+
 ## Abas
 
 | Aba | Função |
@@ -36,6 +38,32 @@ Depois abra `http://<host-servidor>:6263/`.
 | **Insert**    | Formulário auto-gerado a partir do schema; anexa um registro. |
 | **SQL**       | Editor SQL livre. Ctrl+Enter executa. Ctrl+Up / Ctrl+Down recupera o histórico. Export CSV. |
 | **Server**    | Versão do motor + dir dados + lista de tabelas. |
+
+### Browse
+
+![Aba Browse — linhas paginadas de employees.dbf](/OpenADS/assets/img/studio/02-browse.png)
+
+### Structure
+
+![Aba Structure — colunas, contagem, botões Drop / Encrypt](/OpenADS/assets/img/studio/03-structure.png)
+
+### Insert
+
+![Aba Insert — formulário auto-gerado pelo schema](/OpenADS/assets/img/studio/04-insert.png)
+
+### SQL
+
+![Aba SQL — query + grid resultado](/OpenADS/assets/img/studio/05-sql.png)
+
+### Server
+
+![Aba Server — info do motor](/OpenADS/assets/img/studio/06-server.png)
+
+## Links diretos por URL
+
+A SPA lê `?table=<n>&tab=<browse|structure|insert|sql|server>`
+ao carregar, então links externos caem direto numa view. A aba
+`SQL` também aceita `?q=<sql-urlencoded>` e `&autorun=1`.
 
 ## API REST
 

@@ -27,6 +27,8 @@ cmake --build build/http --target openads_serverd --config Release
 
 Después abre `http://<host-servidor>:6263/`.
 
+![Pestaña inicio de Studio](/OpenADS/assets/img/studio/01-home.png)
+
 ## Pestañas
 
 | Pestaña | Función |
@@ -36,6 +38,32 @@ Después abre `http://<host-servidor>:6263/`.
 | **Insert**    | Formulario auto-generado por el schema; añade un registro. |
 | **SQL**       | Editor SQL libre. Ctrl+Enter ejecuta. Ctrl+Up / Ctrl+Down recupera del historial. Export CSV. |
 | **Server**    | Versión motor + dir datos + lista de tablas. |
+
+### Browse
+
+![Pestaña Browse — filas paginadas de employees.dbf](/OpenADS/assets/img/studio/02-browse.png)
+
+### Structure
+
+![Pestaña Structure — columnas, recuento, botones Drop / Encrypt](/OpenADS/assets/img/studio/03-structure.png)
+
+### Insert
+
+![Pestaña Insert — formulario auto-generado por schema](/OpenADS/assets/img/studio/04-insert.png)
+
+### SQL
+
+![Pestaña SQL — query + grid resultado](/OpenADS/assets/img/studio/05-sql.png)
+
+### Server
+
+![Pestaña Server — info del motor](/OpenADS/assets/img/studio/06-server.png)
+
+## Enlaces directos URL
+
+La SPA lee `?table=<n>&tab=<browse|structure|insert|sql|server>`
+al cargar, así enlaces externos caen directo a una vista. La
+pestaña `SQL` también acepta `?q=<sql-urlencoded>` y `&autorun=1`.
 
 ## API REST
 
