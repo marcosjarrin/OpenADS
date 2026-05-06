@@ -28,62 +28,62 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   * { box-sizing: border-box; }
   body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
          margin: 0; height: 100vh; display: flex; flex-direction: column;
-         background: #1e1e1e; color: #ddd; font-size: 16px; }
-  header { background: #0d6efd; color: white; padding: 12px 18px;
+         background: #1e1e1e; color: #ddd; font-size: 19px; }
+  header { background: #0d6efd; color: white; padding: 14px 22px;
            display: flex; align-items: center; justify-content: space-between; }
-  header h1 { font-size: 20px; margin: 0; font-weight: 500; }
-  header .status { font-size: 14px; opacity: 0.85; }
+  header h1 { font-size: 24px; margin: 0; font-weight: 500; }
+  header .status { font-size: 17px; opacity: 0.85; }
   main { flex: 1; display: flex; min-height: 0; }
-  aside { width: 270px; background: #252526; border-right: 1px solid #333;
+  aside { width: 320px; background: #252526; border-right: 1px solid #333;
           overflow-y: auto; flex-shrink: 0; }
-  aside h2 { font-size: 13px; text-transform: uppercase; opacity: 0.6;
-             margin: 14px 16px 8px; }
+  aside h2 { font-size: 15px; text-transform: uppercase; opacity: 0.6;
+             margin: 16px 18px 10px; }
   aside ul { list-style: none; padding: 0; margin: 0; }
-  aside li { padding: 8px 16px; cursor: pointer; font-size: 15px; }
+  aside li { padding: 10px 18px; cursor: pointer; font-size: 18px; }
   aside li:hover { background: #2d2d30; }
   aside li.active { background: #094771; color: white; }
   section.work { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  nav.tabs { background: #2d2d30; padding: 0 10px; display: flex;
+  nav.tabs { background: #2d2d30; padding: 0 12px; display: flex;
              gap: 1px; border-bottom: 1px solid #094771; }
   nav.tabs button { background: #2d2d30; color: #aaa; border: 0;
-                    padding: 10px 22px; cursor: pointer; font-size: 14px; }
+                    padding: 12px 26px; cursor: pointer; font-size: 17px; }
   nav.tabs button:hover { background: #3a3a3d; color: white; }
   nav.tabs button.active { background: #094771; color: white; }
-  .pane { flex: 1; overflow: auto; padding: 16px; min-height: 0; }
+  .pane { flex: 1; overflow: auto; padding: 20px; min-height: 0; }
   .pane.hidden { display: none; }
-  .toolbar { display: flex; gap: 10px; align-items: center;
-             margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar { display: flex; gap: 12px; align-items: center;
+             margin-bottom: 14px; flex-wrap: wrap; }
   .toolbar button, .btn { background: #0d6efd; color: white; border: 0;
-                          padding: 7px 18px; cursor: pointer;
-                          border-radius: 3px; font-size: 14px; }
+                          padding: 9px 22px; cursor: pointer;
+                          border-radius: 3px; font-size: 17px; }
   .toolbar button:hover, .btn:hover { background: #0b5ed7; }
   .btn-danger { background: #d9534f; }
   .btn-danger:hover { background: #c9302c; }
   .btn-secondary { background: #444; }
   .btn-secondary:hover { background: #555; }
-  .err { color: #f48771; font-size: 14px; }
-  .ok  { color: #6cc24a; font-size: 14px; }
+  .err { color: #f48771; font-size: 17px; }
+  .ok  { color: #6cc24a; font-size: 17px; }
   table { border-collapse: collapse; width: 100%; }
-  th, td { padding: 6px 10px; border: 1px solid #333; text-align: left;
-           white-space: nowrap; vertical-align: top; font-size: 14px; }
+  th, td { padding: 8px 12px; border: 1px solid #333; text-align: left;
+           white-space: nowrap; vertical-align: top; font-size: 17px; }
   th { background: #2d2d30; font-weight: 500; position: sticky; top: 0;
        z-index: 1; }
   tr.deleted td { opacity: 0.4; text-decoration: line-through; }
   .editor textarea { background: #1e1e1e; color: #ddd; border: 1px solid #333;
-                     outline: none; padding: 12px;
-                     font: 15px Consolas, Monaco, monospace; resize: vertical;
-                     width: 100%; min-height: 140px; }
-  .form-row { display: flex; align-items: center; margin-bottom: 8px;
-              gap: 12px; }
-  .form-row label { width: 170px; font-size: 14px; opacity: 0.85; }
+                     outline: none; padding: 14px;
+                     font: 18px Consolas, Monaco, monospace; resize: vertical;
+                     width: 100%; min-height: 170px; }
+  .form-row { display: flex; align-items: center; margin-bottom: 10px;
+              gap: 14px; }
+  .form-row label { width: 200px; font-size: 17px; opacity: 0.85; }
   .form-row input { flex: 1; background: #2d2d30; color: #ddd;
-                    border: 1px solid #444; padding: 6px 10px;
-                    font: 14px Consolas, monospace; border-radius: 2px; }
-  .empty { padding: 24px; opacity: 0.5; font-size: 15px; }
-  .pager { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
-  .pager span { font-size: 14px; opacity: 0.85; }
-  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 18px;
-        font-size: 14px; max-width: 700px; }
+                    border: 1px solid #444; padding: 8px 12px;
+                    font: 17px Consolas, monospace; border-radius: 2px; }
+  .empty { padding: 28px; opacity: 0.5; font-size: 18px; }
+  .pager { margin-top: 14px; display: flex; gap: 12px; align-items: center; }
+  .pager span { font-size: 17px; opacity: 0.85; }
+  .kv { display: grid; grid-template-columns: 200px 1fr; gap: 8px 22px;
+        font-size: 17px; max-width: 800px; }
   .kv > div:nth-child(odd) { opacity: 0.7; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
               display: none; align-items: center; justify-content: center;
