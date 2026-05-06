@@ -225,6 +225,41 @@ int main(int argc, char** argv) {
         "SELECT COUNT(*) FROM bench.dbf WHERE AMT BETWEEN 100 AND 500",
         repeats, "BETWEEN range"));
 
+    // M(bench-v2) — index-aware workloads. Build a CDX tag on ID +
+    // re-time the same predicate workloads so the contrast against
+    // the unindexed full-table-scan rows is visible in one shot.
+    {
+        double t_idx = now_ms();
+        UNSIGNED8 sql[128];
+        std::strcpy(reinterpret_cast<char*>(sql),
+            "CREATE INDEX ID_IDX ON bench.dbf (ID)");
+        ADSHANDLE hCur = 0;
+        AdsExecuteSQLDirect(hStmt, sql, &hCur);
+        if (hCur != 0) AdsCloseTable(hCur);
+        double idx_ms = now_ms() - t_idx;
+        results.push_back({"create_index_id", rows, idx_ms, idx_ms, idx_ms,
+                           "CREATE INDEX on ID column"});
+    }
+
+    results.push_back(time_workload("indexed_eq",       hStmt,
+        "SELECT COUNT(*) FROM bench.dbf WHERE ID = 50000",
+        repeats, "indexed equality (post CREATE INDEX)"));
+
+    results.push_back(time_workload("indexed_range",    hStmt,
+        "SELECT COUNT(*) FROM bench.dbf WHERE ID BETWEEN 10000 AND 20000",
+        repeats, "indexed BETWEEN range (post CREATE INDEX)"));
+
+    results.push_back(time_workload("union_all",        hStmt,
+        "SELECT TAG FROM bench.dbf WHERE TAG = 'AAAA' "
+        "UNION ALL "
+        "SELECT TAG FROM bench.dbf WHERE TAG = 'BBBB'",
+        repeats, "UNION ALL of two filtered selects"));
+
+    results.push_back(time_workload("having_filter",    hStmt,
+        "SELECT TAG FROM bench.dbf "
+        "GROUP BY TAG HAVING COUNT(*) > 100",
+        repeats, "GROUP BY + HAVING"));
+
     AdsCloseSQLStatement(hStmt);
     AdsDisconnect(hConn);
     fs::remove_all(dir, ec);

@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-test:
-    name: ${{ matrix.os }} / ${{ matrix.preset }}
+    name: ${{ matrix.os }} / ${{ matrix.preset }}${{ matrix.tls && ' / TLS' || '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -16,10 +16,18 @@ jobs:
         include:
           - os: windows-2022
             preset: msvc-x64
+            tls: false
           - os: ubuntu-24.04
             preset: ninja-clang
+            tls: false
           - os: macos-14
             preset: default
+            tls: false
+          # M12.12 — verify the OPENADS_WITH_TLS path (vendored
+          # mbedtls 3.6) on at least one runner per release.
+          - os: ubuntu-24.04
+            preset: ninja-clang
+            tls: true
     steps:
       - uses: actions/checkout@v5
 
@@ -28,7 +36,10 @@ jobs:
         uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}
+        shell: bash
 
       - name: Build
         run: cmake --build build/${{ matrix.preset }} --config Release
