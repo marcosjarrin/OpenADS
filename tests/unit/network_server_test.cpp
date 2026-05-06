@@ -3,6 +3,7 @@
 #include "network/client.h"
 #include "network/server.h"
 #include "network/socket.h"
+#include "network/transport.h"
 #include "network/wire.h"
 
 #include <array>
@@ -628,6 +629,27 @@ TEST_CASE("M12.11 batch fetch returns multiple rows in one frame") {
     rc.disconnect();
     srv.stop();
     fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.13 PlainTransport round-trips frames identically to raw Socket") {
+    using openads::network::PlainTransport;
+    using openads::network::make_plain_transport;
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    auto t = make_plain_transport(cli.value());
+
+    Frame req;
+    req.opcode = Opcode::Hello;
+    REQUIRE(write_frame(*t, req).has_value());
+    auto rep = read_frame(*t);
+    REQUIRE(rep.has_value());
+    CHECK(rep.value().opcode == Opcode::HelloAck);
+
+    t->close();
+    srv.stop();
 }
 
 TEST_CASE("M12.12 tls:// URI is reserved and reports unavailable") {

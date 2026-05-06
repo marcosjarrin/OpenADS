@@ -1,6 +1,7 @@
 #pragma once
 
 #include "network/socket.h"
+#include "network/transport.h"
 #include "network/wire.h"
 #include "util/result.h"
 
@@ -65,11 +66,15 @@ private:
 // Read exactly `n` bytes into `buf` (handles partial recvs).
 util::Result<void> recv_exact(Socket& s, std::uint8_t* buf,
                               std::size_t n);
+util::Result<void> recv_exact(ITransport& t, std::uint8_t* buf,
+                              std::size_t n);
 
 // Read one wire frame (4-byte BE length + opcode + payload).
 util::Result<Frame> read_frame(Socket& s);
+util::Result<Frame> read_frame(ITransport& t);
 
 // Write `f` to `s` as a single wire frame.
 util::Result<void> write_frame(Socket& s, const Frame& f);
+util::Result<void> write_frame(ITransport& t, const Frame& f);
 
 } // namespace openads::network

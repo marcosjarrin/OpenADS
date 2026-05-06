@@ -26,9 +26,25 @@ util::Result<void> recv_exact(Socket& s, std::uint8_t* buf,
     return {};
 }
 
-util::Result<Frame> read_frame(Socket& s) {
-    std::uint8_t hdr[5];
-    if (auto r = recv_exact(s, hdr, sizeof(hdr)); !r) return r.error();
+util::Result<void> recv_exact(ITransport& t, std::uint8_t* buf,
+                              std::size_t n) {
+    std::size_t got = 0;
+    while (got < n) {
+        auto r = t.recv(buf + got, n - got);
+        if (!r) return r.error();
+        if (r.value() == 0) {
+            return util::Error{5000, 0, "peer closed connection", ""};
+        }
+        got += r.value();
+    }
+    return {};
+}
+
+namespace {
+
+template <class ReadPayloadFn>
+util::Result<Frame> decode_after_recv(std::uint8_t hdr[5],
+                                       ReadPayloadFn&& read_payload) {
     std::uint32_t n =
         (static_cast<std::uint32_t>(hdr[0]) << 24) |
         (static_cast<std::uint32_t>(hdr[1]) << 16) |
@@ -38,9 +54,27 @@ util::Result<Frame> read_frame(Socket& s) {
     f.opcode = static_cast<Opcode>(hdr[4]);
     if (n > 0) {
         f.payload.resize(n);
-        if (auto r = recv_exact(s, f.payload.data(), n); !r) return r.error();
+        if (auto r = read_payload(f.payload.data(), n); !r) return r.error();
     }
     return f;
+}
+
+} // namespace
+
+util::Result<Frame> read_frame(Socket& s) {
+    std::uint8_t hdr[5];
+    if (auto r = recv_exact(s, hdr, sizeof(hdr)); !r) return r.error();
+    return decode_after_recv(hdr, [&](std::uint8_t* b, std::size_t n) {
+        return recv_exact(s, b, n);
+    });
+}
+
+util::Result<Frame> read_frame(ITransport& t) {
+    std::uint8_t hdr[5];
+    if (auto r = recv_exact(t, hdr, sizeof(hdr)); !r) return r.error();
+    return decode_after_recv(hdr, [&](std::uint8_t* b, std::size_t n) {
+        return recv_exact(t, b, n);
+    });
 }
 
 util::Result<void> write_frame(Socket& s, const Frame& f) {
@@ -50,6 +84,22 @@ util::Result<void> write_frame(Socket& s, const Frame& f) {
     std::size_t sent = 0;
     while (sent < bytes.size()) {
         auto r = sock_send(s, bytes.data() + sent, bytes.size() - sent);
+        if (!r) return r.error();
+        if (r.value() == 0) {
+            return util::Error{5000, 0, "send returned 0", ""};
+        }
+        sent += r.value();
+    }
+    return {};
+}
+
+util::Result<void> write_frame(ITransport& t, const Frame& f) {
+    auto enc = encode_frame(f);
+    if (!enc) return enc.error();
+    auto& bytes = enc.value();
+    std::size_t sent = 0;
+    while (sent < bytes.size()) {
+        auto r = t.send(bytes.data() + sent, bytes.size() - sent);
         if (!r) return r.error();
         if (r.value() == 0) {
             return util::Error{5000, 0, "send returned 0", ""};
