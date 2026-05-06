@@ -49,6 +49,15 @@ TEST_CASE("ByteLock shared lock allows another shared lock") {
 }
 
 TEST_CASE("ByteLock exclusive lock blocks a second exclusive lock (try)") {
+#if defined(__APPLE__)
+    // macOS BSD fcntl(F_SETLK) is process-scoped + lacks
+    // F_OFD_SETLK, so two fds in the same process can't contend
+    // through this primitive. The engine's lock_mgr layers a
+    // userspace map on top to deliver the same Win32 / Linux
+    // contract; this primitive-level test stays skipped on macOS.
+    MESSAGE("skipped on macOS: fcntl(F_SETLK) is process-scoped");
+    return;
+#else
     const auto p = fs::temp_directory_path() / "openads_test_lock_block";
     fs::remove(p);
     {
@@ -67,4 +76,5 @@ TEST_CASE("ByteLock exclusive lock blocks a second exclusive lock (try)") {
         CHECK_FALSE(lb.has_value());
     }
     fs::remove(p);
+#endif
 }
