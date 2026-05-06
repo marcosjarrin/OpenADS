@@ -80,8 +80,16 @@ util::Result<void> Server::start(const std::string& host,
 
 void Server::stop() noexcept {
     if (!running_.exchange(false)) return;
-    // Closing the listener wakes the blocking accept() with an
-    // error on both Win32 and POSIX.
+    // Closing the listener wakes blocking accept() on Linux + Win32,
+    // but macOS BSD sockets don't always abort a pending accept on
+    // close/shutdown. Force a self-connect on the listener's port
+    // first so accept() returns; the accept-loop then notices
+    // running_ == false and exits.
+    auto port_r = socket_local_port(listener_);
+    if (port_r) {
+        auto wake = connect_tcp("127.0.0.1", port_r.value());
+        if (wake) sock_close(wake.value());
+    }
     sock_close(listener_);
     if (accept_thread_.joinable()) accept_thread_.join();
     std::lock_guard<std::mutex> lk(sessions_mu_);
@@ -95,7 +103,16 @@ void Server::accept_loop() {
     while (running_.load()) {
         auto cli = accept_one(listener_);
         if (!cli) {
-            // accept failed — likely listener closed by stop().
+            // accept failed — listener closed by stop().
+            break;
+        }
+        // M12.3 — stop() may have used a self-connect to drain a
+        // BSD accept that doesn't honor close-during-accept. If
+        // running_ is now false, the connection is the wake-up
+        // probe; drop it and exit.
+        if (!running_.load()) {
+            Socket s = cli.value();
+            sock_close(s);
             break;
         }
         Socket s = cli.value();
