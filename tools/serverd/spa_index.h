@@ -107,6 +107,14 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   .aside-head button { background: #094771; color: white; border: 0;
                        width: 24px; height: 24px; cursor: pointer;
                        border-radius: 3px; font-size: 16px; line-height: 1; }
+  /* Truncate big cells; click to expand in a modal. */
+  td.cell { max-width: 380px; overflow: hidden;
+            text-overflow: ellipsis; cursor: pointer; }
+  td.cell:hover { background: #2d2d30; }
+  .modal pre { background: #1e1e1e; padding: 14px; border-radius: 3px;
+               font: 14px Consolas, monospace; white-space: pre-wrap;
+               word-break: break-all; max-height: 70vh; overflow: auto;
+               border: 1px solid #333; }
 </style>
 </head>
 <body>
@@ -224,6 +232,17 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   </div>
 </div>
 
+<div class="modal-bg" id="modal-cell">
+  <div class="modal" style="min-width:520px">
+    <h3 id="cell-title">Cell</h3>
+    <pre id="cell-body"></pre>
+    <div class="toolbar" style="margin-top:14px">
+      <button class="btn btn-secondary" id="cell-copy">Copy</button>
+      <button class="btn btn-secondary" id="cell-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-bg" id="modal-encrypt">
   <div class="modal">
     <h3>Encrypt table</h3>
@@ -317,13 +336,14 @@ async function loadBrowse() {
       $("browse-grid").innerHTML = `<div class="empty">No rows.</div>`;
     } else {
       const cols = data.cols;
-      const tbody = data.rows.map(r => {
+      const tbody = data.rows.map((r, ri) => {
         const meta = r[0];
         const cells = r.slice(1);
         const cls = meta._deleted ? "deleted" : "";
         return `<tr class="${cls}">
           <td>${meta._recno}</td>
-          ${cells.map(v => `<td>${esc(v)}</td>`).join("")}
+          ${cells.map((v, ci) => `<td class="cell"
+              data-row="${ri}" data-col="${ci}">${esc(v)}</td>`).join("")}
           <td><button class="btn btn-secondary" data-edit="${meta._recno}">Edit</button>
               <button class="btn btn-danger" data-delete="${meta._recno}"
                       data-deleted="${meta._deleted}">${
@@ -340,6 +360,17 @@ async function loadBrowse() {
       document.querySelectorAll("[data-delete]").forEach(b =>
         b.addEventListener("click", () =>
           deleteRow(+b.dataset.delete, b.dataset.deleted === "true")));
+      // Click a cell to expand in a modal (memo / long text).
+      const rowsCache = data.rows;
+      const colsCache = data.cols;
+      document.querySelectorAll("td.cell").forEach(td => {
+        td.addEventListener("click", () => {
+          const r = +td.dataset.row, c = +td.dataset.col;
+          const meta = rowsCache[r][0];
+          const v = rowsCache[r].slice(1)[c];
+          openCellModal(`recno ${meta._recno} / ${colsCache[c]}`, v);
+        });
+      });
     }
     $("browse-pager").innerHTML = `
       <button class="btn btn-secondary" id="prev"
@@ -379,18 +410,76 @@ async function loadStructure() {
         <div>File size</div><div>${s.file_bytes} bytes</div>
       </div>
       <div class="toolbar" style="margin-top:14px">
-        <button class="btn" id="btn-encrypt">Encrypt…</button>
-        <button class="btn btn-danger" id="btn-drop">Drop table</button>
+        <button class="btn btn-secondary" id="btn-reindex">Reindex</button>
+        <button class="btn btn-secondary" id="btn-pack">Pack</button>
+        <button class="btn btn-danger"    id="btn-zap">Zap</button>
+        <button class="btn"               id="btn-encrypt">Encrypt…</button>
+        <button class="btn btn-danger"    id="btn-drop">Drop table</button>
+        <span id="struct-status"></span>
       </div>
       <h3 style="margin-top:18px;font-size:15px;opacity:0.85">Columns</h3>
       <table><thead><tr><th>#</th><th>Name</th><th>Type</th><th>Length</th><th>Decimals</th></tr></thead>
       <tbody>${s.columns.map((c,i) => `<tr>
         <td>${i+1}</td><td>${esc(c.name)}</td><td>${c.type}</td>
-        <td>${c.length}</td><td>${c.decimals}</td></tr>`).join("")}</tbody></table>`;
+        <td>${c.length}</td><td>${c.decimals}</td></tr>`).join("")}</tbody></table>
+
+      <h3 style="margin-top:24px;font-size:15px;opacity:0.85">Create index</h3>
+      <form id="ci-form" class="form-row" style="flex-wrap:wrap">
+        <input name="tag"  placeholder="tag (e.g. NAME_TAG)" required>
+        <input name="expr" placeholder="expression (e.g. UPPER(NAME))" required>
+        <label style="font-size:14px;opacity:0.85">
+          <input type="checkbox" name="descending"> DESC</label>
+        <label style="font-size:14px;opacity:0.85">
+          <input type="checkbox" name="unique"> UNIQUE</label>
+        <button type="submit" class="btn">+ Index</button>
+      </form>`;
     $("btn-drop").addEventListener("click", dropCurrentTable);
     $("btn-encrypt").addEventListener("click", openEncryptModal);
+    $("btn-reindex").addEventListener("click", () => maintenanceOp("reindex"));
+    $("btn-pack").addEventListener("click",    () => maintenanceOp("pack"));
+    $("btn-zap").addEventListener("click",     () => maintenanceOp("zap"));
+    $("ci-form").addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        tag:  fd.get("tag"),
+        expr: fd.get("expr"),
+        descending: fd.get("descending") === "on",
+        unique:     fd.get("unique")     === "on"
+      };
+      try {
+        const r = await api(
+          `/api/tables/${encodeURIComponent(state.table)}/index`,
+          {method:"POST",
+           headers:{"content-type":"application/json"},
+           body: JSON.stringify(body)});
+        $("struct-status").textContent = "ok: " + r.sql;
+        $("struct-status").className = "ok";
+        e.target.reset();
+      } catch (err) {
+        $("struct-status").textContent = err.message;
+        $("struct-status").className = "err";
+      }
+    });
   } catch (e) {
     $("structure-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+async function maintenanceOp(op) {
+  const t = state.table;
+  if (op === "zap" && !confirm(
+        `Zap ${t}?  All records are removed. Indexes are kept but emptied.`)) return;
+  $("struct-status").textContent = op + "…"; $("struct-status").className = "";
+  try {
+    await api(`/api/tables/${encodeURIComponent(t)}/${op}`, {method:"POST"});
+    $("struct-status").textContent = op + " ok";
+    $("struct-status").className = "ok";
+    state.schema = null;
+    if (op === "zap" || op === "pack") loadStructure();
+  } catch (e) {
+    $("struct-status").textContent = e.message;
+    $("struct-status").className = "err";
   }
 }
 
@@ -869,6 +958,21 @@ $("enc-cancel").addEventListener("click", () =>
   $("modal-encrypt").classList.remove("show"));
 $("sessions-refresh").addEventListener("click", loadSessions);
 $("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
+
+function openCellModal(title, value) {
+  $("cell-title").textContent = title;
+  $("cell-body").textContent  = value;
+  $("modal-cell").classList.add("show");
+}
+$("cell-close").addEventListener("click", () =>
+  $("modal-cell").classList.remove("show"));
+$("cell-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("cell-body").textContent);
+    $("cell-copy").textContent = "copied";
+    setTimeout(() => $("cell-copy").textContent = "Copy", 900);
+  } catch {}
+});
 
 $("dd-pick").addEventListener("change", e => {
   if (e.target.value) loadDictView(e.target.value);

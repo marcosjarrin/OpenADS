@@ -616,6 +616,97 @@ json dd_set_dbprop(const std::string& dir, const std::string& name,
     return json{{"ok", true}, {"key", k}};
 }
 
+// studio.web.0.6 — table maintenance ops.
+// Each maps to a single Ads* call so the surface stays small.
+
+json table_reindex(const std::string& dir, const std::string& tname) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED32 rc = AdsReindex(hTable);
+    AdsCloseTable(hTable);
+    if (rc != 0) return json_error(
+        "AdsReindex failed (" + std::to_string(rc) + ")", 500);
+    return json{{"ok", true}, {"table", tname}};
+}
+
+json table_pack(const std::string& dir, const std::string& tname) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED32 rc = AdsPackTable(hTable);
+    AdsCloseTable(hTable);
+    if (rc != 0) return json_error(
+        "AdsPackTable failed (" + std::to_string(rc) + ")", 500);
+    return json{{"ok", true}, {"table", tname}};
+}
+
+json table_zap(const std::string& dir, const std::string& tname) {
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED32 rc = AdsZapTable(hTable);
+    AdsCloseTable(hTable);
+    if (rc != 0) return json_error(
+        "AdsZapTable failed (" + std::to_string(rc) + ")", 500);
+    return json{{"ok", true}, {"table", tname}};
+}
+
+// studio.web.0.6 — CREATE INDEX through SQL DDL.
+//   body: { tag, expr, descending?, unique?, file? }
+// `file` is the bag (.cdx by default) the new tag lives in.
+json table_create_index(const std::string& dir,
+                        const std::string& tname,
+                        const json& body) {
+    std::string tag  = body.value("tag",  "");
+    std::string expr = body.value("expr", "");
+    if (tag.empty() || expr.empty()) {
+        return json_error("body needs {tag, expr}", 400);
+    }
+    bool desc   = body.value("descending", false);
+    bool unique = body.value("unique",     false);
+    std::string sql = "CREATE INDEX " + tag + " ON " + tname +
+                      " (" + expr + ")";
+    if (desc)   sql += " DESCENDING";
+    if (unique) sql += " UNIQUE";
+
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    ADSHANDLE hStmt = 0;
+    AdsCreateSQLStatement(sess.conn, &hStmt);
+    std::vector<UNSIGNED8> sqlbuf(sql.size() + 1);
+    std::memcpy(sqlbuf.data(), sql.c_str(), sql.size() + 1);
+    ADSHANDLE hCur = 0;
+    UNSIGNED32 rrc = AdsExecuteSQLDirect(hStmt, sqlbuf.data(), &hCur);
+    if (hCur != 0) AdsCloseTable(hCur);
+    AdsCloseSQLStatement(hStmt);
+    if (rrc != 0) {
+        return json_error("CREATE INDEX failed: " + sql, 400);
+    }
+    return json{{"ok", true}, {"sql", sql}};
+}
+
 // studio.web.0.2 — server info panel.
 json server_info(const std::string& dir) {
     json out{
@@ -960,6 +1051,37 @@ bool HttpConsole::start(const std::string& host,
             res.set_content(json_error("invalid JSON", 400).dump(),
                             "application/json"); return; }
         json j = table_encrypt(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // studio.web.0.6 — table maintenance (Reindex / Pack / Zap +
+    // CREATE INDEX wizard).
+    srv.Post(R"(/api/tables/([^/]+)/reindex)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_reindex(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/tables/([^/]+)/pack)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_pack(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/tables/([^/]+)/zap)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_zap(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+    srv.Post(R"(/api/tables/([^/]+)/index)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body; try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = table_create_index(data_dir_, req.matches[1], body);
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
