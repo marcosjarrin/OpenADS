@@ -57,28 +57,38 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.3.3 released** (2026-05-06). Phase 2 TCP server is alive end-
-to-end — `tools/serverd/openads_serverd` exposes the engine over a
-length-prefixed wire protocol; `AdsConnect60("tcp://host:port/dir",
-...)` opens the same `ace64.dll` against a remote server (M12.3 +
-M12.4 + M12.5). A 13-op cross-host smoke (`Hello → Connect →
-OpenTable → GetRecordCount → GotoTop → GetField → Skip →
-Disconnect`) round-trips Windows-side → Linux server through an
-SSH-forwarded TCP channel. Adds `tools/bench/openads_bench`, a
-cross-platform SQL workload timer that compares Windows MSVC,
-Linux clang -O3 and macOS AppleClang on the same source tree (see
-the **Performance** section above). Linux + macOS builds are now
-clang -Werror clean; macOS-specific platform fixes (HOST_NAME_MAX,
-self-connect accept wake, OFD-vs-classic fcntl locks) landed.
+**0.3.6 released** (2026-05-06). Phase 2 TCP server is feature-
+complete for v0.3.x — `tools/serverd/openads_serverd` exposes the
+engine over an OpenADS-native wire protocol;
+`AdsConnect60("tcp://host:port/dir", ...)` opens the same
+`ace64.dll` against a remote server. The wire surface now covers
+**read** (M12.4), **write** (M12.6), **SQL exec** (M12.7),
+**Reindex** (M12.8), **credential auth** (M12.9), **ACE error-code
+propagation** (M12.10), **batched row fetch** (M12.11), the
+**`tls://` URI reservation** (M12.12 stub), and a **transport
+abstraction layer** (M12.13) that lets a future TLS transport plug
+in without touching the server / client business logic. Real TLS
+(vendored mbedtls / platform-native) is the v0.4.0 milestone.
 
-Earlier: **0.3.0** (2026-05-05) — 42 M10.x SQL milestones + 3 M11.x
-non-SQL milestones (V/Q field types, AEP host, OpenADS-encrypted
-DBF) merged on top of 0.2.0. The full Harbour-reachable `Ads*` ABI
-surface is MISS-free; the SQL surface covers the practical
-Advantage SQL dialect end-to-end.
+`docs/wire-protocol.md` is the formal spec of every opcode +
+payload format so non-C++ clients (Python, Go, Rust, Harbour AEP)
+can talk to an OpenADS server without reading the C++ source.
 
-Earlier: 0.2.0 (2026-05-04) — 27 M9.x milestones on top of 0.1.0,
-unlocked the full `Ads*` ABI.
+Cross-platform CI is back to **green on all three runners**
+(`ubuntu-24.04 / ninja-clang`, `macos-14 / default`,
+`windows-2022 / msvc-x64`).
+
+Release timeline:
+
+| Tag       | Date       | Highlights |
+|-----------|------------|-----------|
+| **v0.3.6** | 2026-05-06 | M12.12 `tls://` URI reservation. |
+| **v0.3.5** | 2026-05-06 | M12.10 ACE error-code propagation; M12.11 batched fetch. |
+| **v0.3.4** | 2026-05-06 | M12.6 remote write; M12.7 remote SQL; M12.8 remote Reindex; M12.9 server auth; RemoteConnection dtor fix. |
+| **v0.3.3** | 2026-05-06 | M12.3 server skeleton; M12.4 remote read; M12.5 dual-mode DLL; `openads_bench`; cross-platform `clang -Werror` clean-up. |
+| **v0.3.0** | 2026-05-05 | 42 M10.x SQL milestones + 3 M11.x non-SQL (V/Q types, AEP host, OpenADS-encrypted DBF). Full Harbour-reachable `Ads*` surface MISS-free. |
+| **v0.2.0** | 2026-05-04 | 27 M9.x milestones on top of 0.1.0; full `Ads*` ABI unlocked. |
+| **v0.1.0** | earlier    | M0–M8.11 — local DBF / CDX / NTX / FPT / DBT engine. |
 
 A real Harbour application, compiled against the standard
 `contrib/rddads` static library, opens a DBF, walks records, runs
