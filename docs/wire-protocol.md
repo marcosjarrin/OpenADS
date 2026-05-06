@@ -1,3 +1,11 @@
+---
+title: Wire protocol
+layout: default
+parent: Home (EN)
+nav_order: 4
+permalink: /en/wire-protocol/
+---
+
 # OpenADS Wire Protocol — v0.3.6
 
 This document specifies the OpenADS-native wire protocol spoken

@@ -1,5 +1,10 @@
 # OpenADS
 
+📖 **Docs**:
+[English](https://fivetechsoft.github.io/OpenADS/en/)
+· [Español](https://fivetechsoft.github.io/OpenADS/es/)
+· [Português](https://fivetechsoft.github.io/OpenADS/pt/)
+
 A free and open-source implementation compatible with Advantage Database Server (ADS), discontinued by SAP.
 
 The goal is to provide a *drop-in* replacement for the Advantage Client Engine (`ace32.dll` / `ace64.dll` / `libace.so`) so existing applications — particularly Harbour/Clipper apps using `contrib/rddads` — keep working without recompilation.

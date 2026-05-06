@@ -1,0 +1,67 @@
+title: OpenADS
+description: Free, open-source, ADS-compatible engine and Studio
+remote_theme: just-the-docs/just-the-docs
+url: https://fivetechsoft.github.io
+baseurl: /OpenADS
+
+# just-the-docs config
+color_scheme: dark
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  GitHub:
+    - https://github.com/FiveTechSoft/OpenADS
+
+footer_content: >
+  Apache License 2.0 ·
+  <a href="https://github.com/FiveTechSoft/OpenADS">github.com/FiveTechSoft/OpenADS</a>
+  · OpenADS is an independent project, not affiliated with SAP SE.
+
+# Generate pages with these collections so language is part of the URL.
+collections:
+  en:
+    permalink: /en/:path/
+    output: true
+  es:
+    permalink: /es/:path/
+    output: true
+  pt:
+    permalink: /pt/:path/
+    output: true
+
+defaults:
+  - scope:
+      path: "en"
+      type: en
+    values:
+      lang: en
+      layout: default
+  - scope:
+      path: "es"
+      type: es
+    values:
+      lang: es
+      layout: default
+  - scope:
+      path: "pt"
+      type: pt
+    values:
+      lang: pt
+      layout: default
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-sitemap
+
+# Don't ship engine sources / build dirs into the site
+exclude:
+  - "*.cpp"
+  - "*.h"
+  - "../src/"
+  - "../tools/"
+  - "../tests/"
+  - "../build/"
+  - "../third_party/"
+  - "Gemfile"
+  - "Gemfile.lock"

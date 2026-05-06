@@ -1,0 +1,33 @@
+---
+title: Início (PT)
+layout: default
+nav_order: 4
+permalink: /pt/
+has_children: true
+---
+
+# OpenADS — Documentação (Português)
+
+OpenADS é uma implementação livre e *clean-room* de um motor
+de banco de dados compatível com ADS. Funciona como
+**substituto direto** do Advantage Client Engine (`ace32.dll` /
+`ace64.dll` / `libace.so`) — aplicações Harbour / Clipper que
+fazem link com `contrib/rddads` continuam funcionando sem
+recompilar.
+
+## Conteúdo
+
+- **[Primeiros passos](primeiros-passos/)** — instalação,
+  primeiro build, smoke test.
+- **[Arquitetura](arquitetura/)** — arquitetura de cinco
+  camadas (ABI / Sessão / SQL / Motor / Plataforma).
+- **[Protocolo de fio](protocolo-fio/)** — especificação formal
+  do protocolo TCP nativo OpenADS (frames, opcodes, payload,
+  erros, versionamento).
+- **[Studio (console web)](guia-studio/)** — administração do
+  motor a partir de qualquer navegador através do console HTTP
+  embutido em `openads_serverd`.
+
+## Outros idiomas
+
+[English](/en/) · [Español](/es/)
