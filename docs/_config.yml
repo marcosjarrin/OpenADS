@@ -54,7 +54,7 @@ plugins:
   - jekyll-remote-theme
   - jekyll-sitemap
 
-# Don't ship engine sources / build dirs into the site
+# Don't ship engine sources / build dirs / Bundler vendor into the site
 exclude:
   - "*.cpp"
   - "*.h"
@@ -65,3 +65,6 @@ exclude:
   - "../third_party/"
   - "Gemfile"
   - "Gemfile.lock"
+  - "vendor/"
+  - ".bundle/"
+  - "node_modules/"
