@@ -112,7 +112,16 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 <body>
 <header>
   <h1>OpenADS Studio</h1>
-  <div class="status" id="status">…</div>
+  <div style="display:flex;gap:18px;align-items:center">
+    <a href="https://fivetechsoft.github.io/OpenADS/"
+       target="_blank" rel="noopener"
+       style="color:white;text-decoration:none;font-size:15px;
+              opacity:0.9;border:1px solid rgba(255,255,255,0.4);
+              padding:5px 12px;border-radius:3px">
+      📖 Docs
+    </a>
+    <div class="status" id="status">…</div>
+  </div>
 </header>
 <main>
   <aside>
