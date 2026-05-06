@@ -98,6 +98,8 @@ UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
         case DbfFieldType::Integer:   return ADS_INTEGER;       // 11
         case DbfFieldType::Currency:  return ADS_MONEY;         // 18
         case DbfFieldType::Double:    return ADS_DOUBLE;        // 10
+        case DbfFieldType::Varchar:   return ADS_STRING;        // M11.1
+        case DbfFieldType::Varbinary: return ADS_RAW;           // M11.1
         case DbfFieldType::Unknown:   return ADS_FIELD_TYPE_UNKNOWN;
     }
     return ADS_FIELD_TYPE_UNKNOWN;
@@ -4251,6 +4253,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case openads::sql::WhereOp::Le: return cmp <= 0;
                         case openads::sql::WhereOp::Ge: return cmp >= 0;
                         case openads::sql::WhereOp::Contains: return false;
+                        default: return false;
                     }
                     return false;
                 }};
@@ -4364,6 +4367,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case openads::sql::WhereOp::Le: return cmp <= 0;
                         case openads::sql::WhereOp::Ge: return cmp >= 0;
                         case openads::sql::WhereOp::Contains: return false;
+                        default: return false;
                     }
                     return false;
                 }};
@@ -5153,6 +5157,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             case openads::sql::WhereOp::Le: return cmp <= 0;
                             case openads::sql::WhereOp::Ge: return cmp >= 0;
                             case openads::sql::WhereOp::Contains: return false;
+                        default: return false;
                         }
                         return false;
                     }};
@@ -5831,6 +5836,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case openads::sql::WhereOp::Le: return cmp <= 0;
                         case openads::sql::WhereOp::Ge: return cmp >= 0;
                         case openads::sql::WhereOp::Contains: return false;
+                        default: return false;
                     }
                     return false;
                 }};
@@ -7292,7 +7298,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (off > static_cast<std::int64_t>(seq.size())) {
             seq.clear();
         } else if (off > 0) {
-            seq.erase(seq.begin(), seq.begin() + static_cast<std::size_t>(off));
+            seq.erase(seq.begin(), seq.begin() +
+                static_cast<std::vector<std::uint32_t>::difference_type>(off));
         }
         if (parsed.value().limit >= 0 &&
             static_cast<std::size_t>(parsed.value().limit) < seq.size()) {
@@ -7705,7 +7712,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 bool from_synth = false;
                 if (o.case_idx >= 0) {
                     from_synth = true;
-                    const auto& cc = ccases[o.case_idx];
+                    const auto& cc =
+                        ccases[static_cast<std::size_t>(o.case_idx)];
                     val = cc.has_else ? cc.else_value : "";
                     for (std::size_t bi = 0; bi < cc.branch_preds.size(); ++bi) {
                         if (cc.branch_preds[bi](*tbl)) {
@@ -7715,7 +7723,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     }
                 } else if (o.fn_idx >= 0) {
                     from_synth = true;
-                    const auto& fc = parsed.value().fn_items[o.fn_idx];
+                    const auto& fc = parsed.value().fn_items[
+                        static_cast<std::size_t>(o.fn_idx)];
                     std::string raw;
                     if (o.src_field >= 0) {
                         auto v = tbl->read_field(
@@ -7899,8 +7908,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if (wit != window_vals.end() &&
                         static_cast<std::size_t>(o.win_idx) <
                             wit->second.size() &&
-                        !wit->second[o.win_idx].empty()) {
-                        val = wit->second[o.win_idx];
+                        !wit->second[
+                            static_cast<std::size_t>(o.win_idx)].empty()) {
+                        val = wit->second[
+                            static_cast<std::size_t>(o.win_idx)];
                     } else {
                         char buf[16];
                         std::snprintf(buf, sizeof(buf), "%u",
@@ -7909,7 +7920,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     }
                 } else if (o.arith_idx >= 0) {
                     from_synth = true;
-                    const auto& ae = parsed.value().arith_items[o.arith_idx];
+                    const auto& ae = parsed.value().arith_items[
+                        static_cast<std::size_t>(o.arith_idx)];
                     auto lv = tbl->read_field(
                         static_cast<std::uint16_t>(o.arith_lhs_field));
                     double a = lv ? lv.value().as_double : 0.0;
