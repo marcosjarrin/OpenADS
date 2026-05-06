@@ -79,10 +79,10 @@ fs::path stage_bench_dbf(const fs::path& dir, std::uint32_t rows) {
         std::snprintf(buf, sizeof(buf), "%8u", r);
         for (int i = 0; i < 8; ++i) file.push_back(static_cast<std::uint8_t>(buf[i]));
         std::array<std::uint8_t, 4> tag{};
-        for (int i = 0; i < 4; ++i) {
+        for (std::size_t i = 0; i < 4; ++i) {
             tag[i] = static_cast<std::uint8_t>('A' + ((r + static_cast<std::uint32_t>(i)) % 26));
         }
-        for (int i = 0; i < 4; ++i)
+        for (std::size_t i = 0; i < 4; ++i)
             file.push_back(tag[i]);
         seed = seed * 1664525u + 1013904223u;
         double amt = static_cast<double>((seed >> 8) % 100000u);
