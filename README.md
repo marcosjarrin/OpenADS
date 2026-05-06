@@ -57,11 +57,25 @@ The goal is to provide a *drop-in* replacement for the Advantage Client Engine (
 
 ## Status
 
-**0.3.0 released** (2026-05-05). 42 M10.x SQL milestones + 3 M11.x
+**0.3.3 released** (2026-05-06). Phase 2 TCP server is alive end-
+to-end — `tools/serverd/openads_serverd` exposes the engine over a
+length-prefixed wire protocol; `AdsConnect60("tcp://host:port/dir",
+...)` opens the same `ace64.dll` against a remote server (M12.3 +
+M12.4 + M12.5). A 13-op cross-host smoke (`Hello → Connect →
+OpenTable → GetRecordCount → GotoTop → GetField → Skip →
+Disconnect`) round-trips Windows-side → Linux server through an
+SSH-forwarded TCP channel. Adds `tools/bench/openads_bench`, a
+cross-platform SQL workload timer that compares Windows MSVC,
+Linux clang -O3 and macOS AppleClang on the same source tree (see
+the **Performance** section above). Linux + macOS builds are now
+clang -Werror clean; macOS-specific platform fixes (HOST_NAME_MAX,
+self-connect accept wake, OFD-vs-classic fcntl locks) landed.
+
+Earlier: **0.3.0** (2026-05-05) — 42 M10.x SQL milestones + 3 M11.x
 non-SQL milestones (V/Q field types, AEP host, OpenADS-encrypted
-DBF) merged on top of 0.2.0 — see the table below. The full
-Harbour-reachable `Ads*` ABI surface is MISS-free; the SQL surface
-covers the practical Advantage SQL dialect end-to-end.
+DBF) merged on top of 0.2.0. The full Harbour-reachable `Ads*` ABI
+surface is MISS-free; the SQL surface covers the practical
+Advantage SQL dialect end-to-end.
 
 Earlier: 0.2.0 (2026-05-04) — 27 M9.x milestones on top of 0.1.0,
 unlocked the full `Ads*` ABI.
@@ -435,27 +449,19 @@ whose use is restricted by the Advantage SDK / ACE EULA.
   (M11.1) are real today.
 - **ADM** memo format — pairs with ADT, same gating as ADT.
 - **ADI** index format — proprietary B+tree variant; same gating.
+- **Phase 2 server hardening** (M12.6+) — remote write ops
+  (Insert / Update / Delete via wire), remote SQL exec
+  (`AdsExecuteSQLDirect` over the wire), remote index ops
+  (`CreateIndex` / `Reindex`), authentication + connection
+  multiplexing, full ACE error-code mapping over the wire,
+  large-payload streaming (memo blobs / SQL result sets).
+  Read-only Open / Goto / Skip / GetField / GetRecordCount /
+  AtEOF / CloseTable already round-trip through the M12.4 server
+  and the M12.5 dual-mode client.
 - **More SQL** — ORDER BY across DISTINCT, multi-column ORDER BY
-  inside UNION, projection expressions richer than CASE
-  (arithmetic, string concat). The shipped 0.3.x SQL surface
-  covers boolean WHERE (M10.3), `INSERT` (M10.5), `ORDER BY`
-  (M10.6),
-  `UPDATE` / `DELETE` (M10.7), projection lists (M10.8), DDL
-  `CREATE TABLE` / `CREATE INDEX` (M10.9), aggregates (M10.10),
-  INNER JOIN (M10.13 / M10.14), IN literal / subquery (M10.15),
-  LEFT OUTER JOIN (M10.16), EXISTS (M10.17), scalar subquery
-  (M10.18), aggregate scalar subquery (M10.19), JOIN+WHERE /
-  ORDER BY combos (M10.20), RIGHT OUTER JOIN (M10.21), FULL
-  OUTER JOIN (M10.22), JOIN + aggregate combo (M10.23),
-  correlated EXISTS (M10.24), GROUP BY + HAVING (M10.25),
-  UNION / UNION ALL (M10.26), UNION + projection (M10.27),
-  UNION + ORDER BY (M10.28), correlated scalar subquery
-  (M10.29), HAVING tree (M10.30), DISTINCT (M10.31),
-  LIMIT/OFFSET (M10.32), BETWEEN/LIKE (M10.33), GROUP BY
-  across JOIN (M10.34), correlated IN (M10.35), multi-column
-  ORDER BY (M10.37), CASE WHEN in projection (M10.38).
-- **AEP host** — load + run external stored procedures via the
-  documented Extended-Procedure hosting protocol.
+  inside UNION, richer projection expressions on top of CASE,
+  arithmetic and string concat (already partial via M10.39 /
+  M10.40 / M10.43).
 
 ### 1.0.x — TCP server (Phase 2)
 
