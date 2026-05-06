@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <tuple>
 #include <vector>
 
 using openads::drivers::DbfField;

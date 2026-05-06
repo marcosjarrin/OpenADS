@@ -9,22 +9,23 @@ jobs:
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-2022
             preset: msvc-x64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             preset: ninja-clang
-          - os: macos-13
+          - os: macos-14
             preset: default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Ninja (Linux / macOS)
         if: runner.os != 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@v4
+        uses: seanmiddleditch/gha-setup-ninja@v6
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
