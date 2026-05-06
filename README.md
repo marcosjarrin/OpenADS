@@ -111,6 +111,42 @@ Drop the resulting `ace64.dll` (under
 any SAP-shipped copy and the standard `contrib/rddads` calls land
 on OpenADS without recompiling Harbour.
 
+### Performance — cross-platform SQL bench
+
+`tools/bench/openads_bench` generates a synthetic 100 000-row DBF
+(`ID N(8,0)`, `TAG C(4)`, `AMT N(8,2)`) and times a fixed set of
+SQL workloads through the public ABI (`AdsExecuteSQLDirect`).
+Median of 5 repeats per workload, all-Release builds:
+
+| Workload (median ms)   | Windows MSVC | Linux clang -O3 | macOS AppleClang |
+|------------------------|-------------:|----------------:|-----------------:|
+| stage 100 k-row DBF    |        63.5  |          57.9   |           34.0   |
+| `SELECT COUNT(*)`      |       297.7  |          42.0   |          103.9   |
+| `WHERE TAG = 'AAAA'`   |       303.7  |          48.3   |          108.4   |
+| `SUM/AVG/MIN/MAX(AMT)` |       374.3  |         120.5   |          136.1   |
+| `GROUP BY TAG`         |       321.9  |          58.6   |          120.9   |
+| `ORDER BY AMT LIMIT 10`|       668.0  |         165.4   |          260.5   |
+| `DISTINCT TAG`         |       598.4  |          95.2   |          213.4   |
+| `BETWEEN 100 AND 500`  |       314.1  |          63.7   |          114.4   |
+
+Same source tree, same workload, three OS / toolchain combinations.
+Linux clang -O3 wins every SQL workload — roughly 7× faster than
+MSVC Release on the full-table count, 4× on the heavier `ORDER BY`.
+macOS Intel sits between the two. Run it on your own hardware:
+
+```sh
+cmake --build build/default --target openads_bench
+./build/default/tools/bench/openads_bench --rows 100000 --repeats 5 --csv
+```
+
+A working **TCP server (`tools/serverd/openads_serverd`) + dual-mode
+client (`tcp://host:port/dir` URI in `AdsConnect60`)** is already in
+the tree (M12.x, Phase 2). Cross-host smoke: 13-op session
+(`Hello → Connect → OpenTable → GetRecordCount → GotoTop →
+GetField → Skip → Disconnect`) round-trips end-to-end through a
+Windows-side client → remote Linux server over an SSH-forwarded
+TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
+
 ### What works today (0.2.0)
 
 #### Engine
