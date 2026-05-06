@@ -567,6 +567,102 @@ void Server::session_loop(Socket s) {
                 reply.opcode = Opcode::FlushTableAck;
                 break;
             }
+            case Opcode::Fetch: {
+                // M12.11 — payload:
+                //   [u32 tid][u32 max_rows][u8 ncols][u8 nlen][name]...
+                // Reply:
+                //   [u32 nrows][u8 ncols][per row, per col: u16 vlen][val]
+                if (f.payload.size() < 9) { reply = err("Fetch: bad payload"); break; }
+                std::uint32_t id      = read_u32_le(f.payload.data());
+                std::uint32_t maxrows = read_u32_le(f.payload.data() + 4);
+                std::uint8_t  ncols   = f.payload[8];
+                std::vector<std::string> cols;
+                cols.reserve(ncols);
+                std::size_t p = 9;
+                bool parse_ok = true;
+                for (std::uint8_t c = 0; c < ncols && parse_ok; ++c) {
+                    if (p + 1 > f.payload.size()) {
+                        reply = err("Fetch: truncated col header");
+                        parse_ok = false; break;
+                    }
+                    std::uint8_t nlen = f.payload[p++];
+                    if (p + nlen > f.payload.size()) {
+                        reply = err("Fetch: truncated col name");
+                        parse_ok = false; break;
+                    }
+                    cols.emplace_back(
+                        reinterpret_cast<const char*>(f.payload.data() + p),
+                        nlen);
+                    p += nlen;
+                }
+                if (!parse_ok) break;
+
+                auto write_u16_le = [](std::vector<std::uint8_t>& out,
+                                       std::uint16_t v) {
+                    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+                    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+                };
+
+                reply.opcode = Opcode::FetchAck;
+                std::vector<std::uint8_t> rowbuf;
+                std::uint32_t nrows_out = 0;
+
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    ADSHANDLE  hCur  = cit->second;
+                    UNSIGNED16 atend = 0;
+                    AdsAtEOF(hCur, &atend);
+                    while (atend == 0 && nrows_out < maxrows) {
+                        for (auto& cn : cols) {
+                            UNSIGNED8  fbuf[64]  = {0};
+                            UNSIGNED8  out [4096] = {0};
+                            UNSIGNED32 cap = sizeof(out);
+                            std::size_t n = std::min<std::size_t>(
+                                cn.size(), sizeof(fbuf) - 1);
+                            std::memcpy(fbuf, cn.data(), n);
+                            fbuf[n] = 0;
+                            UNSIGNED32 rrc = AdsGetField(hCur, fbuf,
+                                                         out, &cap, 0);
+                            if (rrc != 0) cap = 0;
+                            write_u16_le(rowbuf,
+                                static_cast<std::uint16_t>(cap));
+                            rowbuf.insert(rowbuf.end(), out, out + cap);
+                        }
+                        ++nrows_out;
+                        if (AdsSkip(hCur, 1) != 0) break;
+                        AdsAtEOF(hCur, &atend);
+                    }
+                } else if (auto it = tbls.find(id);
+                           it != tbls.end() && sess_conn) {
+                    auto* tbl = sess_conn->lookup_table(it->second);
+                    if (!tbl) { reply = err("Fetch: lookup failed"); break; }
+                    while (!tbl->eof() && nrows_out < maxrows) {
+                        for (auto& cn : cols) {
+                            std::int32_t fi = tbl->field_index(cn);
+                            std::string val;
+                            if (fi >= 0) {
+                                auto v = tbl->read_field(
+                                    static_cast<std::uint16_t>(fi));
+                                if (v) val = v.value().as_string;
+                            }
+                            write_u16_le(rowbuf,
+                                static_cast<std::uint16_t>(val.size()));
+                            rowbuf.insert(rowbuf.end(),
+                                          val.begin(), val.end());
+                        }
+                        ++nrows_out;
+                        auto sk = tbl->skip(1);
+                        if (!sk) break;
+                    }
+                } else {
+                    reply = err("Fetch: bad table id"); break;
+                }
+
+                write_u32_le(nrows_out, reply.payload);
+                reply.payload.push_back(ncols);
+                reply.payload.insert(reply.payload.end(),
+                                     rowbuf.begin(), rowbuf.end());
+                break;
+            }
             case Opcode::Reindex: {
                 if (f.payload.size() < 4) { reply = err("Reindex: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());

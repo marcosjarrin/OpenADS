@@ -1,5 +1,6 @@
 #include "doctest.h"
 #include "openads/ace.h"
+#include "network/client.h"
 #include "network/server.h"
 #include "network/socket.h"
 #include "network/wire.h"
@@ -576,6 +577,55 @@ TEST_CASE("M12.9 server with credentials accepts matching password") {
     REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
                          user, pw, 0, &hConn) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M12.11 batch fetch returns multiple rows in one frame") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_11";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf",
+                  {"AAAA","BBBB","CCCC","DDDD","EEEE","FFFF","GGGG"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    openads::network::RemoteConnection rc;
+    REQUIRE(rc.connect("127.0.0.1", srv.port(), dir.string())
+                .has_value());
+    auto tid_r = rc.open_table("data.dbf");
+    REQUIRE(tid_r.has_value());
+    std::uint32_t tid = tid_r.value();
+    REQUIRE(rc.goto_top(tid).has_value());
+
+    // Fetch up to 5 rows in a single round-trip.
+    auto rows_r = rc.fetch_batch(tid, 5, {"TAG"});
+    REQUIRE(rows_r.has_value());
+    auto rows = rows_r.value();
+    REQUIRE(rows.size() == 5);
+    auto trim = [](std::string s) {
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        return s;
+    };
+    CHECK(trim(rows[0][0]) == "AAAA");
+    CHECK(trim(rows[1][0]) == "BBBB");
+    CHECK(trim(rows[2][0]) == "CCCC");
+    CHECK(trim(rows[3][0]) == "DDDD");
+    CHECK(trim(rows[4][0]) == "EEEE");
+
+    // Continue the walk — should pick up rows 6 + 7, then EOF.
+    auto rest_r = rc.fetch_batch(tid, 100, {"TAG"});
+    REQUIRE(rest_r.has_value());
+    auto rest = rest_r.value();
+    REQUIRE(rest.size() == 2);
+    CHECK(trim(rest[0][0]) == "FFFF");
+    CHECK(trim(rest[1][0]) == "GGGG");
+
+    REQUIRE(rc.close_table(tid).has_value());
+    rc.disconnect();
     srv.stop();
     fs::remove_all(dir, ec);
 }

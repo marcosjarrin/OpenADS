@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace openads::network {
 
@@ -55,6 +56,14 @@ public:
     util::Result<std::uint32_t> execute_sql(const std::string& sql);
     // M12.8 — remote index ops.
     util::Result<void>          reindex(std::uint32_t id);
+    // M12.11 — batch row read. Walks up to `max_rows` rows starting
+    // at the current cursor position, returning a row-major matrix of
+    // column values. Empty result set ⇒ empty outer vector. Reduces
+    // per-row Skip/GetField round-trips for WAN-latency callers.
+    util::Result<std::vector<std::vector<std::string>>>
+        fetch_batch(std::uint32_t                   id,
+                    std::uint32_t                   max_rows,
+                    const std::vector<std::string>& columns);
 
 private:
     util::Result<Frame> request(const Frame& f);

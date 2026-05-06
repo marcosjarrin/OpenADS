@@ -315,6 +315,64 @@ util::Result<void> RemoteConnection::reindex(std::uint32_t id) {
     return {};
 }
 
+util::Result<std::vector<std::vector<std::string>>>
+RemoteConnection::fetch_batch(std::uint32_t id,
+                               std::uint32_t max_rows,
+                               const std::vector<std::string>& columns) {
+    if (columns.size() > 0xFFu) {
+        return util::Error{5000, 0,
+            "Fetch: too many columns (max 255)", ""};
+    }
+    Frame req;
+    req.opcode = Opcode::Fetch;
+    write_u32_le(id, req.payload);
+    write_u32_le(max_rows, req.payload);
+    req.payload.push_back(static_cast<std::uint8_t>(columns.size()));
+    for (auto& c : columns) {
+        if (c.size() > 0xFFu) {
+            return util::Error{5000, 0,
+                "Fetch: column name too long (max 255)", c};
+        }
+        req.payload.push_back(static_cast<std::uint8_t>(c.size()));
+        req.payload.insert(req.payload.end(), c.begin(), c.end());
+    }
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FetchAck ||
+        rep.value().payload.size() < 5) {
+        return util::Error{5000, 0, "Fetch: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    std::size_t   p = 0;
+    std::uint32_t nrows = read_u32_le(pl.data() + p); p += 4;
+    std::uint8_t  ncols = pl[p++];
+    std::vector<std::vector<std::string>> rows;
+    rows.reserve(nrows);
+    for (std::uint32_t r = 0; r < nrows; ++r) {
+        std::vector<std::string> row;
+        row.reserve(ncols);
+        for (std::uint8_t c = 0; c < ncols; ++c) {
+            if (p + 2 > pl.size()) {
+                return util::Error{5000, 0,
+                    "Fetch: truncated payload (vlen)", ""};
+            }
+            std::uint16_t vlen =
+                static_cast<std::uint16_t>(pl[p]) |
+                (static_cast<std::uint16_t>(pl[p + 1]) << 8);
+            p += 2;
+            if (p + vlen > pl.size()) {
+                return util::Error{5000, 0,
+                    "Fetch: truncated payload (val)", ""};
+            }
+            row.emplace_back(reinterpret_cast<const char*>(pl.data() + p),
+                             vlen);
+            p += vlen;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
 util::Result<std::uint32_t>
 RemoteConnection::execute_sql(const std::string& sql) {
     Frame req;
