@@ -101,6 +101,10 @@ util::Result<std::size_t> sock_recv(Socket& sock,
 
 void sock_close(Socket& sock) noexcept {
     if (sock.valid()) {
+        // Force-shutdown first so any thread blocked in accept() /
+        // recv() on this fd wakes immediately. Linux close() alone
+        // doesn't always interrupt other threads on the same fd.
+        ::shutdown(static_cast<int>(sock.handle), SHUT_RDWR);
         ::close(static_cast<int>(sock.handle));
         sock.handle = static_cast<std::uintptr_t>(-1);
     }
