@@ -278,6 +278,99 @@ json table_delete(const std::string& dir, const std::string& tname,
     return json{{"recno", recno}, {"deleted", !recall}};
 }
 
+// studio.web.0.3 — CREATE TABLE through SQL DDL. Body:
+//   { "name": "x.dbf", "columns": [{name, type, length, decimals?}, ...] }
+// Type letters follow DBF convention (C, N, L, D, M, ...).
+json table_create(const std::string& dir, const json& body) {
+    if (!body.is_object() || !body.contains("name") ||
+        !body.contains("columns") || !body["columns"].is_array() ||
+        body["columns"].empty()) {
+        return json_error("body must have {name, columns[]}", 400);
+    }
+    std::string name = body.value("name", "");
+    if (name.empty()) return json_error("missing 'name'", 400);
+    std::string sql = "CREATE TABLE " + name + " (";
+    bool first = true;
+    for (auto& c : body["columns"]) {
+        if (!first) sql += ", ";
+        first = false;
+        std::string cn = c.value("name", "");
+        std::string ct = c.value("type", "C");
+        int cl = c.value("length", 10);
+        int cd = c.value("decimals", 0);
+        if (cn.empty() || ct.empty()) {
+            return json_error("each column needs name + type", 400);
+        }
+        sql += cn + " " + ct + "(" + std::to_string(cl);
+        if (cd > 0) sql += "," + std::to_string(cd);
+        sql += ")";
+    }
+    sql += ")";
+
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    ADSHANDLE hStmt = 0;
+    AdsCreateSQLStatement(sess.conn, &hStmt);
+    std::vector<UNSIGNED8> sqlbuf(sql.size() + 1);
+    std::memcpy(sqlbuf.data(), sql.c_str(), sql.size() + 1);
+    ADSHANDLE hCur = 0;
+    UNSIGNED32 rrc = AdsExecuteSQLDirect(hStmt, sqlbuf.data(), &hCur);
+    if (hCur != 0) AdsCloseTable(hCur);
+    AdsCloseSQLStatement(hStmt);
+    if (rrc != 0) return json_error("CREATE TABLE failed: " + sql, 400);
+    return json{{"ok", true}, {"sql", sql}};
+}
+
+// studio.web.0.3 — DROP TABLE. Removes the .dbf + matching
+// sidecars (.cdx / .ntx / .dbt / .fpt / .dbv / .lck) on disk.
+json table_drop(const std::string& dir, const std::string& tname) {
+    fs::path base = fs::path(dir) / tname;
+    std::error_code ec;
+    if (!fs::exists(base, ec)) {
+        return json_error("table not found: " + tname, 404);
+    }
+    std::vector<std::string> sidecar_exts =
+        {".cdx", ".ntx", ".dbt", ".fpt", ".dbv", ".lck"};
+    int removed = 0;
+    fs::remove(base, ec); ++removed;
+    fs::path stem = base.parent_path() / base.stem();
+    for (auto& ext : sidecar_exts) {
+        fs::path p = stem; p += ext;
+        if (fs::exists(p, ec)) {
+            fs::remove(p, ec);
+            ++removed;
+        }
+    }
+    return json{{"ok", true}, {"removed", removed}, {"table", tname}};
+}
+
+// studio.web.0.3 — encrypt a DBF in place via AdsEncryptTable.
+// Body: { "password": "..." }. Sets the connection encryption
+// password first (M11.2), then encrypts the table.
+json table_encrypt(const std::string& dir, const std::string& tname,
+                   const json& body) {
+    std::string pw = body.value("password", "");
+    if (pw.empty()) return json_error("missing 'password'", 400);
+    AbiSession sess(dir);
+    if (!sess.ok()) return json_error("could not open data dir", 500);
+    std::vector<UNSIGNED8> pwbuf(pw.size() + 1);
+    std::memcpy(pwbuf.data(), pw.c_str(), pw.size() + 1);
+    AdsSetEncryptionPassword(sess.conn, pwbuf.data());
+    UNSIGNED8 leaf[256] = {0};
+    std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
+    std::memcpy(leaf, tname.data(), ln);
+    ADSHANDLE hTable = 0;
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+                     0, 0, 0, 0, &hTable) != 0) {
+        return json_error("AdsOpenTable failed: " + tname, 404);
+    }
+    UNSIGNED32 rc = AdsEncryptTable(hTable);
+    AdsCloseTable(hTable);
+    if (rc != 0) return json_error(
+        "AdsEncryptTable failed (" + std::to_string(rc) + ")", 500);
+    return json{{"ok", true}, {"table", tname}};
+}
+
 // studio.web.0.2 — server info panel.
 json server_info(const std::string& dir) {
     json out{
@@ -471,6 +564,37 @@ bool HttpConsole::start(const std::string& host,
     srv.Get("/api/server/info",
             [this](const httplib::Request&, httplib::Response& res) {
         json j = server_info(data_dir_);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Post("/api/tables",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = table_create(data_dir_, body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Delete(R"(/api/tables/([^/]+))",
+               [this](const httplib::Request& req, httplib::Response& res) {
+        json j = table_drop(data_dir_, req.matches[1]);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
+        res.set_content(j.dump(), "application/json");
+    });
+
+    srv.Post(R"(/api/tables/([^/]+)/encrypt)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try { body = json::parse(req.body); }
+        catch (...) { res.status = 400;
+            res.set_content(json_error("invalid JSON", 400).dump(),
+                            "application/json"); return; }
+        json j = table_encrypt(data_dir_, req.matches[1], body);
+        if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 

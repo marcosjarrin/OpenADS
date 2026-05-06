@@ -85,6 +85,28 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 18px;
         font-size: 14px; max-width: 700px; }
   .kv > div:nth-child(odd) { opacity: 0.7; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+              display: none; align-items: center; justify-content: center;
+              z-index: 10; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #252526; border: 1px solid #094771;
+           padding: 22px; border-radius: 6px; min-width: 460px;
+           max-width: 90vw; max-height: 90vh; overflow: auto; }
+  .modal h3 { margin: 0 0 16px; font-size: 17px; }
+  .col-row { display: grid; grid-template-columns: 1.3fr 0.6fr 0.5fr 0.5fr 0.4fr;
+             gap: 6px; margin-bottom: 5px; align-items: center; }
+  .col-row input, .col-row select { background: #2d2d30; color: #ddd;
+             border: 1px solid #444; padding: 5px 8px;
+             font: 14px Consolas, monospace; border-radius: 2px; }
+  .col-row button { background: #d9534f; color: white; border: 0;
+             padding: 4px 8px; cursor: pointer; border-radius: 2px;
+             font-size: 12px; }
+  .aside-head { display: flex; align-items: center;
+                justify-content: space-between; margin: 14px 16px 8px; }
+  .aside-head h2 { margin: 0; }
+  .aside-head button { background: #094771; color: white; border: 0;
+                       width: 24px; height: 24px; cursor: pointer;
+                       border-radius: 3px; font-size: 16px; line-height: 1; }
 </style>
 </head>
 <body>
@@ -94,7 +116,10 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 </header>
 <main>
   <aside>
-    <h2>Tables</h2>
+    <div class="aside-head">
+      <h2>Tables</h2>
+      <button id="btn-new-table" title="New table">+</button>
+    </div>
     <ul id="tables"></ul>
     <h2>Server</h2>
     <ul><li id="server-link">Info</li></ul>
@@ -142,6 +167,48 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
     </div>
   </section>
 </main>
+
+<div class="modal-bg" id="modal-create">
+  <div class="modal">
+    <h3>New Table</h3>
+    <div class="form-row">
+      <label>Table file name</label>
+      <input id="ct-name" type="text" placeholder="newtable.dbf">
+    </div>
+    <div class="col-row" style="font-weight:500;opacity:0.85;font-size:13px">
+      <div>Column name</div><div>Type</div><div>Length</div>
+      <div>Decimals</div><div></div>
+    </div>
+    <div id="ct-cols"></div>
+    <div class="toolbar" style="margin-top:14px">
+      <button class="btn btn-secondary" id="ct-add-col">+ column</button>
+      <button class="btn" id="ct-create">Create</button>
+      <button class="btn btn-secondary" id="ct-cancel">Cancel</button>
+      <span id="ct-status"></span>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-encrypt">
+  <div class="modal">
+    <h3>Encrypt table</h3>
+    <p style="margin:0 0 14px;opacity:0.8">
+      AES-256-CTR keyed off the password below. Schema stays plain
+      text; record bodies are encrypted in place (M11.2). The
+      password must be supplied to every connection that reopens
+      this table afterwards.
+    </p>
+    <div class="form-row">
+      <label>Password</label>
+      <input id="enc-pw" type="password">
+    </div>
+    <div class="toolbar" style="margin-top:14px">
+      <button class="btn" id="enc-go">Encrypt</button>
+      <button class="btn btn-secondary" id="enc-cancel">Cancel</button>
+      <span id="enc-status"></span>
+    </div>
+  </div>
+</div>
 )OPENADS_SPA"
 R"OPENADS_SPA(<script>
 const $ = id => document.getElementById(id);
@@ -268,14 +335,130 @@ async function loadStructure() {
         <div>Records</div><div>${s.record_count}</div>
         <div>File size</div><div>${s.file_bytes} bytes</div>
       </div>
-      <h3 style="margin-top:18px;font-size:13px;opacity:0.85">Columns</h3>
+      <div class="toolbar" style="margin-top:14px">
+        <button class="btn" id="btn-encrypt">Encrypt…</button>
+        <button class="btn btn-danger" id="btn-drop">Drop table</button>
+      </div>
+      <h3 style="margin-top:18px;font-size:15px;opacity:0.85">Columns</h3>
       <table><thead><tr><th>#</th><th>Name</th><th>Type</th><th>Length</th><th>Decimals</th></tr></thead>
       <tbody>${s.columns.map((c,i) => `<tr>
         <td>${i+1}</td><td>${esc(c.name)}</td><td>${c.type}</td>
         <td>${c.length}</td><td>${c.decimals}</td></tr>`).join("")}</tbody></table>`;
+    $("btn-drop").addEventListener("click", dropCurrentTable);
+    $("btn-encrypt").addEventListener("click", openEncryptModal);
   } catch (e) {
     $("structure-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
+}
+
+async function dropCurrentTable() {
+  const t = state.table;
+  if (!confirm(`Drop table ${t}?  This deletes the .dbf + every sidecar (.cdx/.fpt/.dbt/.lck) on disk.`)) return;
+  try {
+    await api(`/api/tables/${encodeURIComponent(t)}`, {method:"DELETE"});
+    state.table = null; state.schema = null;
+    await loadTables();
+    showTab("server");
+  } catch (e) { alert("DROP failed: " + e.message); }
+}
+
+function openEncryptModal() {
+  $("enc-pw").value = "";
+  $("enc-status").textContent = "";
+  $("modal-encrypt").classList.add("show");
+}
+async function runEncrypt() {
+  const pw = $("enc-pw").value;
+  if (!pw) { $("enc-status").textContent = "password required";
+             $("enc-status").className = "err"; return; }
+  try {
+    await api(`/api/tables/${encodeURIComponent(state.table)}/encrypt`,
+      { method: "POST",
+        headers: {"content-type":"application/json"},
+        body: JSON.stringify({password: pw}) });
+    $("modal-encrypt").classList.remove("show");
+    state.schema = null;
+    loadStructure();
+  } catch (e) {
+    $("enc-status").textContent = e.message;
+    $("enc-status").className = "err";
+  }
+}
+
+// CREATE TABLE wizard
+function openCreateModal() {
+  $("ct-name").value = "";
+  $("ct-cols").innerHTML = "";
+  $("ct-status").textContent = "";
+  addCreateCol(); addCreateCol();
+  $("modal-create").classList.add("show");
+}
+function addCreateCol() {
+  const div = document.createElement("div");
+  div.className = "col-row";
+  div.innerHTML = `
+    <input class="ct-cn" type="text" placeholder="COL_NAME">
+    <select class="ct-ct">
+      <option value="C">C (char)</option>
+      <option value="N">N (numeric)</option>
+      <option value="L">L (logical)</option>
+      <option value="D">D (date)</option>
+      <option value="M">M (memo)</option>
+    </select>
+    <input class="ct-cl" type="number" value="10" min="1">
+    <input class="ct-cd" type="number" value="0" min="0">
+    <button title="remove">×</button>`;
+  div.querySelector("button").addEventListener("click", () => div.remove());
+  $("ct-cols").appendChild(div);
+}
+async function runCreateTable() {
+  const name = $("ct-name").value.trim();
+  if (!name) { $("ct-status").textContent = "table name required";
+               $("ct-status").className = "err"; return; }
+  const cols = [...$("ct-cols").children].map(div => ({
+    name:     div.querySelector(".ct-cn").value.trim(),
+    type:     div.querySelector(".ct-ct").value,
+    length:   parseInt(div.querySelector(".ct-cl").value, 10) || 0,
+    decimals: parseInt(div.querySelector(".ct-cd").value, 10) || 0
+  })).filter(c => c.name);
+  if (cols.length === 0) { $("ct-status").textContent = "at least one column";
+                           $("ct-status").className = "err"; return; }
+  try {
+    await api("/api/tables", {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify({name, columns: cols})});
+    $("modal-create").classList.remove("show");
+    await loadTables();
+    selectTable(name);
+  } catch (e) {
+    $("ct-status").textContent = e.message;
+    $("ct-status").className = "err";
+  }
+}
+
+// SQL history (persistent localStorage). Up/Down arrows recall.
+const SQL_HIST_KEY = "openads-studio.sql.history";
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(SQL_HIST_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveHistory(arr) {
+  localStorage.setItem(SQL_HIST_KEY,
+                       JSON.stringify(arr.slice(-100)));
+}
+let sqlHistIdx = -1;
+function pushHistory(sql) {
+  const h = loadHistory();
+  if (h.length === 0 || h[h.length-1] !== sql) h.push(sql);
+  saveHistory(h);
+  sqlHistIdx = h.length;
+}
+function recallHistory(delta) {
+  const h = loadHistory();
+  if (h.length === 0) return;
+  sqlHistIdx = Math.max(0, Math.min(h.length, sqlHistIdx + delta));
+  $("sql").value = sqlHistIdx < h.length ? h[sqlHistIdx] : "";
 }
 
 async function loadInsertForm() {
@@ -376,6 +559,7 @@ async function deleteRow(recno, currentlyDeleted) {
 async function runSql() {
   const sql = $("sql").value.trim();
   if (!sql) return;
+  pushHistory(sql);
   $("sql-status").textContent = "running…"; $("sql-status").className = "";
   try {
     const data = await api("/api/sql", {
@@ -435,8 +619,20 @@ $("server-link").addEventListener("click", () => showTab("server"));
 $("sql-run").addEventListener("click", runSql);
 $("sql-export").addEventListener("click", exportCsv);
 $("sql").addEventListener("keydown", e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runSql();
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { runSql(); return; }
+  // History navigation only when caret is at first/last line so we
+  // don't break in-textarea cursor movement.
+  if (e.key === "ArrowUp" && e.ctrlKey)   { e.preventDefault(); recallHistory(-1); }
+  if (e.key === "ArrowDown" && e.ctrlKey) { e.preventDefault(); recallHistory( 1); }
 });
+$("btn-new-table").addEventListener("click", openCreateModal);
+$("ct-add-col").addEventListener("click", addCreateCol);
+$("ct-create").addEventListener("click", runCreateTable);
+$("ct-cancel").addEventListener("click", () =>
+  $("modal-create").classList.remove("show"));
+$("enc-go").addEventListener("click", runEncrypt);
+$("enc-cancel").addEventListener("click", () =>
+  $("modal-encrypt").classList.remove("show"));
 loadTables();
 </script>
 </body>
