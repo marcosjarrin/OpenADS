@@ -32,6 +32,7 @@ endif()
 
 add_subdirectory(src)
 add_subdirectory(tools/serverd)
+add_subdirectory(tools/bench)
 
 if(OPENADS_BUILD_TESTS)
     enable_testing()
