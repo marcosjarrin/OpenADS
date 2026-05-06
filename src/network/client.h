@@ -43,6 +43,9 @@ public:
     util::Result<void>          goto_record(std::uint32_t id,
                                             std::uint32_t recno);
     util::Result<void>          flush_table(std::uint32_t id);
+    // M12.7 — remote SQL exec. Returns cursor table-id (0 = no cursor,
+    // i.e. INSERT / UPDATE / DELETE / DDL).
+    util::Result<std::uint32_t> execute_sql(const std::string& sql);
 
 private:
     util::Result<Frame> request(const Frame& f);

@@ -3786,8 +3786,9 @@ extern "C++" {
 namespace {
 
 struct SqlStatement {
-    Connection* conn = nullptr;
-    std::string sql;
+    Connection*                            conn   = nullptr;
+    openads::network::RemoteConnection*    remote = nullptr;
+    std::string                            sql;
 };
 
 std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
@@ -3808,6 +3809,15 @@ UNSIGNED32 AdsCreateSQLStatement(ADSHANDLE hConnect, ADSHANDLE* phStatement) {
     if (phStatement == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
+    if (auto* rc = s.registry.lookup<openads::network::RemoteConnection>(
+            hConnect, HandleKind::RemoteConnection)) {
+        auto stmt = std::make_unique<SqlStatement>();
+        stmt->remote = rc;
+        ADSHANDLE h = next_stmt_handle();
+        stmt_map()[h] = std::move(stmt);
+        *phStatement = h;
+        return ok();
+    }
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto stmt = std::make_unique<SqlStatement>();
@@ -3852,6 +3862,36 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     auto& m = stmt_map();
     auto it = m.find(hStatement);
     if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    // M12.7 — remote SQL exec. The statement was created against a
+    // RemoteConnection; ship the SQL over the wire, allocate a
+    // RemoteTable handle around the returned cursor table-id, and
+    // hand the resulting ADSHANDLE back to the caller. From here on
+    // every Ads* read on the returned handle (GetField, Skip, etc.)
+    // routes through the same RemoteTable plumbing M12.4 / M12.5
+    // already wired up.
+    if (it->second->remote != nullptr) {
+        auto sqlstr = openads::abi::to_internal(pucSQL, 0);
+        auto r = it->second->remote->execute_sql(sqlstr);
+        if (!r) return fail(r.error());
+        std::uint32_t cur_id = r.value();
+        if (cur_id == 0) {
+            *phCursor = 0;
+            return ok();
+        }
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        static std::unordered_map<Handle,
+            std::unique_ptr<openads::network::RemoteTable>>
+                remote_sql_cursors;
+        auto rt = std::make_unique<openads::network::RemoteTable>();
+        rt->conn = it->second->remote;
+        rt->id   = cur_id;
+        Handle h = s.registry.register_object(
+            HandleKind::RemoteTable, rt.get());
+        remote_sql_cursors[h] = std::move(rt);
+        *phCursor = h;
+        return ok();
+    }
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);

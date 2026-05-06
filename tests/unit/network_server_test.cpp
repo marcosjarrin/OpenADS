@@ -399,6 +399,73 @@ TEST_CASE("M12.6 remote append + set_field + delete + recall + flush round-trip"
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M12.7 remote SQL exec — SELECT cursor + COUNT round-trip") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_7";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // 1) SELECT * FROM data — cursor with 3 rows.
+    {
+        UNSIGNED8 sql[64];
+        std::strcpy(reinterpret_cast<char*>(sql),
+                    "SELECT * FROM data.dbf");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        UNSIGNED32 cnt = 0;
+        REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+        CHECK(cnt == 3);
+        REQUIRE(AdsGotoTop(hCur) == 0);
+        UNSIGNED8  buf[16] = {0};
+        UNSIGNED32 cap = sizeof(buf);
+        REQUIRE(AdsGetField(hCur, (UNSIGNED8*)"TAG",
+                            buf, &cap, 0) == 0);
+        std::string s((char*)buf, cap);
+        while (!s.empty() && s.back() == ' ') s.pop_back();
+        CHECK(s == "AAAA");
+        REQUIRE(AdsCloseTable(hCur) == 0);
+    }
+
+    // 2) SELECT COUNT(*) — single-row aggregate cursor.
+    {
+        UNSIGNED8 sql[64];
+        std::strcpy(reinterpret_cast<char*>(sql),
+                    "SELECT COUNT(*) FROM data.dbf");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+        REQUIRE(hCur != 0);
+        UNSIGNED32 cnt = 0;
+        REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+        CHECK(cnt == 1);
+        REQUIRE(AdsCloseTable(hCur) == 0);
+    }
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M12.3 server stop() drops in-flight connection cleanly") {
     Server srv;
     REQUIRE(srv.start("127.0.0.1", 0).has_value());

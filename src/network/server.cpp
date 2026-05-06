@@ -1,11 +1,14 @@
 #include "network/server.h"
 
 #include "engine/table.h"
+#include "openads/ace.h"
+#include "openads/error.h"
 #include "session/connection.h"
 
 #include <cstring>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 namespace openads::network {
 
@@ -145,9 +148,36 @@ void Server::session_loop(Socket s) {
     // M12.4 — per-session state. Connection is opened by the
     // Connect frame; OpenTable allocates a session-scoped 32-bit
     // table id keyed into engine handles.
+    //
+    // M12.7 — SQL exec opens a parallel ABI connection on first use
+    // (AdsConnect60(local) → AdsCreateSQLStatement). Cursors returned
+    // by AdsExecuteSQLDirect are wrapped in cursor_tbls and routed
+    // back to the client through the M12.4 read ops; the read-side
+    // dispatch checks cursor_tbls first so the same wire opcodes
+    // (GotoTop / Skip / GetField / GetRecordCount / AtEOF /
+    // CloseTable) work for either an OpenTable handle or a SELECT
+    // result cursor.
     std::unique_ptr<openads::session::Connection> sess_conn;
     std::unordered_map<std::uint32_t, openads::session::Handle> tbls;
+    std::unordered_map<std::uint32_t, ADSHANDLE>                cursor_tbls;
+    ADSHANDLE                                                   abi_conn = 0;
+    ADSHANDLE                                                   abi_stmt = 0;
     std::uint32_t next_id = 1;
+
+    auto cleanup = [&]() {
+        for (auto& [id, h] : cursor_tbls) {
+            (void)AdsCloseTable(h);
+        }
+        cursor_tbls.clear();
+        if (abi_stmt != 0) {
+            (void)AdsCloseSQLStatement(abi_stmt);
+            abi_stmt = 0;
+        }
+        if (abi_conn != 0) {
+            (void)AdsDisconnect(abi_conn);
+            abi_conn = 0;
+        }
+    };
 
     auto err = [](const char* msg) {
         Frame f;
@@ -183,6 +213,7 @@ void Server::session_loop(Socket s) {
                 break;
             }
             case Opcode::Disconnect: {
+                cleanup();
                 sock_close(s);
                 return;
             }
@@ -204,6 +235,13 @@ void Server::session_loop(Socket s) {
             case Opcode::CloseTable: {
                 if (f.payload.size() < 4) { reply = err("CloseTable: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());
+                auto cit = cursor_tbls.find(id);
+                if (cit != cursor_tbls.end()) {
+                    (void)AdsCloseTable(cit->second);
+                    cursor_tbls.erase(cit);
+                    reply.opcode = Opcode::CloseTableAck;
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it != tbls.end()) {
                     sess_conn->close_table(it->second);
@@ -215,6 +253,11 @@ void Server::session_loop(Socket s) {
             case Opcode::GotoTop: {
                 if (f.payload.size() < 4) { reply = err("GotoTop: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    (void)AdsGotoTop(cit->second);
+                    reply.opcode = Opcode::GotoTopAck;
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it == tbls.end() || !sess_conn) {
                     reply = err("GotoTop: bad table id"); break;
@@ -230,6 +273,11 @@ void Server::session_loop(Socket s) {
                 std::uint32_t id = read_u32_le(f.payload.data());
                 std::int32_t step = static_cast<std::int32_t>(
                     read_u32_le(f.payload.data() + 4));
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    (void)AdsSkip(cit->second, step);
+                    reply.opcode = Opcode::SkipAck;
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it == tbls.end() || !sess_conn) {
                     reply = err("Skip: bad table id"); break;
@@ -246,6 +294,20 @@ void Server::session_loop(Socket s) {
                 std::string fname(reinterpret_cast<const char*>(
                                       f.payload.data() + 4),
                                   f.payload.size() - 4);
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED8  fbuf[64] = {0};
+                    UNSIGNED8  out [4096] = {0};
+                    UNSIGNED32 cap = sizeof(out);
+                    std::size_t n = std::min<std::size_t>(fname.size(),
+                                                          sizeof(fbuf) - 1);
+                    std::memcpy(fbuf, fname.data(), n);
+                    fbuf[n] = 0;
+                    UNSIGNED32 rrc = AdsGetField(cit->second, fbuf, out, &cap, 0);
+                    if (rrc != 0) { reply = err("GetField: cursor read failed"); break; }
+                    reply.opcode = Opcode::GetFieldAck;
+                    reply.payload.assign(out, out + cap);
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it == tbls.end() || !sess_conn) {
                     reply = err("GetField: bad table id"); break;
@@ -264,6 +326,13 @@ void Server::session_loop(Socket s) {
             case Opcode::GetRecordCount: {
                 if (f.payload.size() < 4) { reply = err("GetRecordCount: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED32 rc = 0;
+                    AdsGetRecordCount(cit->second, 0, &rc);
+                    reply.opcode = Opcode::GetRecordCountAck;
+                    write_u32_le(rc, reply.payload);
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it == tbls.end() || !sess_conn) {
                     reply = err("GetRecordCount: bad table id"); break;
@@ -278,6 +347,13 @@ void Server::session_loop(Socket s) {
             case Opcode::AtEOF: {
                 if (f.payload.size() < 4) { reply = err("AtEOF: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsAtEOF(cit->second, &v);
+                    reply.opcode = Opcode::AtEOFAck;
+                    reply.payload.push_back(v != 0 ? 1 : 0);
+                    break;
+                }
                 auto it = tbls.find(id);
                 if (it == tbls.end() || !sess_conn) {
                     reply = err("AtEOF: bad table id"); break;
@@ -288,7 +364,49 @@ void Server::session_loop(Socket s) {
                 reply.payload.push_back(tbl->eof() ? 1 : 0);
                 break;
             }
-            // M12.6 — remote write surface.
+            // M12.7 — remote SQL exec. Lazy-creates a parallel ABI
+            // connection on the server side; cursor handles returned
+            // by AdsExecuteSQLDirect get wrapped in cursor_tbls so the
+            // existing read-side ops can serve them through the same
+            // wire opcodes.
+            case Opcode::ExecuteSQL: {
+                if (!sess_conn) { reply = err("ExecuteSQL: not connected"); break; }
+                if (abi_conn == 0) {
+                    const std::string& dir = sess_conn->data_dir();
+                    std::vector<UNSIGNED8> srvbuf(dir.size() + 1);
+                    std::memcpy(srvbuf.data(), dir.c_str(), dir.size() + 1);
+                    if (AdsConnect60(srvbuf.data(), ADS_LOCAL_SERVER,
+                                     nullptr, nullptr, 0, &abi_conn) != 0) {
+                        reply = err("ExecuteSQL: AdsConnect60 failed");
+                        break;
+                    }
+                    if (AdsCreateSQLStatement(abi_conn, &abi_stmt) != 0) {
+                        reply = err("ExecuteSQL: AdsCreateSQLStatement failed");
+                        break;
+                    }
+                }
+                std::vector<UNSIGNED8> sqlbuf(f.payload.size() + 1);
+                if (!f.payload.empty()) {
+                    std::memcpy(sqlbuf.data(), f.payload.data(),
+                                f.payload.size());
+                }
+                sqlbuf[f.payload.size()] = 0;
+                ADSHANDLE hCur = 0;
+                UNSIGNED32 rrc = AdsExecuteSQLDirect(abi_stmt,
+                                                     sqlbuf.data(), &hCur);
+                if (rrc != 0) {
+                    reply = err("ExecuteSQL: server-side exec failed");
+                    break;
+                }
+                std::uint32_t id = 0;
+                if (hCur != 0) {
+                    id = next_id++;
+                    cursor_tbls.emplace(id, hCur);
+                }
+                reply.opcode = Opcode::ExecuteSQLAck;
+                write_u32_le(id, reply.payload);
+                break;
+            }
             case Opcode::AppendBlank: {
                 if (f.payload.size() < 4) { reply = err("AppendBlank: bad payload"); break; }
                 std::uint32_t id = read_u32_le(f.payload.data());
@@ -396,6 +514,7 @@ void Server::session_loop(Socket s) {
         }
         if (auto wr = write_frame(s, reply); !wr) break;
     }
+    cleanup();
     sock_close(s);
 }
 

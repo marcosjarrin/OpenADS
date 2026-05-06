@@ -268,4 +268,19 @@ util::Result<void> RemoteConnection::flush_table(std::uint32_t id) {
     return {};
 }
 
+util::Result<std::uint32_t>
+RemoteConnection::execute_sql(const std::string& sql) {
+    Frame req;
+    req.opcode = Opcode::ExecuteSQL;
+    req.payload.assign(sql.begin(), sql.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::ExecuteSQLAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "ExecuteSQL: server error",
+                           sql.substr(0, 200)};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
 } // namespace openads::network
