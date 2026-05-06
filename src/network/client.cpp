@@ -66,8 +66,8 @@ bool parse_tls_uri(const std::string& uri,
 
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
     std::lock_guard<std::mutex> lk(mu_);
-    if (auto r = write_frame(sock_, f); !r) return r.error();
-    auto rep = read_frame(sock_);
+    if (auto r = write_frame(*transport_,f); !r) return r.error();
+    auto rep = read_frame(*transport_);
     if (!rep) return rep.error();
     // M12.10 — Error frame payload prefixed with [u32 LE ace_code].
     // Parse it back into the util::Error so callers see the real ACE
@@ -90,14 +90,12 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
     return rep;
 }
 
-util::Result<void> RemoteConnection::connect(const std::string& host,
-                                              std::uint16_t port,
-                                              const std::string& data_dir,
-                                              const std::string& user,
-                                              const std::string& password) {
-    auto s = connect_tcp(host, port);
-    if (!s) return s.error();
-    sock_ = s.value();
+namespace {
+
+void connect_pack_payload(std::vector<std::uint8_t>& payload,
+                          const std::string& data_dir,
+                          const std::string& user,
+                          const std::string& password) {
     auto pushlen = [](std::vector<std::uint8_t>& out, std::uint16_t n) {
         out.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
         out.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
@@ -107,11 +105,37 @@ util::Result<void> RemoteConnection::connect(const std::string& host,
         pushlen(out, static_cast<std::uint16_t>(s.size()));
         out.insert(out.end(), s.begin(), s.end());
     };
+    pushstr(payload, data_dir);
+    pushstr(payload, user);
+    pushstr(payload, password);
+}
+
+} // namespace
+
+util::Result<void> RemoteConnection::connect(const std::string& host,
+                                              std::uint16_t port,
+                                              const std::string& data_dir,
+                                              const std::string& user,
+                                              const std::string& password) {
+    auto s = connect_tcp(host, port);
+    if (!s) return s.error();
+    return connect_with_transport(make_plain_transport(s.value()),
+                                  data_dir, user, password);
+}
+
+util::Result<void>
+RemoteConnection::connect_with_transport(std::unique_ptr<ITransport> transport,
+                                          const std::string& data_dir,
+                                          const std::string& user,
+                                          const std::string& password) {
+    if (!transport || !transport->valid()) {
+        return util::Error{5000, 0,
+            "RemoteConnection: invalid transport", data_dir};
+    }
+    transport_ = std::move(transport);
     Frame req;
     req.opcode = Opcode::Connect;
-    pushstr(req.payload, data_dir);
-    pushstr(req.payload, user);
-    pushstr(req.payload, password);
+    connect_pack_payload(req.payload, data_dir, user, password);
     auto rep = request(req);
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::ConnectAck) {
@@ -123,12 +147,12 @@ util::Result<void> RemoteConnection::connect(const std::string& host,
 }
 
 void RemoteConnection::disconnect() noexcept {
-    if (!sock_.valid()) return;
+    if (!transport_ || !transport_->valid()) return;
     Frame req;
     req.opcode = Opcode::Disconnect;
-    (void)write_frame(sock_, req);
-    sock_close(sock_);
-    sock_ = Socket{};
+    (void)write_frame(*transport_, req);
+    transport_->close();
+    transport_.reset();
 }
 
 util::Result<std::uint32_t>

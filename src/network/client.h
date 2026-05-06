@@ -2,10 +2,12 @@
 
 #include "network/server.h"
 #include "network/socket.h"
+#include "network/transport.h"
 #include "network/wire.h"
 #include "util/result.h"
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -30,8 +32,21 @@ public:
                                const std::string& data_dir,
                                const std::string& user     = "",
                                const std::string& password = "");
+
+    // M12.12 — connect using a pre-built transport (e.g. a
+    // TlsTransport built by `connect_tls`). The Connect frame is
+    // sent through the supplied transport; ownership passes to
+    // RemoteConnection.
+    util::Result<void>
+        connect_with_transport(std::unique_ptr<ITransport> transport,
+                               const std::string& data_dir,
+                               const std::string& user     = "",
+                               const std::string& password = "");
+
     void               disconnect() noexcept;
-    bool               valid() const noexcept { return sock_.valid(); }
+    bool               valid() const noexcept {
+        return transport_ && transport_->valid();
+    }
 
     util::Result<std::uint32_t> open_table(const std::string& rel);
     util::Result<void>          close_table(std::uint32_t id);
@@ -68,8 +83,8 @@ public:
 private:
     util::Result<Frame> request(const Frame& f);
 
-    Socket      sock_;
-    std::mutex  mu_;
+    std::unique_ptr<ITransport> transport_;
+    std::mutex                  mu_;
 };
 
 // Per-handle wrapper for a remote table. Stores back-pointer to

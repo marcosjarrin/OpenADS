@@ -10,6 +10,9 @@
 #include "engine/table.h"
 
 #include "network/client.h"
+#if defined(OPENADS_WITH_TLS)
+#include "network/tls_transport.h"
+#endif
 #include "session/connection.h"
 #include "session/handle_registry.h"
 #include "drivers/dbf_common.h"
@@ -234,16 +237,48 @@ UNSIGNED32 AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 /*usServerType*/,
     // M12.9 — pucUser / pucPwd are forwarded into the Connect frame;
     // the server validates them when it has credentials registered.
     {
-        // M12.12 — `tls://...` URI is reserved but TLS is not yet
-        // implemented; surface a clear AE_FUNCTION_NOT_AVAILABLE so
-        // apps don't silently downgrade to plaintext. Real TLS
-        // (vendored mbedtls / platform-native) lands in v0.4.0.
+        // M12.12 — `tls://host:port/<dir>` URI. When the engine was
+        // built with -DOPENADS_WITH_TLS=ON we open a real TLS client
+        // through vendored mbedtls; otherwise we surface a clear
+        // AE_FUNCTION_NOT_AVAILABLE so apps don't silently downgrade
+        // to plaintext.
         std::string thost, tdir;
         std::uint16_t tport = 0;
         if (openads::network::parse_tls_uri(path, thost, tport, tdir)) {
+#if defined(OPENADS_WITH_TLS)
+            std::string user = pucUser ? openads::abi::to_internal(pucUser, 0)
+                                       : std::string();
+            std::string pw   = pucPwd  ? openads::abi::to_internal(pucPwd, 0)
+                                       : std::string();
+            openads::network::TlsConfig cfg;
+            // For now, no CA bundle plumbed through the public ABI —
+            // dev / self-signed setups skip verification. A future
+            // milestone will let the caller pass a CA cert via an
+            // AdsSetTlsCa-style entry point.
+            cfg.insecure_skip_verify = true;
+            cfg.sni_hostname         = thost;
+            auto tt = openads::network::connect_tls(thost, tport, cfg);
+            if (!tt) return fail(tt.error());
+            auto rc = std::make_unique<openads::network::RemoteConnection>();
+            if (auto r = rc->connect_with_transport(
+                    std::move(tt).value(), tdir, user, pw); !r) {
+                return fail(r.error());
+            }
+            auto& s = state();
+            std::lock_guard<std::recursive_mutex> lk(s.mu);
+            Handle h = s.registry.register_object(
+                HandleKind::RemoteConnection, rc.get());
+            static std::unordered_map<Handle,
+                std::unique_ptr<openads::network::RemoteConnection>>
+                remote_tls_conns;
+            remote_tls_conns.emplace(h, std::move(rc));
+            *phConnect = h;
+            return ok();
+#else
             return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                "tls:// URI scheme is reserved but TLS transport is "
-                "not yet implemented (planned for v0.4.0)");
+                "tls:// URI requires building OpenADS with "
+                "-DOPENADS_WITH_TLS=ON (vendors mbedtls 3.6 LTS)");
+#endif
         }
     }
     {

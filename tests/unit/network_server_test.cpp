@@ -652,17 +652,30 @@ TEST_CASE("M12.13 PlainTransport round-trips frames identically to raw Socket") 
     srv.stop();
 }
 
-TEST_CASE("M12.12 tls:// URI is reserved and reports unavailable") {
-    // tls:// is parsed + recognised, but transport is not yet wired
-    // up; AdsConnect60 must surface AE_FUNCTION_NOT_AVAILABLE so apps
-    // don't silently downgrade to plaintext.
+TEST_CASE("M12.12 tls:// URI is parsed + handled per build mode") {
+    // tls:// must be recognised symmetrically to tcp://; AdsConnect60
+    // routes to either the real TLS path (when built with
+    // -DOPENADS_WITH_TLS=ON) or returns AE_FUNCTION_NOT_AVAILABLE
+    // 5004 otherwise. Either way it must NEVER silently downgrade
+    // to plaintext.
     UNSIGNED8 srvbuf[64];
+    // Use port 1 — we only want to confirm the URI was recognised
+    // and routed; the TLS handshake will fail (refused) but that's
+    // a *remote-error* path, not "function not available".
     std::strcpy(reinterpret_cast<char*>(srvbuf),
-                "tls://127.0.0.1:6262/whatever");
+                "tls://127.0.0.1:1/whatever");
     ADSHANDLE hConn = 0;
     UNSIGNED32 rc = AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
                                   nullptr, nullptr, 0, &hConn);
+#if defined(OPENADS_WITH_TLS)
+    // Real TLS path attempted — connect fails on the local refusal
+    // and the server returns an AE_REMOTE_ERROR (5172) frame, but
+    // it must NOT be 5004 (function-not-available).
+    CHECK(rc != 0u);
+    CHECK(rc != 5004u);
+#else
     CHECK(rc == 5004u);                            // AE_FUNCTION_NOT_AVAILABLE
+#endif
     CHECK(hConn == 0);
 
     // tls:// parser correctness — split host / port / data_dir.

@@ -83,6 +83,13 @@ if(UNIX)
     target_link_libraries(openads_core PUBLIC pthread)
 endif()
 
+if(OPENADS_WITH_TLS)
+    target_sources(openads_core PRIVATE network/tls_transport.cpp)
+    target_compile_definitions(openads_core PUBLIC OPENADS_WITH_TLS=1)
+    target_link_libraries(openads_core PRIVATE
+        MbedTLS::mbedtls MbedTLS::mbedx509 MbedTLS::mbedcrypto)
+endif()
+
 # ----------------------------------------------------------------------
 # Drop-in replacement DLL: ace32.dll (x86) / ace64.dll (x64).
 # Harbour's contrib/rddads links against ace32.lib / ace64.lib import
