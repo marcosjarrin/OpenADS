@@ -6,6 +6,9 @@
 // rddads app) can reach the server over LAN.
 
 #include "network/server.h"
+#if defined(OPENADS_WITH_HTTP)
+#include "tools/serverd/http_server.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -25,27 +28,35 @@ void on_signal(int) { g_running.store(false); }
 void usage(const char* argv0) {
     std::fprintf(stderr,
         "usage: %s [--host HOST] [--port PORT] [--backlog N]\n"
-        "  --host     bind address (default 0.0.0.0)\n"
-        "  --port     TCP port (default 6262, 0 = ephemeral)\n"
-        "  --backlog  listen() backlog (default 16)\n"
-        "  --version  print version + exit\n",
+        "          [--http-port PORT] [--data DIR]\n"
+        "  --host       bind address (default 0.0.0.0)\n"
+        "  --port       TCP wire port (default 6262, 0 = ephemeral)\n"
+        "  --backlog    listen() backlog (default 16)\n"
+        "  --http-port  if set, expose Studio web console on this port\n"
+        "  --data       data directory the HTTP console serves\n"
+        "               (default = current working directory)\n"
+        "  --version    print version + exit\n",
         argv0);
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string host    = "0.0.0.0";
-    std::uint16_t port  = 6262;
-    int backlog         = 16;
+    std::string host        = "0.0.0.0";
+    std::uint16_t port      = 6262;
+    int backlog             = 16;
+    std::uint16_t http_port = 0;             // 0 = HTTP console disabled
+    std::string data_dir    = ".";
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if      (a == "--host"    && i + 1 < argc) host = argv[++i];
-        else if (a == "--port"    && i + 1 < argc) port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
-        else if (a == "--backlog" && i + 1 < argc) backlog = std::atoi(argv[++i]);
+        if      (a == "--host"      && i + 1 < argc) host    = argv[++i];
+        else if (a == "--port"      && i + 1 < argc) port    = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--backlog"   && i + 1 < argc) backlog = std::atoi(argv[++i]);
+        else if (a == "--http-port" && i + 1 < argc) http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--data"      && i + 1 < argc) data_dir = argv[++i];
         else if (a == "--version") {
-            std::printf("openads_serverd 0.3.2\n");
+            std::printf("openads_serverd 1.0.0-rc1\n");
             return 0;
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
@@ -71,10 +82,33 @@ int main(int argc, char** argv) {
                 host.c_str(), srv.port(), backlog);
     std::fflush(stdout);
 
+#if defined(OPENADS_WITH_HTTP)
+    openads::studio::HttpConsole http;
+    if (http_port != 0) {
+        if (!http.start(host, http_port, data_dir)) {
+            std::fprintf(stderr,
+                "Studio HTTP console: bind to %s:%u failed\n",
+                host.c_str(), http_port);
+        } else {
+            std::printf("Studio web console on http://%s:%u/  (data=%s)\n",
+                        host.c_str(), http_port, data_dir.c_str());
+            std::fflush(stdout);
+        }
+    }
+#else
+    if (http_port != 0) {
+        std::fprintf(stderr,
+            "--http-port set but build lacks OPENADS_WITH_HTTP=ON\n");
+    }
+#endif
+
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     std::printf("openads_serverd: shutdown signal received\n");
+#if defined(OPENADS_WITH_HTTP)
+    if (http_port != 0) http.stop();
+#endif
     srv.stop();
     return 0;
 }

@@ -25,6 +25,14 @@ option(OPENADS_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 # AE_FUNCTION_NOT_AVAILABLE.
 option(OPENADS_WITH_TLS "Enable TLS transport (vendors mbedtls 3.6 LTS via FetchContent)" OFF)
 
+# studio.web — embedded HTTP web console inside openads_serverd.
+# When ON, serverd gains a `--http-port N` flag that exposes a
+# single-page admin UI + REST API on top of the running engine,
+# so the database can be administered from any browser on the LAN
+# without installing a desktop client. Vendors cpp-httplib (MIT)
+# and nlohmann/json (MIT) at configure time via FetchContent.
+option(OPENADS_WITH_HTTP "Enable embedded HTTP web console in openads_serverd" OFF)
+
 # Pull in mbedtls FIRST so our strict /WX -Werror flags don't bleed
 # into the upstream sources (C4200 zero-sized arrays etc). Each
 # OpenADS target adds the strict flags target-locally below via
@@ -42,6 +50,25 @@ if(OPENADS_WITH_TLS)
     )
     FetchContent_MakeAvailable(mbedtls)
     message(STATUS "OpenADS: TLS enabled via vendored mbedtls 3.6.2")
+endif()
+
+if(OPENADS_WITH_HTTP)
+    include(FetchContent)
+    FetchContent_Declare(
+        cpp_httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+        GIT_TAG        v0.18.5
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.11.3
+        GIT_SHALLOW    TRUE
+    )
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(cpp_httplib nlohmann_json)
+    message(STATUS "OpenADS: HTTP web console enabled (cpp-httplib + nlohmann/json)")
 endif()
 
 if(MSVC)
