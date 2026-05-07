@@ -56,7 +56,7 @@ TEST_CASE("TxLog: corrupt CRC truncates the read") {
     }
     // Flip the last byte of the file to break the trailing CRC.
     auto sz = fs::file_size(p);
-    std::vector<std::uint8_t> bytes(sz);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(sz));
     {
         std::ifstream in(p, std::ios::binary);
         in.read(reinterpret_cast<char*>(bytes.data()),
