@@ -110,7 +110,12 @@ TEST_CASE("M10.9 CREATE INDEX through AdsExecuteSQLDirect builds a CDX tag") {
 
     UNSIGNED8 ci[160] = "CREATE INDEX TAGORD ON data (TAG)";
     REQUIRE(AdsExecuteSQLDirect(hStmt, ci, &hCur) == 0);
-    CHECK(fs::exists(dir / "data.cdx"));
+    // SQL DDL CREATE INDEX writes per-tag NTX sidecars
+    // (data_<tag>.ntx) until the CDX leaf-split refactor lands —
+    // NTX has a working multi-level B+tree split, CDX still
+    // single-leaf. Apps that explicitly need a CDX bag can call
+    // AdsCreateIndex61 with a `.cdx` path.
+    CHECK(fs::exists(dir / "data_TAGORD.ntx"));
 
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
