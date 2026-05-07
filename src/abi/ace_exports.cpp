@@ -1693,8 +1693,10 @@ UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
     } else {
         int y = 0, m = 0, d = 0;
         julian_to_ymd(lDate, y, m, d);
-        if (y < 0) y = 0; if (y > 9999) y = 9999;
-        m &= 0xFF; d &= 0xFF;
+        if (y < 0) { y = 0; }
+        if (y > 9999) { y = 9999; }
+        m = ((m % 100) + 100) % 100;
+        d = ((d % 100) + 100) % 100;
         std::snprintf(buf, sizeof(buf), "%04d%02d%02d", y, m, d);
     }
     std::string val(buf, 8);
