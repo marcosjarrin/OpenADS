@@ -18,6 +18,8 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -28,13 +30,15 @@ void on_signal(int) { g_running.store(false); }
 void usage(const char* argv0) {
     std::fprintf(stderr,
         "usage: %s [--host HOST] [--port PORT] [--backlog N]\n"
-        "          [--http-port PORT] [--data DIR]\n"
+        "          [--http-port PORT] [--data DIR] [--http-user U:P]...\n"
         "  --host       bind address (default 0.0.0.0)\n"
         "  --port       TCP wire port (default 6262, 0 = ephemeral)\n"
         "  --backlog    listen() backlog (default 16)\n"
         "  --http-port  if set, expose Studio web console on this port\n"
         "  --data       data directory the HTTP console serves\n"
         "               (default = current working directory)\n"
+        "  --http-user  user:password — register a Studio login\n"
+        "               (repeatable; if none given, console is open)\n"
         "  --version    print version + exit\n",
         argv0);
 }
@@ -47,6 +51,7 @@ int main(int argc, char** argv) {
     int backlog             = 16;
     std::uint16_t http_port = 0;             // 0 = HTTP console disabled
     std::string data_dir    = ".";
+    std::vector<std::pair<std::string, std::string>> http_users;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -55,6 +60,17 @@ int main(int argc, char** argv) {
         else if (a == "--backlog"   && i + 1 < argc) backlog = std::atoi(argv[++i]);
         else if (a == "--http-port" && i + 1 < argc) http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         else if (a == "--data"      && i + 1 < argc) data_dir = argv[++i];
+        else if (a == "--http-user" && i + 1 < argc) {
+            std::string up = argv[++i];
+            auto colon = up.find(':');
+            if (colon == std::string::npos) {
+                std::fprintf(stderr,
+                    "--http-user expects user:password\n");
+                return 2;
+            }
+            http_users.emplace_back(up.substr(0, colon),
+                                     up.substr(colon + 1));
+        }
         else if (a == "--version") {
             std::printf("openads_serverd 1.0.0-rc1\n");
             return 0;
@@ -84,6 +100,7 @@ int main(int argc, char** argv) {
 
 #if defined(OPENADS_WITH_HTTP)
     openads::studio::HttpConsole http;
+    for (auto& u : http_users) http.add_user(u.first, u.second);
     if (http_port != 0) {
         if (!http.start(host, http_port, data_dir, &srv)) {
             std::fprintf(stderr,

@@ -26,26 +26,50 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   * { box-sizing: border-box; }
+  :root {
+    --bg:        #1e1e1e;
+    --fg:        #ddd;
+    --panel:     var(--panel);
+    --panel-2:   var(--panel-2);
+    --border:    var(--border);
+    --accent:    #0d6efd;
+    --accent-2:  #094771;
+    --danger:    #d9534f;
+    --ok:        #6cc24a;
+    --err:       #f48771;
+  }
+  body.light {
+    --bg:        #fafafa;
+    --fg:        #222;
+    --panel:     #ffffff;
+    --panel-2:   #f0f0f0;
+    --border:    #d0d0d0;
+    --accent:    #0d6efd;
+    --accent-2:  #d6e6ff;
+    --danger:    #d9534f;
+    --ok:        #2e7d32;
+    --err:       #b71c1c;
+  }
   body { font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
          margin: 0; height: 100vh; display: flex; flex-direction: column;
-         background: #1e1e1e; color: #ddd; font-size: 19px; }
+         background: var(--bg); color: var(--fg); font-size: 19px; }
   header { background: #0d6efd; color: white; padding: 14px 22px;
            display: flex; align-items: center; justify-content: space-between; }
   header h1 { font-size: 24px; margin: 0; font-weight: 500; }
   header .status { font-size: 17px; opacity: 0.85; }
   main { flex: 1; display: flex; min-height: 0; }
-  aside { width: 320px; background: #252526; border-right: 1px solid #333;
+  aside { width: 320px; background: var(--panel); border-right: 1px solid var(--border);
           overflow-y: auto; flex-shrink: 0; }
   aside h2 { font-size: 15px; text-transform: uppercase; opacity: 0.6;
              margin: 16px 18px 10px; }
   aside ul { list-style: none; padding: 0; margin: 0; }
   aside li { padding: 10px 18px; cursor: pointer; font-size: 18px; }
-  aside li:hover { background: #2d2d30; }
+  aside li:hover { background: var(--panel-2); }
   aside li.active { background: #094771; color: white; }
   section.work { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  nav.tabs { background: #2d2d30; padding: 0 12px; display: flex;
+  nav.tabs { background: var(--panel-2); padding: 0 12px; display: flex;
              gap: 1px; border-bottom: 1px solid #094771; }
-  nav.tabs button { background: #2d2d30; color: #aaa; border: 0;
+  nav.tabs button { background: var(--panel-2); color: #aaa; border: 0;
                     padding: 12px 26px; cursor: pointer; font-size: 17px; }
   nav.tabs button:hover { background: #3a3a3d; color: white; }
   nav.tabs button.active { background: #094771; color: white; }
@@ -64,19 +88,19 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   .err { color: #f48771; font-size: 17px; }
   .ok  { color: #6cc24a; font-size: 17px; }
   table { border-collapse: collapse; width: 100%; }
-  th, td { padding: 8px 12px; border: 1px solid #333; text-align: left;
+  th, td { padding: 8px 12px; border: 1px solid var(--border); text-align: left;
            white-space: nowrap; vertical-align: top; font-size: 17px; }
-  th { background: #2d2d30; font-weight: 500; position: sticky; top: 0;
+  th { background: var(--panel-2); font-weight: 500; position: sticky; top: 0;
        z-index: 1; }
   tr.deleted td { opacity: 0.4; text-decoration: line-through; }
-  .editor textarea { background: #1e1e1e; color: #ddd; border: 1px solid #333;
+  .editor textarea { background: #1e1e1e; color: #ddd; border: 1px solid var(--border);
                      outline: none; padding: 14px;
                      font: 18px Consolas, Monaco, monospace; resize: vertical;
                      width: 100%; min-height: 170px; }
   .form-row { display: flex; align-items: center; margin-bottom: 10px;
               gap: 14px; }
   .form-row label { width: 200px; font-size: 17px; opacity: 0.85; }
-  .form-row input { flex: 1; background: #2d2d30; color: #ddd;
+  .form-row input { flex: 1; background: var(--panel-2); color: #ddd;
                     border: 1px solid #444; padding: 8px 12px;
                     font: 17px Consolas, monospace; border-radius: 2px; }
   .empty { padding: 28px; opacity: 0.5; font-size: 18px; }
@@ -89,13 +113,13 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
               display: none; align-items: center; justify-content: center;
               z-index: 10; }
   .modal-bg.show { display: flex; }
-  .modal { background: #252526; border: 1px solid #094771;
+  .modal { background: var(--panel); border: 1px solid #094771;
            padding: 22px; border-radius: 6px; min-width: 460px;
            max-width: 90vw; max-height: 90vh; overflow: auto; }
   .modal h3 { margin: 0 0 16px; font-size: 17px; }
   .col-row { display: grid; grid-template-columns: 1.3fr 0.6fr 0.5fr 0.5fr 0.4fr;
              gap: 6px; margin-bottom: 5px; align-items: center; }
-  .col-row input, .col-row select { background: #2d2d30; color: #ddd;
+  .col-row input, .col-row select { background: var(--panel-2); color: #ddd;
              border: 1px solid #444; padding: 5px 8px;
              font: 14px Consolas, monospace; border-radius: 2px; }
   .col-row button { background: #d9534f; color: white; border: 0;
@@ -110,17 +134,22 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
   /* Truncate big cells; click to expand in a modal. */
   td.cell { max-width: 380px; overflow: hidden;
             text-overflow: ellipsis; cursor: pointer; }
-  td.cell:hover { background: #2d2d30; }
+  td.cell:hover { background: var(--panel-2); }
   .modal pre { background: #1e1e1e; padding: 14px; border-radius: 3px;
                font: 14px Consolas, monospace; white-space: pre-wrap;
                word-break: break-all; max-height: 70vh; overflow: auto;
-               border: 1px solid #333; }
+               border: 1px solid var(--border); }
 </style>
 </head>
 <body>
 <header>
   <h1>OpenADS Studio</h1>
   <div style="display:flex;gap:18px;align-items:center">
+    <button id="theme-toggle"
+       style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.4);
+              padding:5px 12px;border-radius:3px;cursor:pointer;font-size:15px">
+      🌙
+    </button>
     <a href="https://fivetechsoft.github.io/OpenADS/"
        target="_blank" rel="noopener"
        style="color:white;text-decoration:none;font-size:15px;
@@ -205,7 +234,7 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 
     <div id="pane-dd" class="pane hidden">
       <div class="toolbar">
-        <select id="dd-pick" style="background:#2d2d30;color:#ddd;
+        <select id="dd-pick" style="background:var(--panel-2);color:#ddd;
                 border:1px solid #444;padding:6px 10px;font-size:15px;
                 border-radius:2px"></select>
         <button class="btn" id="dd-new">New dict…</button>
@@ -419,6 +448,7 @@ async function loadStructure() {
         <button class="btn btn-secondary" id="btn-reindex">Reindex</button>
         <button class="btn btn-secondary" id="btn-pack">Pack</button>
         <button class="btn btn-danger"    id="btn-zap">Zap</button>
+        <button class="btn btn-secondary" id="btn-download">Download</button>
         <button class="btn"               id="btn-encrypt">Encrypt…</button>
         <button class="btn btn-danger"    id="btn-drop">Drop table</button>
         <span id="struct-status"></span>
@@ -444,6 +474,12 @@ async function loadStructure() {
     $("btn-reindex").addEventListener("click", () => maintenanceOp("reindex"));
     $("btn-pack").addEventListener("click",    () => maintenanceOp("pack"));
     $("btn-zap").addEventListener("click",     () => maintenanceOp("zap"));
+    $("btn-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = `/api/tables/${encodeURIComponent(state.table)}/download`;
+      a.download = state.table;
+      document.body.appendChild(a); a.click(); a.remove();
+    });
     // studio.web.0.7 — render sidecar files for this table.
     try {
       const sc = await api(
@@ -979,6 +1015,21 @@ $("sql").addEventListener("keydown", e => {
   if (e.key === "ArrowUp" && e.ctrlKey)   { e.preventDefault(); recallHistory(-1); }
   if (e.key === "ArrowDown" && e.ctrlKey) { e.preventDefault(); recallHistory( 1); }
 });
+// studio.web.0.8 — theme toggle (dark default; light persists via
+// localStorage).
+const THEME_KEY = "openads-studio.theme";
+function applyTheme(t) {
+  document.body.classList.toggle("light", t === "light");
+  $("theme-toggle").textContent = t === "light" ? "☀" : "🌙";
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "dark");
+$("theme-toggle").addEventListener("click", () => {
+  const cur = document.body.classList.contains("light") ? "light" : "dark";
+  const nxt = cur === "light" ? "dark" : "light";
+  localStorage.setItem(THEME_KEY, nxt);
+  applyTheme(nxt);
+});
+
 $("btn-new-table").addEventListener("click", openCreateModal);
 $("btn-refresh-tables").addEventListener("click", loadTables);
 $("btn-upload-table").addEventListener("click", () =>

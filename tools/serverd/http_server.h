@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace httplib {
 class Server;
@@ -50,12 +51,18 @@ public:
     void stop();
     bool running() const noexcept { return running_.load(); }
 
+    // studio.web.0.8 — HTTP Basic-auth credentials. When at least
+    // one user/password pair is registered, every request must
+    // carry an `Authorization: Basic …` header that matches.
+    void add_user(const std::string& user, const std::string& password);
+
 private:
     std::unique_ptr<httplib::Server> srv_;
     std::thread                      thread_;
     std::atomic<bool>                running_{false};
     std::string                      data_dir_;
     openads::network::Server*        wire_srv_ = nullptr;
+    std::unordered_map<std::string, std::string> users_;
 };
 
 } // namespace openads::studio

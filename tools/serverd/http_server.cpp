@@ -860,6 +860,60 @@ json run_sql(const std::string& dir, const std::string& sql,
 HttpConsole::HttpConsole() : srv_(std::make_unique<httplib::Server>()) {}
 HttpConsole::~HttpConsole() { stop(); }
 
+void HttpConsole::add_user(const std::string& user,
+                            const std::string& password) {
+    users_[user] = password;
+}
+
+namespace {
+
+// Decode the body of an `Authorization: Basic <base64>` header.
+// Returns "" on any malformed input.
+std::string b64decode(const std::string& in) {
+    static const char* tbl =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
+    int dec[256];
+    for (int i = 0; i < 256; ++i) dec[i] = -1;
+    for (int i = 0; i < 64; ++i)
+        dec[static_cast<unsigned char>(tbl[i])] = i;
+    std::string out;
+    int v = 0, b = 0;
+    for (unsigned char c : in) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
+        int d = dec[c];
+        if (d < 0) return "";
+        v = (v << 6) | d;
+        b += 6;
+        if (b >= 8) {
+            b -= 8;
+            out.push_back(static_cast<char>((v >> b) & 0xFF));
+        }
+    }
+    return out;
+}
+
+bool check_basic_auth(const httplib::Request& req,
+                      const std::unordered_map<std::string, std::string>& users) {
+    if (users.empty()) return true;       // dev mode: no auth
+    auto it = req.headers.find("Authorization");
+    if (it == req.headers.end()) return false;
+    const std::string& v = it->second;
+    const std::string prefix = "Basic ";
+    if (v.size() < prefix.size() ||
+        v.compare(0, prefix.size(), prefix) != 0) return false;
+    auto raw = b64decode(v.substr(prefix.size()));
+    auto colon = raw.find(':');
+    if (colon == std::string::npos) return false;
+    std::string user = raw.substr(0, colon);
+    std::string pw   = raw.substr(colon + 1);
+    auto cit = users.find(user);
+    return cit != users.end() && cit->second == pw;
+}
+
+} // namespace
+
 bool HttpConsole::start(const std::string& host,
                          std::uint16_t      port,
                          const std::string& data_dir,
@@ -867,6 +921,22 @@ bool HttpConsole::start(const std::string& host,
     data_dir_ = data_dir;
     wire_srv_ = wire_srv;
     auto& srv = *srv_;
+
+    // studio.web.0.8 — HTTP Basic auth gate. When the credential
+    // map is empty we accept every request (dev mode); otherwise
+    // every request must carry a valid `Authorization: Basic …`.
+    srv.set_pre_routing_handler(
+        [this](const httplib::Request& req, httplib::Response& res) {
+            if (check_basic_auth(req, users_)) {
+                return httplib::Server::HandlerResponse::Unhandled;
+            }
+            res.status = 401;
+            res.set_header("WWW-Authenticate",
+                           "Basic realm=\"OpenADS Studio\"");
+            res.set_content("authentication required",
+                            "text/plain; charset=utf-8");
+            return httplib::Server::HandlerResponse::Handled;
+        });
 
     srv.Get("/", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(kSpaIndexHtml, "text/html; charset=utf-8");
@@ -1136,6 +1206,34 @@ bool HttpConsole::start(const std::string& host,
             [this](const httplib::Request& req, httplib::Response& res) {
         json j = table_sidecars(data_dir_, req.matches[1]);
         res.set_content(j.dump(), "application/json");
+    });
+
+    // studio.web.0.8 — download a single DBF (or any sidecar) as
+    // application/octet-stream so the admin can pull a copy off the
+    // server through the browser.
+    srv.Get(R"(/api/tables/([^/]+)/download)",
+            [this](const httplib::Request& req, httplib::Response& res) {
+        std::string fname = req.matches[1];
+        if (fname.find("..") != std::string::npos ||
+            fname.find('/')  != std::string::npos ||
+            fname.find('\\') != std::string::npos) {
+            res.status = 400;
+            res.set_content("invalid file name", "text/plain");
+            return;
+        }
+        fs::path p = fs::path(data_dir_) / fname;
+        std::error_code ec;
+        if (!fs::exists(p, ec) || !fs::is_regular_file(p, ec)) {
+            res.status = 404;
+            res.set_content("not found", "text/plain");
+            return;
+        }
+        std::ifstream in(p, std::ios::binary);
+        std::string body((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+        res.set_header("Content-Disposition",
+            "attachment; filename=\"" + fname + "\"");
+        res.set_content(body, "application/octet-stream");
     });
 
     // studio.web.0.7 — DBF + sidecar upload from the browser.
