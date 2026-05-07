@@ -5030,9 +5030,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         j.right_column.c_str());
         }
 
-        auto trim_trailing = [](std::string s) {
-            while (!s.empty() && s.back() == ' ') s.pop_back();
-            return s;
+        auto trim_trailing = [](std::string sl) {
+            while (!sl.empty() && sl.back() == ' ') sl.pop_back();
+            return sl;
         };
 
         // INNER / LEFT walk left + lookup right. RIGHT swaps that —
@@ -6527,11 +6527,11 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         };
         bool conn_nocase =
             (c->collation() == Connection::Collation::NoCase);
-        auto to_lower_ascii = [](std::string s) {
-            for (auto& ch : s) {
+        auto to_lower_ascii = [](std::string sl) {
+            for (auto& ch : sl) {
                 if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch + 32);
             }
-            return s;
+            return sl;
         };
 
         // Compile the AST into a Predicate functor.
@@ -6599,9 +6599,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if (!sh) return false;
                     openads::engine::Table* stbl = c->lookup_table(sh.value());
                     if (!stbl) { c->close_table(sh.value()); return false; }
-                    auto trim = [](std::string s) {
-                        while (!s.empty() && s.back() == ' ') s.pop_back();
-                        return s;
+                    auto trim = [](std::string sl) {
+                        while (!sl.empty() && sl.back() == ' ') sl.pop_back();
+                        return sl;
                     };
                     std::function<bool(const openads::sql::WhereExpr&)> evalw;
                     evalw = [&](const openads::sql::WhereExpr& n) -> bool {
@@ -6675,9 +6675,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         node.in_clause.column.c_str(), ""};
                 }
                 std::uint16_t fi = static_cast<std::uint16_t>(fidx);
-                auto trim_trailing = [](std::string s) {
-                    while (!s.empty() && s.back() == ' ') s.pop_back();
-                    return s;
+                auto trim_trailing = [](std::string sl) {
+                    while (!sl.empty() && sl.back() == ' ') sl.pop_back();
+                    return sl;
                 };
                 auto set = std::make_shared<std::unordered_set<std::string>>();
                 for (auto& lit : node.in_clause.literals) set->insert(lit);
@@ -6925,10 +6925,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         if (!stbl) {
                             c->close_table(sh.value()); return false;
                         }
-                        auto trim = [](std::string s) {
-                            while (!s.empty() && s.back() == ' ')
-                                s.pop_back();
-                            return s;
+                        auto trim = [](std::string sl) {
+                            while (!sl.empty() && sl.back() == ' ')
+                                sl.pop_back();
+                            return sl;
                         };
                         std::function<bool(const openads::sql::WhereExpr&)>
                             evalw;
@@ -7236,13 +7236,13 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
                 auto v = t.read_field(term.field_index);
                 if (!v) return false;
-                auto maybe_lower = [&](std::string s) {
-                    if (!term.nocase) return s;
-                    for (auto& ch : s) {
+                auto maybe_lower = [&](std::string sl) {
+                    if (!term.nocase) return sl;
+                    for (auto& ch : sl) {
                         if (ch >= 'A' && ch <= 'Z')
                             ch = static_cast<char>(ch + 32);
                     }
-                    return s;
+                    return sl;
                 };
                 if (term.op == openads::sql::WhereOp::Between) {
                     if (term.is_numeric) {
@@ -7464,9 +7464,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // into a temp DBF whose schema mirrors the projection list (CASE
     // items become C(30); regular columns preserve source type +
     // length), evaluating each row's CASE branches inline.
-    auto starts_with = [](const std::string& s, const char* pre) {
+    auto starts_with = [](const std::string& sl, const char* pre) {
         std::size_t L = std::strlen(pre);
-        return s.size() >= L && std::memcmp(s.data(), pre, L) == 0;
+        return sl.size() >= L && std::memcmp(sl.data(), pre, L) == 0;
     };
     bool has_synth = false;
     for (auto& p : parsed.value().projection) {
@@ -7842,17 +7842,17 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         file.push_back(0x0D);
 
         std::uint32_t emitted = 0;
-        auto trim_left = [](std::string s) {
+        auto trim_left = [](std::string sl) {
             std::size_t i = 0;
-            while (i < s.size() && s[i] == ' ') ++i;
-            return s.substr(i);
+            while (i < sl.size() && sl[i] == ' ') ++i;
+            return sl.substr(i);
         };
-        auto trim_right = [](std::string s) {
-            while (!s.empty() && s.back() == ' ') s.pop_back();
-            return s;
+        auto trim_right = [](std::string sl) {
+            while (!sl.empty() && sl.back() == ' ') sl.pop_back();
+            return sl;
         };
-        auto trim_both = [&](std::string s) {
-            return trim_left(trim_right(std::move(s)));
+        auto trim_both = [&](std::string sl) {
+            return trim_left(trim_right(std::move(sl)));
         };
         for (std::uint32_t r : walk_seq) {
             if (auto g = tbl->goto_record(r); !g) continue;
@@ -7926,10 +7926,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 auto fv = tbl->read_field(
                                     static_cast<std::uint16_t>(fi));
                                 if (!fv) return std::string();
-                                std::string s = fv.value().as_string;
-                                while (!s.empty() && s.back() == ' ')
-                                    s.pop_back();
-                                return s;
+                                std::string sl = fv.value().as_string;
+                                while (!sl.empty() && sl.back() == ' ')
+                                    sl.pop_back();
+                                return sl;
                             };
                             auto arg_num = [&](const openads::sql::ScalarFnArg& a)
                                 -> double {
@@ -7977,14 +7977,14 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                        fc.args.size() == 2) {
                                 // M10.45 — DATEDIFF on YYYYMMDD strings:
                                 // returns days_a - days_b via Julian day.
-                                auto julian = [](const std::string& s) -> long {
-                                    if (s.size() < 8) return 0;
-                                    int y = std::atoi(s.substr(0, 4).c_str());
-                                    int m = std::atoi(s.substr(4, 2).c_str());
-                                    int d = std::atoi(s.substr(6, 2).c_str());
-                                    long a = (14 - m) / 12;
+                                auto julian = [](const std::string& sl) -> long {
+                                    if (sl.size() < 8) return 0;
+                                    int y = std::atoi(sl.substr(0, 4).c_str());
+                                    int mo = std::atoi(sl.substr(4, 2).c_str());
+                                    int d = std::atoi(sl.substr(6, 2).c_str());
+                                    long a = (14 - mo) / 12;
                                     long y2 = y + 4800 - a;
-                                    long m2 = m + 12 * a - 3;
+                                    long m2 = mo + 12 * a - 3;
                                     return d + (153 * m2 + 2) / 5 + 365 * y2 +
                                            y2 / 4 - y2 / 100 + y2 / 400 - 32045;
                                 };

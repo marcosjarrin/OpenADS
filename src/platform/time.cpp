@@ -70,12 +70,16 @@ LocalWallClock now_local() {
     ::localtime_r(&t, &tm);
 #endif
 
+    int yr = tm.tm_year + 1900; if (yr < 0) yr = 0; if (yr > 9999) yr = 9999;
+    int mo = (tm.tm_mon  + 1) & 0xFF;
+    int md = tm.tm_mday & 0xFF;
+    int hr = tm.tm_hour & 0xFF;
+    int mn = tm.tm_min  & 0xFF;
+    int sc = tm.tm_sec  & 0xFF;
     char date_buf[16] = {0};
-    std::snprintf(date_buf, sizeof(date_buf), "%04d-%02d-%02d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    std::snprintf(date_buf, sizeof(date_buf), "%04d-%02d-%02d", yr, mo, md);
     char time_buf[16] = {0};
-    std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d",
-                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d", hr, mn, sc);
 
     LocalWallClock out;
     out.date      = date_buf;

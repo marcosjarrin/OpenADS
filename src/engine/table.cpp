@@ -351,7 +351,8 @@ util::Result<void> Table::append_record() {
         if (!bumped) continue;   // tolerate non-autoinc-capable drivers
         std::uint32_t v = bumped.value();
         std::uint16_t off = fs[i].record_offset;
-        if (fs[i].length >= 4 && off + 4 <= rec.size()) {
+        if (fs[i].length >= 4 &&
+            static_cast<std::size_t>(off) + 4 <= rec.size()) {
             rec[off    ] = static_cast<std::uint8_t>( v        & 0xFFu);
             rec[off + 1] = static_cast<std::uint8_t>((v >>  8) & 0xFFu);
             rec[off + 2] = static_cast<std::uint8_t>((v >> 16) & 0xFFu);
