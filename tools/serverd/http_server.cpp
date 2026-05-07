@@ -51,6 +51,31 @@ struct AbiSession {
     bool ok() const noexcept { return conn != 0; }
 };
 
+// studio.web.0.13 — figure out the right ADS_* table-type code
+// for a given DBF + sidecar layout. Default is CDX (FoxPro-style)
+// when no overrides apply; an `.ntx` next to the DBF flips to
+// Clipper-style NTX; the explicit `type` query param wins over
+// either.
+UNSIGNED16 resolve_table_type(const std::string& dir,
+                               const std::string& tname,
+                               const std::string& override) {
+    std::string ov = override;
+    std::transform(ov.begin(), ov.end(), ov.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (ov == "ntx") return ADS_NTX;
+    if (ov == "cdx") return ADS_CDX;
+    if (ov == "adt") return ADS_ADT;
+    if (ov == "vfp") return ADS_VFP;
+    if (!ov.empty()) return ADS_CDX;
+    fs::path stem = (fs::path(dir) / tname).parent_path() /
+                    fs::path(tname).stem();
+    std::error_code ec;
+    fs::path ntx = stem; ntx += ".ntx";
+    fs::path cdx = stem; cdx += ".cdx";
+    if (fs::exists(ntx, ec) && !fs::exists(cdx, ec)) return ADS_NTX;
+    return ADS_CDX;
+}
+
 json json_error(const std::string& msg, int http_code) {
     return json{{"error", msg}, {"http_code", http_code}};
 }
@@ -74,14 +99,16 @@ std::vector<std::string> list_dbf_files(const std::string& dir) {
 // studio.web.0.2 — schema for a single table:
 // returns column metadata (name, type letter, length, decimals)
 // + record count + raw file size on disk.
-json table_schema(const std::string& dir, const std::string& tname) {
+json table_schema(const std::string& dir, const std::string& tname,
+                  const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t n = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), n);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    UNSIGNED16 ttype = resolve_table_type(dir, tname, type_ov);
+    if (AdsOpenTable(sess.conn, leaf, nullptr, ttype,
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -123,14 +150,16 @@ json table_schema(const std::string& dir, const std::string& tname) {
 
 // studio.web.0.2 — paginated row browse for a single table.
 json table_rows(const std::string& dir, const std::string& tname,
-                std::uint32_t offset, std::uint32_t limit) {
+                std::uint32_t offset, std::uint32_t limit,
+                const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -184,14 +213,16 @@ json table_rows(const std::string& dir, const std::string& tname,
 
 // studio.web.0.2 — append a new row by JSON {col: value, ...}.
 json table_insert(const std::string& dir, const std::string& tname,
-                  const json& values) {
+                  const json& values,
+                  const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -223,14 +254,16 @@ json table_insert(const std::string& dir, const std::string& tname,
 
 // studio.web.0.2 — overwrite columns in an existing record.
 json table_update(const std::string& dir, const std::string& tname,
-                  std::uint32_t recno, const json& values) {
+                  std::uint32_t recno, const json& values,
+                  const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -260,14 +293,16 @@ json table_update(const std::string& dir, const std::string& tname,
 
 // studio.web.0.2 — mark deleted (Clipper convention) or recall.
 json table_delete(const std::string& dir, const std::string& tname,
-                  std::uint32_t recno, bool recall) {
+                  std::uint32_t recno, bool recall,
+                  const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -352,7 +387,8 @@ json table_drop(const std::string& dir, const std::string& tname) {
 // Body: { "password": "..." }. Sets the connection encryption
 // password first (M11.2), then encrypts the table.
 json table_encrypt(const std::string& dir, const std::string& tname,
-                   const json& body) {
+                   const json& body,
+                   const std::string& type_ov = "") {
     std::string pw = body.value("password", "");
     if (pw.empty()) return json_error("missing 'password'", 400);
     AbiSession sess(dir);
@@ -364,7 +400,8 @@ json table_encrypt(const std::string& dir, const std::string& tname,
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -620,14 +657,16 @@ json dd_set_dbprop(const std::string& dir, const std::string& name,
 // studio.web.0.6 — table maintenance ops.
 // Each maps to a single Ads* call so the surface stays small.
 
-json table_reindex(const std::string& dir, const std::string& tname) {
+json table_reindex(const std::string& dir, const std::string& tname,
+                   const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -638,14 +677,16 @@ json table_reindex(const std::string& dir, const std::string& tname) {
     return json{{"ok", true}, {"table", tname}};
 }
 
-json table_pack(const std::string& dir, const std::string& tname) {
+json table_pack(const std::string& dir, const std::string& tname,
+                const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -656,14 +697,16 @@ json table_pack(const std::string& dir, const std::string& tname) {
     return json{{"ok", true}, {"table", tname}};
 }
 
-json table_zap(const std::string& dir, const std::string& tname) {
+json table_zap(const std::string& dir, const std::string& tname,
+               const std::string& type_ov = "") {
     AbiSession sess(dir);
     if (!sess.ok()) return json_error("could not open data dir", 500);
     UNSIGNED8 leaf[256] = {0};
     std::size_t ln = std::min<std::size_t>(tname.size(), sizeof(leaf) - 1);
     std::memcpy(leaf, tname.data(), ln);
     ADSHANDLE hTable = 0;
-    if (AdsOpenTable(sess.conn, leaf, nullptr, ADS_CDX,
+    if (AdsOpenTable(sess.conn, leaf, nullptr,
+                     resolve_table_type(dir, tname, type_ov),
                      0, 0, 0, 0, &hTable) != 0) {
         return json_error("AdsOpenTable failed: " + tname, 404);
     }
@@ -1079,15 +1122,19 @@ bool HttpConsole::start(const std::string& host,
         res.set_content(j.dump(), "application/json");
     });
 
+    auto type_param = [](const httplib::Request& req) -> std::string {
+        return req.has_param("type") ? req.get_param_value("type") : "";
+    };
+
     srv.Get(R"(/api/tables/([^/]+)/schema)",
-            [this](const httplib::Request& req, httplib::Response& res) {
-        json j = table_schema(data_dir_, req.matches[1]);
+            [this, type_param](const httplib::Request& req, httplib::Response& res) {
+        json j = table_schema(data_dir_, req.matches[1], type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 
     srv.Get(R"(/api/tables/([^/]+)/rows)",
-            [this](const httplib::Request& req, httplib::Response& res) {
+            [this, type_param](const httplib::Request& req, httplib::Response& res) {
         std::uint32_t offset = 0, limit = 50;
         if (req.has_param("offset"))
             offset = static_cast<std::uint32_t>(
@@ -1096,25 +1143,27 @@ bool HttpConsole::start(const std::string& host,
             limit  = static_cast<std::uint32_t>(
                 std::strtoul(req.get_param_value("limit").c_str(), nullptr, 10));
         if (limit == 0 || limit > 5000) limit = 50;
-        json j = table_rows(data_dir_, req.matches[1], offset, limit);
+        json j = table_rows(data_dir_, req.matches[1], offset, limit,
+                            type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 
     srv.Post(R"(/api/tables/([^/]+)/insert)",
-             [this](const httplib::Request& req, httplib::Response& res) {
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
         catch (...) { res.status = 400;
             res.set_content(json_error("invalid JSON", 400).dump(),
                             "application/json"); return; }
-        json j = table_insert(data_dir_, req.matches[1], body);
+        json j = table_insert(data_dir_, req.matches[1], body,
+                              type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 
     srv.Post(R"(/api/tables/([^/]+)/update)",
-             [this](const httplib::Request& req, httplib::Response& res) {
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
         std::uint32_t recno = 0;
         if (req.has_param("recno"))
             recno = static_cast<std::uint32_t>(
@@ -1127,13 +1176,14 @@ bool HttpConsole::start(const std::string& host,
         catch (...) { res.status = 400;
             res.set_content(json_error("invalid JSON", 400).dump(),
                             "application/json"); return; }
-        json j = table_update(data_dir_, req.matches[1], recno, body);
+        json j = table_update(data_dir_, req.matches[1], recno, body,
+                              type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
 
     srv.Post(R"(/api/tables/([^/]+)/delete)",
-             [this](const httplib::Request& req, httplib::Response& res) {
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
         std::uint32_t recno = 0;
         if (req.has_param("recno"))
             recno = static_cast<std::uint32_t>(
@@ -1143,7 +1193,8 @@ bool HttpConsole::start(const std::string& host,
         if (recno == 0) { res.status = 400;
             res.set_content(json_error("missing recno query param", 400).dump(),
                             "application/json"); return; }
-        json j = table_delete(data_dir_, req.matches[1], recno, recall);
+        json j = table_delete(data_dir_, req.matches[1], recno, recall,
+                              type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
@@ -1321,13 +1372,14 @@ bool HttpConsole::start(const std::string& host,
     });
 
     srv.Post(R"(/api/tables/([^/]+)/encrypt)",
-             [this](const httplib::Request& req, httplib::Response& res) {
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
         json body;
         try { body = json::parse(req.body); }
         catch (...) { res.status = 400;
             res.set_content(json_error("invalid JSON", 400).dump(),
                             "application/json"); return; }
-        json j = table_encrypt(data_dir_, req.matches[1], body);
+        json j = table_encrypt(data_dir_, req.matches[1], body,
+                               type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
@@ -1335,20 +1387,20 @@ bool HttpConsole::start(const std::string& host,
     // studio.web.0.6 — table maintenance (Reindex / Pack / Zap +
     // CREATE INDEX wizard).
     srv.Post(R"(/api/tables/([^/]+)/reindex)",
-             [this](const httplib::Request& req, httplib::Response& res) {
-        json j = table_reindex(data_dir_, req.matches[1]);
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
+        json j = table_reindex(data_dir_, req.matches[1], type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
     srv.Post(R"(/api/tables/([^/]+)/pack)",
-             [this](const httplib::Request& req, httplib::Response& res) {
-        json j = table_pack(data_dir_, req.matches[1]);
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
+        json j = table_pack(data_dir_, req.matches[1], type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });
     srv.Post(R"(/api/tables/([^/]+)/zap)",
-             [this](const httplib::Request& req, httplib::Response& res) {
-        json j = table_zap(data_dir_, req.matches[1]);
+             [this, type_param](const httplib::Request& req, httplib::Response& res) {
+        json j = table_zap(data_dir_, req.matches[1], type_param(req));
         if (j.contains("error")) res.status = j.value("http_code", 500);
         res.set_content(j.dump(), "application/json");
     });

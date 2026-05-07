@@ -309,8 +309,13 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 </div>
 
 <div class="modal-bg" id="modal-cell">
-  <div class="modal" style="min-width:520px">
+  <div class="modal" style="min-width:600px">
     <h3 id="cell-title">Cell</h3>
+    <div class="toolbar" style="margin-bottom:10px">
+      <span style="opacity:0.85;font-size:14px">Bytes: <b id="cell-len">0</b></span>
+      <button class="btn btn-secondary" id="cell-mode-text">Text</button>
+      <button class="btn btn-secondary" id="cell-mode-hex">Hex</button>
+    </div>
     <pre id="cell-body"></pre>
     <div class="toolbar" style="margin-top:14px">
       <button class="btn btn-secondary" id="cell-copy">Copy</button>
@@ -1326,11 +1331,47 @@ $("sessions-refresh").addEventListener("click", loadSessions);
 $("sessions-auto").addEventListener("change", startSessionsAutoRefresh);
 
 )OPENADS_SPA"
-R"OPENADS_SPA(function openCellModal(title, value) {
+R"OPENADS_SPA(let cellState = { value: "" };
+function renderCell(mode) {
+  if (mode === "hex") {
+    const v = cellState.value;
+    let out = "";
+    for (let i = 0; i < v.length; i += 16) {
+      const chunk = v.slice(i, i + 16);
+      const hex = [...chunk].map(c =>
+        c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
+      const ascii = [...chunk].map(c => {
+        const cc = c.charCodeAt(0);
+        return (cc >= 32 && cc < 127) ? c : ".";
+      }).join("");
+      out += i.toString(16).padStart(8, "0") + "  " +
+             hex.padEnd(48, " ") + "  " + ascii + "\n";
+    }
+    $("cell-body").textContent = out;
+    $("cell-mode-hex").classList.add("active");
+    $("cell-mode-text").classList.remove("active");
+  } else {
+    $("cell-body").textContent = cellState.value;
+    $("cell-mode-text").classList.add("active");
+    $("cell-mode-hex").classList.remove("active");
+  }
+}
+function openCellModal(title, value) {
+  cellState.value = "" + value;
   $("cell-title").textContent = title;
-  $("cell-body").textContent  = value;
+  $("cell-len").textContent = cellState.value.length;
+  // Auto-pick hex if value contains many non-printable bytes
+  // (typical of binary memo / picture FPT blocks).
+  const nonPrint = [...cellState.value].filter(c => {
+    const cc = c.charCodeAt(0);
+    return cc < 9 || (cc > 13 && cc < 32) || cc === 127;
+  }).length;
+  const auto = nonPrint > cellState.value.length * 0.1 ? "hex" : "text";
+  renderCell(auto);
   $("modal-cell").classList.add("show");
 }
+$("cell-mode-text").addEventListener("click", () => renderCell("text"));
+$("cell-mode-hex").addEventListener("click",  () => renderCell("hex"));
 $("cell-close").addEventListener("click", () =>
   $("modal-cell").classList.remove("show"));
 $("cell-copy").addEventListener("click", async () => {
