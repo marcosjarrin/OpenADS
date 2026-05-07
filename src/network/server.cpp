@@ -172,6 +172,33 @@ void Server::add_session_table(std::uint64_t id, std::int32_t delta) {
     }
 }
 
+void Server::install_session_socket(std::uint64_t id, Socket s) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    sockets_[id] = s;
+}
+
+void Server::erase_session_socket(std::uint64_t id) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    sockets_.erase(id);
+}
+
+bool Server::kill_session(std::uint64_t id) {
+    Socket sock;
+    {
+        std::lock_guard<std::mutex> lk(info_mu_);
+        auto it = sockets_.find(id);
+        if (it == sockets_.end()) return false;
+        sock = it->second;
+        sockets_.erase(it);
+    }
+    // Closing the socket from outside the owning thread wakes its
+    // blocking recv() with EINTR / connection reset; session_loop
+    // breaks out of its while-loop and the unregister cleanup
+    // runs as normal.
+    if (sock.valid()) sock_close(sock);
+    return true;
+}
+
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
     if (running_.load()) return {};
@@ -266,9 +293,15 @@ void Server::session_loop(Socket s) {
     init.connected_at  = std::chrono::system_clock::now();
     init.last_activity = init.connected_at;
     std::uint64_t sid = this->register_session(init);
+    this->install_session_socket(sid, s);
     struct SessionGuard {
         Server* srv; std::uint64_t id;
-        ~SessionGuard() { if (srv) srv->unregister_session(id); }
+        ~SessionGuard() {
+            if (srv) {
+                srv->erase_session_socket(id);
+                srv->unregister_session(id);
+            }
+        }
     } sg{this, sid};
 
     // M12.4 — per-session state. Connection is opened by the

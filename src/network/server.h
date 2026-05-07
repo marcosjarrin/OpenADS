@@ -100,6 +100,21 @@ public:
                                     const std::string& data_dir);
     void          add_session_table(std::uint64_t id,
                                      std::int32_t delta);
+
+    // studio.web.0.11 — drop a single session by id (closes its
+    // socket; the session_loop's next read_frame returns and the
+    // session thread exits cleanly). Returns true if the id was
+    // known.
+    bool          kill_session(std::uint64_t id);
+    // Internal — session_loop's RAII guard uses these to install /
+    // remove its accepted socket from the kill registry.
+    void          install_session_socket(std::uint64_t id, Socket s);
+    void          erase_session_socket  (std::uint64_t id);
+
+private:
+    // Track each session_loop's accepted socket so kill_session
+    // can close it from outside the thread that owns it.
+    std::unordered_map<std::uint64_t, Socket> sockets_;
 };
 
 // Read exactly `n` bytes into `buf` (handles partial recvs).

@@ -245,8 +245,9 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
       </div>
       <div class="toolbar">
         <button id="sql-run">Run (Ctrl+Enter)</button>
-        <button id="sql-export" class="btn-secondary">Export CSV</button>
-        <button id="sql-save"   class="btn-secondary">Save query…</button>
+        <button id="sql-export"      class="btn-secondary">Export CSV</button>
+        <button id="sql-export-json" class="btn-secondary">Export JSON</button>
+        <button id="sql-save"        class="btn-secondary">Save query…</button>
         <select id="sql-saved" style="background:var(--panel-2);color:var(--fg);
                 border:1px solid var(--border);padding:7px 10px;
                 font-size:15px;border-radius:2px"></select>
@@ -907,10 +908,24 @@ function exportCsv() {
       const s = (""+v).replace(/"/g,'""');
       return /[",\n]/.test(s) ? `"${s}"` : s;
     }).join(","))].join("\n");
-  const blob = new Blob([csv], {type:"text/csv"});
+  downloadBlob(csv, "openads-result.csv", "text/csv");
+}
+function exportJson() {
+  const data = state.lastSqlResult;
+  if (!data || !data.rows) return alert("Run a query first.");
+  const arr = data.rows.map(r => {
+    const o = {};
+    data.cols.forEach((c, i) => o[c] = r[i]);
+    return o;
+  });
+  downloadBlob(JSON.stringify(arr, null, 2),
+               "openads-result.json", "application/json");
+}
+function downloadBlob(content, name, mime) {
+  const blob = new Blob([content], {type: mime});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "openads-result.csv"; a.click();
+  a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
@@ -1119,13 +1134,25 @@ async function loadSessions() {
         <td>${fmtDuration(s.idle_secs)}</td>
         <td>${s.frames_in}</td>
         <td>${s.frames_out}</td>
-        <td>${s.open_tables}</td></tr>`).join("");
+        <td>${s.open_tables}</td>
+        <td><button class="btn btn-danger" data-kill="${s.id}">Kill</button></td>
+        </tr>`).join("");
     $("sessions-body").innerHTML = `<table>
       <thead><tr>
         <th>ID</th><th>Peer</th><th>User</th><th>Data dir</th>
         <th>Connected</th><th>Idle</th>
         <th>frames in</th><th>frames out</th><th>open</th>
+        <th></th>
       </tr></thead><tbody>${rows}</tbody></table>`;
+    document.querySelectorAll("[data-kill]").forEach(b =>
+      b.addEventListener("click", async () => {
+        if (!confirm(`Kill session ${b.dataset.kill}?`)) return;
+        try {
+          await api(`/api/server/sessions/${b.dataset.kill}/kill`,
+                    {method:"POST"});
+          loadSessions();
+        } catch (e) { alert(e.message); }
+      }));
   } catch (e) {
     $("sessions-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
@@ -1136,6 +1163,7 @@ document.querySelectorAll("nav.tabs button").forEach(b =>
 $("server-link").addEventListener("click", () => showTab("server"));
 $("sql-run").addEventListener("click", runSql);
 $("sql-export").addEventListener("click", exportCsv);
+$("sql-export-json").addEventListener("click", exportJson);
 $("sql").addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { runSql(); return; }
   // History navigation only when caret is at first/last line so we

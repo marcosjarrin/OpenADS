@@ -1108,6 +1108,27 @@ bool HttpConsole::start(const std::string& host,
         res.set_content(j.dump(), "application/json");
     });
 
+    srv.Post(R"(/api/server/sessions/(\d+)/kill)",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        if (wire_srv_ == nullptr) {
+            res.status = 503;
+            res.set_content(json_error("wire server unavailable", 503).dump(),
+                            "application/json");
+            return;
+        }
+        std::uint64_t id = static_cast<std::uint64_t>(
+            std::strtoull(req.matches[1].str().c_str(), nullptr, 10));
+        bool ok = wire_srv_->kill_session(id);
+        if (!ok) {
+            res.status = 404;
+            res.set_content(json_error("unknown session id", 404).dump(),
+                            "application/json");
+            return;
+        }
+        res.set_content(json{{"ok", true}, {"id", id}}.dump(),
+                        "application/json");
+    });
+
     srv.Get("/api/server/sessions",
             [this](const httplib::Request&, httplib::Response& res) {
         if (wire_srv_ == nullptr) {
