@@ -147,6 +147,33 @@ std::string base64_encode(const std::uint8_t* p, std::size_t n) {
 
 constexpr std::size_t STUDIO_BIN_PREVIEW_BYTES = 1024;
 
+// Map ADS_* numeric field-type codes to single-letter dBASE / xBase
+// labels so Studio's schema view can display "C" / "N" / "M" / "D"
+// instead of the raw integers (which are meaningless to anyone who
+// hasn't memorised ace.h).
+const char* ads_type_letter(UNSIGNED16 t) {
+    switch (t) {
+        case ADS_STRING:      return "C";   // 1
+        case ADS_NUMERIC:     return "N";   // 2
+        case ADS_LOGICAL:     return "L";   // 3
+        case ADS_DATE:        return "D";   // 4
+        case ADS_MEMO:        return "M";   // 5
+        case ADS_BINARY:      return "B";   // 6 (alias ADS_RAW)
+        case ADS_IMAGE:       return "P";   // 7 (memo picture)
+        case 8:               return "T";   // ADS_TIME
+        case 9:               return "Y";   // ADS_CURRENCY
+        case 10:              return "I";   // ADS_INTEGER
+        case 11:              return "A";   // ADS_AUTOINC
+        case 12:              return "@";   // ADS_TIMESTAMP
+        case 13:              return "Q";   // ADS_VARCHAR (M11.1 V/Q)
+        case 14:              return "V";   // ADS_VARCHAR_FOX
+        case 15:              return "G";   // ADS_GENERAL
+        case ADS_NMEMO:       return "M";   // 28 nmemo (text memo)
+        default: break;
+    }
+    return "?";
+}
+
 json bytes_to_json_cell(const std::uint8_t* p, std::size_t n) {
     if (is_valid_utf8(p, n)) {
         // Trim trailing spaces (legacy Studio behaviour for fixed-
@@ -214,6 +241,7 @@ json table_schema(const std::string& dir, const std::string& tname,
         cols.push_back(json{
             {"name",     fname},
             {"type",     ftype},
+            {"type_name", ads_type_letter(ftype)},
             {"length",   flen},
             {"decimals", fdec}
         });

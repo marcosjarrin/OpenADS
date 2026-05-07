@@ -589,7 +589,8 @@ async function loadStructure() {
       <h3 style="margin-top:18px;font-size:15px;opacity:0.85">Columns</h3>
       <table><thead><tr><th>#</th><th>Name</th><th>Type</th><th>Length</th><th>Decimals</th></tr></thead>
       <tbody>${s.columns.map((c,i) => `<tr>
-        <td>${i+1}</td><td>${esc(c.name)}</td><td>${c.type}</td>
+        <td>${i+1}</td><td>${esc(c.name)}</td>
+        <td title="ADS type ${c.type}">${esc(c.type_name||c.type)}</td>
         <td>${c.length}</td><td>${c.decimals}</td></tr>`).join("")}</tbody></table>
 
       <h3 style="margin-top:24px;font-size:15px;opacity:0.85">Create index</h3>
