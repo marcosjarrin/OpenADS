@@ -25,6 +25,17 @@ void copy_to_caller(std::uint8_t* dst, std::uint16_t* dst_len_inout,
     *dst_len_inout = n;
 }
 
+void copy_to_caller(std::uint8_t* dst, std::uint32_t* dst_len_inout,
+                    const std::string& src) noexcept {
+    if (dst == nullptr || dst_len_inout == nullptr) return;
+    std::uint32_t cap = *dst_len_inout;
+    std::uint32_t n   = static_cast<std::uint32_t>(
+        std::min<std::size_t>(src.size(), cap == 0 ? 0u : cap - 1u));
+    if (n > 0) std::memcpy(dst, src.data(), n);
+    if (cap > 0) dst[n] = '\0';
+    *dst_len_inout = n;
+}
+
 std::string utf16le_to_utf8(const std::uint16_t* in, std::size_t units) {
     std::string out;
     if (in == nullptr || units == 0) return out;

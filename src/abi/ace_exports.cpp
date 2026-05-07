@@ -1297,11 +1297,7 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         auto fname = openads::abi::to_internal(pucField, 0);
         auto r = rt->conn->get_field(rt->id, fname);
         if (!r) return fail(r.error());
-        UNSIGNED16 cap = static_cast<UNSIGNED16>(
-            *pulLen > 0xFFFFu ? 0xFFFFu : *pulLen);
-        UNSIGNED16 cap_inout = cap;
-        openads::abi::copy_to_caller(pucBuf, &cap_inout, r.value());
-        *pulLen = cap_inout;
+        openads::abi::copy_to_caller(pucBuf, pulLen, r.value());
         return ok();
     }
     Table* t = get_table(hTable);
@@ -1312,11 +1308,7 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
-    UNSIGNED16 cap = static_cast<UNSIGNED16>(
-        *pulLen > 0xFFFFu ? 0xFFFFu : *pulLen);
-    UNSIGNED16 cap_inout = cap;
-    openads::abi::copy_to_caller(pucBuf, &cap_inout, v.value().as_string);
-    *pulLen = cap_inout;
+    openads::abi::copy_to_caller(pucBuf, pulLen, v.value().as_string);
     return ok();
 }
 

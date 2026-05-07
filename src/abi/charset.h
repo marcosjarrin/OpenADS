@@ -13,6 +13,12 @@ namespace openads::abi {
 std::string to_internal(const std::uint8_t* p, std::size_t n);
 void copy_to_caller(std::uint8_t* dst, std::uint16_t* dst_len_inout,
                     const std::string& src) noexcept;
+// 32-bit length variant for AdsGetField-style entry points whose API
+// length parameter is UNSIGNED32. Memo payloads can exceed 64 KB so
+// the u16 variant truncates them to 65 534 bytes; this one writes up
+// to (cap - 1) bytes plus a NUL when cap > 0, matching ACE semantics.
+void copy_to_caller(std::uint8_t* dst, std::uint32_t* dst_len_inout,
+                    const std::string& src) noexcept;
 
 // UTF-16LE <-> UTF-8 codecs (M9.17). The engine stores byte
 // sequences with no embedded codepage knowledge; the `*W` ABI
