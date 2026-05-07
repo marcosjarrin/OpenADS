@@ -4195,25 +4195,15 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return rc;
         }
 
-        // CREATE INDEX writes a sibling sidecar named after the
-        // table's stem so subsequent reopens auto-attach.
-        //
-        // Until the CDX leaf-split refactor lands, the SQL DDL path
-        // defaults to NTX (M9.10 multi-level split lands every row
-        // count tested up through 200k+). Apps that explicitly
-        // need a CDX bag can call AdsCreateIndex61 with an explicit
-        // .cdx file name; see docs/en/ordinal-compat for the
-        // limitation.
+        // CREATE INDEX writes a structural .cdx sidecar named after
+        // the table's stem so subsequent ADS_CDX opens auto-attach
+        // (and so multi-tag CREATE INDEX accumulates into one bag).
         namespace fs = std::filesystem;
         fs::path tbl_path(c->data_dir());
         tbl_path /= ci.value().table;
         if (!tbl_path.has_extension()) tbl_path.replace_extension(".dbf");
         fs::path bag = tbl_path;
-        // Per-tag NTX file naming: <stem>_<tag>.ntx so multiple
-        // tags coexist without colliding.
-        std::string stem = bag.stem().string();
-        std::string tag  = ci.value().tag;
-        bag = bag.parent_path() / (stem + "_" + tag + ".ntx");
+        bag.replace_extension(".cdx");
 
         std::vector<UNSIGNED8> bag_buf(bag.string().size() + 1, 0);
         std::memcpy(bag_buf.data(), bag.string().data(),

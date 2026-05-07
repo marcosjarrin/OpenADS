@@ -106,6 +106,26 @@ private:
                      std::uint32_t left_sib,
                      std::uint32_t right_sib);
 
+    // M(cdx-split) — multi-level B+tree split. `insert_into_subtree_`
+    // descends from `subtree_root` to find the right leaf for `key`,
+    // inserts there, and on leaf/branch overflow returns the data
+    // needed for the parent to update its old separator and insert a
+    // new one (see PromoteOut). Empty have=false on no-split path.
+    struct PromoteOut {
+        bool          have            = false;
+        std::string   left_max_key;
+        std::uint32_t left_max_recno  = 0;
+        std::string   right_max_key;
+        std::uint32_t right_max_recno = 0;
+        std::uint32_t new_right_off   = 0;
+        std::uint32_t old_left_off    = 0;
+    };
+    util::Result<void>
+        insert_into_subtree_(std::uint32_t subtree_root,
+                              std::uint32_t recno,
+                              const std::string& padded_key,
+                              PromoteOut& promote);
+
     static std::uint16_t pick_rec_bits_(std::uint32_t max_rec);
 
     util::Result<void> rewrite_header_();

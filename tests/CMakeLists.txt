@@ -49,6 +49,7 @@ add_executable(openads_unit_tests
     unit/abi_zap_pack_test.cpp
     unit/abi_reindex_test.cpp
     unit/ntx_multilevel_test.cpp
+    unit/cdx_multilevel_test.cpp
     unit/abi_copy_table_test.cpp
     unit/abi_find_table_test.cpp
     unit/abi_binary_memo_test.cpp
@@ -129,3 +130,7 @@ target_link_libraries(make_cdx PRIVATE openads_core)
 add_executable(probe_cdx harbour_smoke/probe_cdx.cpp)
 target_include_directories(probe_cdx PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(probe_cdx PRIVATE openads_core)
+
+add_executable(probe_cdx2 harbour_smoke/probe_cdx2.cpp)
+target_include_directories(probe_cdx2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(probe_cdx2 PRIVATE openads_core)

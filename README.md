@@ -87,6 +87,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v0.3.7** | 2026-05-06 | M(cdx-split) full multi-level B+tree CDX leaf+branch split (closes the M3.5 single-leaf limitation); compact-leaf encoder gains entry/suffix overlap check; structure-tag leaf widens its recno field to 32 bits so multi-tag bags >64 KB no longer truncate sub-tag header offsets. Stress-tested at 200 000 rows × 2 tags in a single CDX bag. SQL DDL `CREATE INDEX` now defaults back to `.cdx`. |
 | **v0.3.6** | 2026-05-06 | M12.12 `tls://` URI reservation. |
 | **v0.3.5** | 2026-05-06 | M12.10 ACE error-code propagation; M12.11 batched fetch. |
 | **v0.3.4** | 2026-05-06 | M12.6 remote write; M12.7 remote SQL; M12.8 remote Reindex; M12.9 server auth; RemoteConnection dtor fix. |
@@ -194,10 +195,12 @@ TCP channel; ~9 ms server-side per op, the rest is real WAN RTT.
   0 holding the structure tag, sub-tag headers, per-tag B+tree),
   multi-tag-per-file API (`add_tag` / `open_named` / `list_tags`),
   Harbour-equivalent compact-leaf bit-pack (`bBits` derived from key
-  length, mirroring `hb_cdxPageLeafInitSpace`), B+tree leaf splits
-  with separator promotion, branch descent (BE child pointers),
-  `dbSeek` exact + soft, `dbGoTop` / `dbSkip` walks, auto-sync on
-  every mutation across **all** bound tags (active + parked extras),
+  length, mirroring `hb_cdxPageLeafInitSpace`), full multi-level
+  B+tree leaf+branch split with separator promotion and new-root
+  creation (M(cdx-split), 0.3.7 — stress-tested at 200 000 rows ×
+  2 tags in one bag), branch descent (BE child pointers), `dbSeek`
+  exact + soft, `dbGoTop` / `dbSkip` walks, auto-sync on every
+  mutation across **all** bound tags (active + parked extras),
   dynamic creation via `AdsCreateIndex61`.
 - **NTX index** — Clipper layout, multi-level B+tree split (M9.10
   closed the M3.7 single-level limitation), cache-based in-order

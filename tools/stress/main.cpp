@@ -182,8 +182,8 @@ run_indexes:
         }
         struct IdxDef { const char* file; const char* tag; const char* expr; };
         IdxDef idxs[] = {
-            {"stress_id.ntx",   "ID_NTX",  "ID"},
-            {"stress_tag.ntx",  "TAG_NTX", "TAG"},
+            {"stress.cdx",  "ID_TAG",  "ID"},
+            {"stress.cdx",  "TAG_TAG", "TAG"},
         };
         for (auto& d : idxs) {
             double i0 = now_ms();

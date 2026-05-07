@@ -65,14 +65,17 @@ struct LeafLayout {
     std::uint32_t tc_mask;
 };
 
-LeafLayout compute_layout(std::uint16_t key_len) {
+LeafLayout compute_layout(std::uint16_t key_len,
+                          std::uint8_t  req_byte_override = 0) {
     LeafLayout out{};
     std::uint16_t v = key_len;
     std::uint8_t  b_bits = 0;
     while (v) { ++b_bits; v >>= 1; }
     out.dc_bits  = b_bits;
     out.tc_bits  = b_bits;
-    out.req_byte = (b_bits > 12) ? 5 : (b_bits > 8 ? 4 : 3);
+    out.req_byte = req_byte_override
+        ? req_byte_override
+        : ((b_bits > 12) ? 5 : (b_bits > 8 ? 4 : 3));
     out.rn_bits  = static_cast<std::uint8_t>(
         (out.req_byte << 3) - (b_bits << 1));
     out.dc_mask  = (b_bits >= 32) ? 0xFFFFFFFFu : ((1u << b_bits) - 1);
@@ -91,9 +94,10 @@ encode_compact_leaf_static(
     std::uint16_t   key_size,
     const std::vector<std::pair<std::string, std::uint32_t>>& keys,
     std::uint32_t   left_sib,
-    std::uint32_t   right_sib)
+    std::uint32_t   right_sib,
+    std::uint8_t    req_byte_override = 0)
 {
-    LeafLayout L = compute_layout(key_size);
+    LeafLayout L = compute_layout(key_size, req_byte_override);
     const std::uint32_t rec_mask = L.rn_mask;
     const std::uint8_t  rec_bits = L.rn_bits;
     const std::uint8_t  dup_bits = L.dc_bits;
@@ -144,6 +148,13 @@ encode_compact_leaf_static(
         std::uint8_t* entry = p.data() + CDX_EXT_HEADSIZE + i * key_bytes;
         if (entry + key_bytes > p.data() + CDX_PAGE_LEN) {
             return util::Error{5000, 0, "CDX leaf entry overflow", ""};
+        }
+        // Entry headers grow right; suffix area grows left. They MUST
+        // NOT overlap — without this check the encoder silently
+        // corrupts the page once `(i+1)*key_bytes > buf_pos`, which
+        // surfaces as 6106 dup/trl-out-of-range on the next decode.
+        if (static_cast<std::uint32_t>((i + 1) * key_bytes) > buf_pos) {
+            return util::Error{5000, 0, "CDX leaf encode: page full", ""};
         }
 
         // Pack so decoder reads trl from the low `trl_bits` and dup from
@@ -232,6 +243,94 @@ decode_compact_leaf_static(const CdxIndex::Page& p, std::uint16_t key_size) {
         }
         prev = key;
         out.emplace_back(key, recno);
+    }
+    return out;
+}
+
+// Branch (interior) node helpers. Layout per FoxPro CDX, mirroring
+// what seek_first()/seek_key()'s descent code already reads:
+//   header (12 bytes): attr (u16 LE) | nkeys (u16 LE) | left_sib (u32 LE) |
+//                      right_sib (u32 LE)
+//   each entry (key_size + 8 bytes): key | recno (u32 BE) | child (u32 BE)
+struct BranchEntry {
+    std::string   key;
+    std::uint32_t recno = 0;
+    std::uint32_t child = 0;
+};
+
+inline std::size_t branch_capacity(std::uint16_t key_size) {
+    return (CDX_PAGE_LEN - CDX_INT_HEADSIZE) /
+           (static_cast<std::size_t>(key_size) + 8);
+}
+
+util::Result<void>
+encode_branch_static(CdxIndex::Page& p,
+                     std::uint16_t   key_size,
+                     const std::vector<BranchEntry>& entries,
+                     std::uint32_t   left_sib,
+                     std::uint32_t   right_sib)
+{
+    if (entries.size() > branch_capacity(key_size)) {
+        return util::Error{5000, 0, "CDX branch encode: page full", ""};
+    }
+    std::fill(p.begin(), p.end(), std::uint8_t{0});
+    write_u16_le(p.data() + 0, CDX_NODE_BRANCH);
+    write_u16_le(p.data() + 2, static_cast<std::uint16_t>(entries.size()));
+    write_u32_le(p.data() + 4, left_sib);
+    write_u32_le(p.data() + 8, right_sib);
+
+    const std::size_t entry_size = static_cast<std::size_t>(key_size) + 8;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        std::uint8_t* e = p.data() + CDX_INT_HEADSIZE + i * entry_size;
+        std::string padded = entries[i].key;
+        if (padded.size() < key_size)
+            padded.append(key_size - padded.size(), ' ');
+        if (padded.size() > key_size)
+            padded.resize(key_size);
+        std::memcpy(e, padded.data(), key_size);
+        std::uint32_t r = entries[i].recno;
+        e[key_size + 0] = static_cast<std::uint8_t>((r >> 24) & 0xFFu);
+        e[key_size + 1] = static_cast<std::uint8_t>((r >> 16) & 0xFFu);
+        e[key_size + 2] = static_cast<std::uint8_t>((r >>  8) & 0xFFu);
+        e[key_size + 3] = static_cast<std::uint8_t>( r        & 0xFFu);
+        std::uint32_t c = entries[i].child;
+        e[key_size + 4] = static_cast<std::uint8_t>((c >> 24) & 0xFFu);
+        e[key_size + 5] = static_cast<std::uint8_t>((c >> 16) & 0xFFu);
+        e[key_size + 6] = static_cast<std::uint8_t>((c >>  8) & 0xFFu);
+        e[key_size + 7] = static_cast<std::uint8_t>( c        & 0xFFu);
+    }
+    return {};
+}
+
+util::Result<std::vector<BranchEntry>>
+decode_branch_static(const CdxIndex::Page& p, std::uint16_t key_size)
+{
+    std::uint16_t attr = read_u16_le(p.data() + 0);
+    if (attr & CDX_NODE_LEAF) {
+        return util::Error{6106, 0, "decode_branch_ on leaf page", ""};
+    }
+    std::uint16_t nkeys = read_u16_le(p.data() + 2);
+    const std::size_t entry_size = static_cast<std::size_t>(key_size) + 8;
+    if (CDX_INT_HEADSIZE + nkeys * entry_size > CDX_PAGE_LEN) {
+        return util::Error{6106, 0, "CDX branch nkeys out of range", ""};
+    }
+    std::vector<BranchEntry> out;
+    out.reserve(nkeys);
+    for (std::uint16_t i = 0; i < nkeys; ++i) {
+        const std::uint8_t* e = p.data() + CDX_INT_HEADSIZE + i * entry_size;
+        BranchEntry be;
+        be.key.assign(reinterpret_cast<const char*>(e), key_size);
+        be.recno =
+            (static_cast<std::uint32_t>(e[key_size + 0]) << 24) |
+            (static_cast<std::uint32_t>(e[key_size + 1]) << 16) |
+            (static_cast<std::uint32_t>(e[key_size + 2]) <<  8) |
+             static_cast<std::uint32_t>(e[key_size + 3]);
+        be.child =
+            (static_cast<std::uint32_t>(e[key_size + 4]) << 24) |
+            (static_cast<std::uint32_t>(e[key_size + 5]) << 16) |
+            (static_cast<std::uint32_t>(e[key_size + 6]) <<  8) |
+             static_cast<std::uint32_t>(e[key_size + 7]);
+        out.push_back(std::move(be));
     }
     return out;
 }
@@ -577,6 +676,210 @@ util::Result<SeekOutcome> CdxIndex::prev() {
 }
 
 util::Result<void>
+CdxIndex::insert_into_subtree_(std::uint32_t      subtree_root,
+                                std::uint32_t      recno,
+                                const std::string& padded,
+                                PromoteOut&        promote)
+{
+    promote.have = false;
+
+    auto pg = get_page_(subtree_root);
+    if (!pg) return pg.error();
+    std::uint16_t attr = read_u16_le(pg.value()->data());
+
+    if (attr & CDX_NODE_LEAF) {
+        // ---- Leaf ----
+        std::uint32_t left_sib  = read_u32_le(pg.value()->data() + 4);
+        std::uint32_t right_sib = read_u32_le(pg.value()->data() + 8);
+
+        auto dec = decode_compact_leaf_static(*pg.value(), key_size_);
+        if (!dec) return dec.error();
+        auto keys = std::move(dec).value();
+
+        auto pos = std::lower_bound(keys.begin(), keys.end(), padded,
+            [](const auto& a, const std::string& b) {
+                return std::memcmp(a.first.data(), b.data(),
+                                    std::min(a.first.size(), b.size())) < 0;
+            });
+        if (unique_ && pos != keys.end() && pos->first == padded) {
+            return util::Error{5044, 0, "CDX duplicate key", ""};
+        }
+        keys.insert(pos, {padded, recno});
+
+        // Try to fit in the existing page.
+        if (auto e = encode_leaf_(subtree_root, keys, left_sib, right_sib); e) {
+            return {};
+        }
+
+        // Overflow → split. Find the largest mid such that BOTH halves
+        // re-encode within a 512-byte page. Compact-leaf packing is
+        // dup/trl-prefix dependent so a fixed midpoint isn't enough.
+        std::size_t mid = keys.size() / 2;
+        std::vector<std::pair<std::string, std::uint32_t>> left_keys;
+        std::vector<std::pair<std::string, std::uint32_t>> right_keys;
+        bool placed = false;
+        Page tmp_left{};
+        Page tmp_right{};
+        while (mid > 0 && mid < keys.size()) {
+            left_keys.assign(keys.begin(), keys.begin() + mid);
+            right_keys.assign(keys.begin() + mid, keys.end());
+            auto el = encode_compact_leaf_static(tmp_left,  key_size_,
+                                                  left_keys,  0u, 0u);
+            auto er = encode_compact_leaf_static(tmp_right, key_size_,
+                                                  right_keys, 0u, 0u);
+            if (el && er) { placed = true; break; }
+            // Shift mid towards center if the imbalance is wrong.
+            if (!el && er)        { mid -= 1; }
+            else if (el && !er)   { mid += 1; }
+            else                  { break; }
+        }
+        if (!placed) {
+            return util::Error{5000, 0,
+                "CDX leaf split: cannot fit both halves", ""};
+        }
+
+        std::uint32_t new_off = static_cast<std::uint32_t>(file_size_);
+        page_cache_.emplace(new_off, Page{});
+        file_size_ += CDX_PAGE_LEN;
+
+        if (auto e = encode_leaf_(subtree_root, left_keys,
+                                   left_sib, new_off); !e)
+            return e.error();
+        if (auto e = encode_leaf_(new_off, right_keys,
+                                   subtree_root, right_sib); !e)
+            return e.error();
+
+        // Patch the right-sibling-of-old-leaf's left pointer to the
+        // new leaf so doubly-linked walks stay consistent.
+        if (right_sib != 0xFFFFFFFFu && right_sib != 0) {
+            auto rs = get_page_(right_sib);
+            if (!rs) return rs.error();
+            write_u32_le(rs.value()->data() + 4, new_off);
+            dirty_[right_sib] = true;
+        }
+
+        promote.have            = true;
+        promote.left_max_key    = left_keys.back().first;
+        promote.left_max_recno  = left_keys.back().second;
+        promote.right_max_key   = right_keys.back().first;
+        promote.right_max_recno = right_keys.back().second;
+        promote.new_right_off   = new_off;
+        promote.old_left_off    = subtree_root;
+        return {};
+    }
+
+    // ---- Branch ----
+    auto dec_b = decode_branch_static(*pg.value(), key_size_);
+    if (!dec_b) return dec_b.error();
+    auto entries = std::move(dec_b).value();
+    if (entries.empty()) {
+        return util::Error{6106, 0, "CDX branch with no entries", ""};
+    }
+
+    // Pick the first entry whose key >= padded; if none, use last.
+    std::size_t idx = 0;
+    while (idx < entries.size() &&
+           std::memcmp(entries[idx].key.data(), padded.data(), key_size_) < 0) {
+        ++idx;
+    }
+    if (idx == entries.size()) idx = entries.size() - 1;
+
+    PromoteOut child_promote;
+    if (auto e = insert_into_subtree_(entries[idx].child, recno,
+                                       padded, child_promote); !e)
+        return e.error();
+
+    // If the picked child key was the rightmost entry, the inserted
+    // key may exceed the old subtree max. Refresh the parent entry's
+    // key from the (possibly-updated) child even on the no-split path.
+    if (!child_promote.have) {
+        // No structural change. But the entry's key may need refresh
+        // if the inserted key is larger than the subtree's prior max.
+        if (idx == entries.size() - 1) {
+            if (std::memcmp(padded.data(), entries[idx].key.data(),
+                            key_size_) > 0) {
+                entries[idx].key   = padded;
+                entries[idx].recno = recno;
+                auto epg = get_page_(subtree_root);
+                if (!epg) return epg.error();
+                std::uint32_t l = read_u32_le(epg.value()->data() + 4);
+                std::uint32_t r = read_u32_le(epg.value()->data() + 8);
+                if (auto e = encode_branch_static(*epg.value(), key_size_,
+                                                   entries, l, r); !e)
+                    return e.error();
+                dirty_[subtree_root] = true;
+            }
+        }
+        return {};
+    }
+
+    // Child split: update entries[idx] (the OLD pointer keeps its
+    // child offset but its key shrinks to the left half's max), then
+    // insert a new entry right after it for the new right child.
+    entries[idx].key   = child_promote.left_max_key;
+    entries[idx].recno = child_promote.left_max_recno;
+    BranchEntry new_entry;
+    new_entry.key   = child_promote.right_max_key;
+    new_entry.recno = child_promote.right_max_recno;
+    new_entry.child = child_promote.new_right_off;
+    entries.insert(entries.begin() + idx + 1, new_entry);
+
+    // Re-fetch sibling pointers (page may have been moved by a get_).
+    auto epg = get_page_(subtree_root);
+    if (!epg) return epg.error();
+    std::uint32_t left_sib  = read_u32_le(epg.value()->data() + 4);
+    std::uint32_t right_sib = read_u32_le(epg.value()->data() + 8);
+
+    if (entries.size() <= branch_capacity(key_size_)) {
+        if (auto e = encode_branch_static(*epg.value(), key_size_,
+                                           entries, left_sib, right_sib); !e)
+            return e.error();
+        dirty_[subtree_root] = true;
+        return {};
+    }
+
+    // Branch overflow → split midpoint. Branch encode is fixed-stride
+    // so a single midpoint always works.
+    std::size_t mid = entries.size() / 2;
+    std::vector<BranchEntry> left_be(entries.begin(), entries.begin() + mid);
+    std::vector<BranchEntry> right_be(entries.begin() + mid, entries.end());
+
+    std::uint32_t new_off = static_cast<std::uint32_t>(file_size_);
+    page_cache_.emplace(new_off, Page{});
+    file_size_ += CDX_PAGE_LEN;
+
+    auto lpg = get_page_(subtree_root);
+    if (!lpg) return lpg.error();
+    if (auto e = encode_branch_static(*lpg.value(), key_size_,
+                                       left_be, left_sib, new_off); !e)
+        return e.error();
+    dirty_[subtree_root] = true;
+
+    auto rpg = get_page_(new_off);
+    if (!rpg) return rpg.error();
+    if (auto e = encode_branch_static(*rpg.value(), key_size_,
+                                       right_be, subtree_root, right_sib); !e)
+        return e.error();
+    dirty_[new_off] = true;
+
+    if (right_sib != 0xFFFFFFFFu && right_sib != 0) {
+        auto rs = get_page_(right_sib);
+        if (!rs) return rs.error();
+        write_u32_le(rs.value()->data() + 4, new_off);
+        dirty_[right_sib] = true;
+    }
+
+    promote.have            = true;
+    promote.left_max_key    = left_be.back().key;
+    promote.left_max_recno  = left_be.back().recno;
+    promote.right_max_key   = right_be.back().key;
+    promote.right_max_recno = right_be.back().recno;
+    promote.new_right_off   = new_off;
+    promote.old_left_off    = subtree_root;
+    return {};
+}
+
+util::Result<void>
 CdxIndex::insert(std::uint32_t recno, const std::string& key) {
     if (mode_ == IndexOpenMode::ReadOnly) {
         return util::Error{5000, 0, "CDX opened read-only", ""};
@@ -586,8 +889,6 @@ CdxIndex::insert(std::uint32_t recno, const std::string& key) {
     if (padded.size() > key_size_) padded.resize(key_size_);
 
     if (root_page_ == 0) {
-        // First sub-tag data leaf goes at the current end-of-file,
-        // never below CDX_SUB_DATA_BASE.
         std::uint32_t base = static_cast<std::uint32_t>(
             std::max<std::uint64_t>(file_size_, CDX_SUB_DATA_BASE));
         std::uint32_t off = base;
@@ -601,23 +902,29 @@ CdxIndex::insert(std::uint32_t recno, const std::string& key) {
         return rewrite_header_();
     }
 
-    auto dec = decode_leaf_(root_page_);
-    if (!dec) return dec.error();
-    auto keys = std::move(dec).value();
+    PromoteOut promote;
+    if (auto e = insert_into_subtree_(root_page_, recno, padded, promote); !e)
+        return e.error();
 
-    auto pos = std::lower_bound(keys.begin(), keys.end(), padded,
-        [](const auto& a, const std::string& b) {
-            return std::memcmp(a.first.data(), b.data(),
-                               std::min(a.first.size(), b.size())) < 0;
-        });
-    if (unique_ && pos != keys.end() && pos->first == padded) {
-        return util::Error{5044, 0, "CDX duplicate key", ""};
-    }
-    keys.insert(pos, {padded, recno});
+    if (!promote.have) return {};
 
-    auto enc = encode_leaf_(root_page_, keys, 0xFFFFFFFFu, 0xFFFFFFFFu);
-    if (!enc) return enc.error();
-    return {};
+    // Root split → allocate new branch root with two children.
+    std::uint32_t new_root = static_cast<std::uint32_t>(file_size_);
+    page_cache_.emplace(new_root, Page{});
+    file_size_ += CDX_PAGE_LEN;
+
+    std::vector<BranchEntry> entries = {
+        { promote.left_max_key,  promote.left_max_recno,  promote.old_left_off },
+        { promote.right_max_key, promote.right_max_recno, promote.new_right_off }
+    };
+    auto rp = get_page_(new_root);
+    if (!rp) return rp.error();
+    if (auto e = encode_branch_static(*rp.value(), key_size_,
+                                       entries, 0xFFFFFFFFu, 0xFFFFFFFFu); !e)
+        return e.error();
+    dirty_[new_root] = true;
+    root_page_ = new_root;
+    return rewrite_header_();
 }
 
 util::Result<void>
@@ -714,7 +1021,8 @@ CdxIndex::create(const std::string& path,
         };
         auto enc = encode_compact_leaf_static(leaf, CDX_STRUCT_KEY_LEN,
                                               entries,
-                                              0xFFFFFFFFu, 0xFFFFFFFFu);
+                                              0xFFFFFFFFu, 0xFFFFFFFFu,
+                                              /*req_byte=*/5);
         if (!enc) return enc.error();
         auto wrote = file.write_at(CDX_STRUCT_ROOT_OFFSET,
                                    leaf.data(), leaf.size());
@@ -848,7 +1156,8 @@ CdxIndex::add_tag(const std::string& path,
     Page new_leaf{};
     auto enc = encode_compact_leaf_static(new_leaf, CDX_STRUCT_KEY_LEN,
                                           entries,
-                                          0xFFFFFFFFu, 0xFFFFFFFFu);
+                                          0xFFFFFFFFu, 0xFFFFFFFFu,
+                                          /*req_byte=*/5);
     if (!enc) return enc.error();
     auto wrote = file.write_at(struct_root, new_leaf.data(), new_leaf.size());
     if (!wrote) return wrote.error();
