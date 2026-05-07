@@ -13,7 +13,8 @@ static std::uint32_t rd32_le(const std::uint8_t* p) {
            (std::uint32_t(p[3]) << 24);
 }
 static std::uint16_t rd16_le(const std::uint8_t* p) {
-    return  std::uint16_t(p[0]) | (std::uint16_t(p[1]) << 8);
+    return static_cast<std::uint16_t>(
+        std::uint16_t(p[0]) | static_cast<std::uint16_t>(p[1] << 8));
 }
 
 int main(int argc, char* argv[]) {
