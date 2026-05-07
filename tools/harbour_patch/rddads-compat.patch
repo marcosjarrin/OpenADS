@@ -1,0 +1,63 @@
+diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
+index 4c37b03a7a..0fc2c2ee91 100644
+--- a/contrib/rddads/ads1.c
++++ b/contrib/rddads/ads1.c
+@@ -1323,6 +1323,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+    {
+       HB_ERRCODE errCode = HB_SUCCESS;
+       HB_LONG lSkipper;
++      HB_LONG lToSkipOrig = lToSkip;  /* preserve original direction */
+ 
+       if( ! pArea->fPositioned && lToSkip < 0 )
+       {
+@@ -1332,10 +1333,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+ 
+       if( ! pArea->fPositioned )
+       {
+-         if( lToSkip > 0 )
++         /* Match dbf1.c hb_dbfSkip semantics: skip past end clears
++            the opposite-direction flag so callers can distinguish a
++            true Bof / Eof from the freshly-opened Limbo state. Use
++            ORIGINAL lToSkip direction since the GOBOTTOM-then-++
++            path above may have zeroed lToSkip to 0. */
++         if( lToSkipOrig > 0 )
++         {
+             pArea->area.fEof = HB_TRUE;
+-         else
++            pArea->area.fBof = HB_FALSE;
++         }
++         else if( lToSkipOrig < 0 )
++         {
+             pArea->area.fBof = HB_TRUE;
++            pArea->area.fEof = HB_FALSE;
++         }
+       }
+       else if( lToSkip )
+       {
+diff --git a/contrib/rddads/rddads.h b/contrib/rddads/rddads.h
+index 001f393364..e1894d2074 100644
+--- a/contrib/rddads/rddads.h
++++ b/contrib/rddads/rddads.h
+@@ -67,6 +67,22 @@
+ 
+ #include "ace.h"
+ 
++/* M(rddads-compat) shim: SAP / older Harbour rddads expected a
++   ADSFIELD( n ) helper that yields the n-th field's name in the
++   CURRENT workarea as UNSIGNED8*. This Harbour build's sources
++   use it but don't define it. Implement it as an inline that
++   fetches the current workarea pointer. */
++extern HB_EXPORT void * hb_rddGetCurrentWorkAreaPointer( void );
++
++static __inline UNSIGNED8 * ADSFIELD( UNSIGNED16 n )
++{
++    AREAP pCurArea = ( AREAP ) hb_rddGetCurrentWorkAreaPointer();
++    if( pCurArea == NULL || n == 0 ||
++        n > pCurArea->uiFieldCount ) return NULL;
++    return ( UNSIGNED8 * ) hb_dynsymName(
++        ( PHB_DYNS ) pCurArea->lpFields[ n - 1 ].sym );
++}
++
+ /* Auto-detect ACE version. */
+ #if   defined( ADS_ROOT_DD_ALIAS )
+    #define _ADS_LIB_VERSION  1110 /* or upper */
