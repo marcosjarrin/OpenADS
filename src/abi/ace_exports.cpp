@@ -2992,18 +2992,59 @@ UNSIGNED32 AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOrder,
     if (!t || phIndex == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
-    // Sequential creation-order lookup: AdsCreateIndex61 hands out
-    // monotonically increasing handle IDs, so sorting bindings by
-    // handle reproduces the order their CREATE INDEX commands fired
-    // — which is what Harbour / Clipper ORDSETFOCUS(N) expects.
+    // Harbour rddads' INDEX command (with the default fAll && !fAdditive
+    // condition) calls ORDLSTCLEAR before each AdsCreateIndex61. That
+    // wipes every binding we held for the table — but the on-disk CDX
+    // bag still has all the prior tags. ORDSETFOCUS(N) is supposed to
+    // address the N-th tag *in the file* (creation order), so re-bind
+    // any tag in the active CDX that lost its binding and use the
+    // file's struct-tag insertion order — not handle IDs — as the
+    // authoritative ordinal sequence.
+    auto& m   = index_bindings();
+    auto& act = active_binding_for();
+    std::string bag_path;
+    auto act_it = act.find(t);
+    if (act_it != act.end()) {
+        auto bit = m.find(act_it->second);
+        if (bit != m.end()) bag_path = bit->second.path;
+    }
     std::vector<ADSHANDLE> ordered;
-    for (auto& [h, b] : index_bindings()) {
-        if (b.table == t) ordered.push_back(h);
+    if (!bag_path.empty()
+        && path_ends_with_ci(bag_path, ".cdx")) {
+        auto tags = openads::drivers::cdx::CdxIndex::list_tags(bag_path);
+        if (tags) {
+            for (const auto& tag : tags.value()) {
+                ADSHANDLE found = 0;
+                for (auto& [h, b] : m) {
+                    if (b.table == t && b.tag_name == tag) {
+                        found = h; break;
+                    }
+                }
+                if (!found) {
+                    auto sub = std::make_unique<openads::drivers::cdx::CdxIndex>();
+                    if (auto r = sub->open_named(bag_path,
+                            openads::drivers::IndexOpenMode::Shared,
+                            tag); !r) continue;
+                    ADSHANDLE nh = next_index_handle();
+                    openads::drivers::IIndex* raw = sub.get();
+                    m[nh] = IndexBinding{t, tag, std::move(sub), bag_path};
+                    t->register_extra_index_view(raw);
+                    found = nh;
+                }
+                ordered.push_back(found);
+            }
+        }
+    }
+    if (ordered.empty()) {
+        // Fall back to handle-id ordering for non-CDX (NTX) cases.
+        for (auto& [h, b] : index_bindings()) {
+            if (b.table == t) ordered.push_back(h);
+        }
+        std::sort(ordered.begin(), ordered.end());
     }
     if (ordered.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no active index");
     }
-    std::sort(ordered.begin(), ordered.end());
     if (usOrder == 0 || usOrder > ordered.size()) {
         // Fall back to first entry on out-of-range ordinal so legacy
         // callers that pass 0 or 1 still resolve to *some* index.
