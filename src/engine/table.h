@@ -49,18 +49,17 @@ public:
     bool is_field_null(std::uint16_t field_idx);
 
     std::uint32_t record_count() const noexcept;
-    // Clipper / SAP-ACE convention: the "phantom" position past the
-    // last record reports recno() = LastRec()+1 (1 for an empty
-    // table) so callers that index into the file with this value
-    // see a valid sentinel.
+    // Clipper / SAP-ACE convention: phantom position past last
+    // record reports recno()=LastRec()+1, so an empty table reads
+    // as recno=1.
     std::uint32_t recno() const noexcept {
-        if (state_ == State::Eof &&
+        if ((state_ == State::Eof || record_count() == 0) &&
             (recno_ == 0 || recno_ > record_count())) {
             return record_count() + 1;
         }
         return recno_;
     }
-    // Empty table is BOTH at BOF and at EOF — Clipper convention.
+    // Empty table reports both BOF and EOF — Clipper convention.
     bool eof() const noexcept {
         return state_ == State::Eof || record_count() == 0;
     }

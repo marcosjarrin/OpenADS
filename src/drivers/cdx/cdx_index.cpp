@@ -696,13 +696,30 @@ CdxIndex::insert_into_subtree_(std::uint32_t      subtree_root,
         if (!dec) return dec.error();
         auto keys = std::move(dec).value();
 
-        auto pos = std::lower_bound(keys.begin(), keys.end(), padded,
-            [](const auto& a, const std::string& b) {
-                return std::memcmp(a.first.data(), b.data(),
-                                    std::min(a.first.size(), b.size())) < 0;
+        // Ordering must be (key ASC, recno ASC). FoxPro / SAP-ACE
+        // resolve duplicate keys by recno, so a forward seek_key for
+        // a non-unique key always returns the first-inserted recno.
+        // upper_bound here lands AFTER any equal-key entries with
+        // smaller recno; lower_bound landed BEFORE them, which
+        // reversed the recno order and made seek_key surface the
+        // last-inserted recno.
+        auto pos = std::upper_bound(keys.begin(), keys.end(),
+            std::pair<std::string, std::uint32_t>{padded, recno},
+            [](const auto& a, const auto& b) {
+                int c = std::memcmp(a.first.data(), b.first.data(),
+                                     std::min(a.first.size(), b.first.size()));
+                if (c != 0) return c < 0;
+                return a.second < b.second;
             });
-        if (unique_ && pos != keys.end() && pos->first == padded) {
-            return util::Error{5044, 0, "CDX duplicate key", ""};
+        if (unique_) {
+            // Walk back to confirm whether the predecessor has the
+            // same key (upper_bound puts us PAST equal-key entries).
+            if (pos != keys.begin()) {
+                auto prev = pos - 1;
+                if (prev->first == padded) {
+                    return util::Error{5044, 0, "CDX duplicate key", ""};
+                }
+            }
         }
         keys.insert(pos, {padded, recno});
 
