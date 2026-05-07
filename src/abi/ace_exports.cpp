@@ -1693,6 +1693,8 @@ UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
     } else {
         int y = 0, m = 0, d = 0;
         julian_to_ymd(lDate, y, m, d);
+        if (y < 0) y = 0; if (y > 9999) y = 9999;
+        m &= 0xFF; d &= 0xFF;
         std::snprintf(buf, sizeof(buf), "%04d%02d%02d", y, m, d);
     }
     std::string val(buf, 8);
@@ -5632,7 +5634,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             for (std::size_t i = 0; i < slots.size(); ++i) {
                 std::array<std::uint8_t, 32> fd{};
                 char fn[16];
-                std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
+                std::snprintf(fn, sizeof(fn), "COL%u",
+                              static_cast<unsigned>((i + 1) & 0xFFFFFu));
                 std::size_t fn_len = std::strlen(fn);
                 std::memcpy(fd.data(), fn,
                             fn_len > 11 ? 11 : fn_len);
@@ -5794,8 +5797,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             for (std::size_t i = 0; i < slots.size(); ++i) {
                 std::array<std::uint8_t, 32> fd{};
                 char fn[16];
-                std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
-                std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+                std::snprintf(fn, sizeof(fn), "COL%u",
+                              static_cast<unsigned>((i + 1) & 0xFFFFFu));
+                std::size_t fn_len = std::strlen(fn);
+                std::memcpy(fd.data(), fn, fn_len > 11 ? 11 : fn_len);
                 fd[11] = 'C'; fd[16] = 30;
                 agg_file.insert(agg_file.end(), fd.begin(), fd.end());
             }
@@ -6189,8 +6194,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             for (std::size_t i = 0; i < slots.size(); ++i) {
                 std::array<std::uint8_t, 32> fd{};
                 char fn[16];
-                std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
-                std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+                std::snprintf(fn, sizeof(fn), "COL%u",
+                              static_cast<unsigned>((i + 1) & 0xFFFFFu));
+                std::size_t fn_len = std::strlen(fn);
+                std::memcpy(fd.data(), fn, fn_len > 11 ? 11 : fn_len);
                 fd[11] = 'C'; fd[16] = 30;
                 file.insert(file.end(), fd.begin(), fd.end());
             }
@@ -6440,8 +6447,10 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         for (std::size_t i = 0; i < slots.size(); ++i) {
             std::array<std::uint8_t, 32> fd{};
             char fn[16];
-            std::snprintf(fn, sizeof(fn), "COL%zu", i + 1);
-            std::strncpy(reinterpret_cast<char*>(fd.data()), fn, 11);
+            std::snprintf(fn, sizeof(fn), "COL%u",
+                          static_cast<unsigned>((i + 1) & 0xFFFFFu));
+            std::size_t fn_len = std::strlen(fn);
+            std::memcpy(fd.data(), fn, fn_len > 11 ? 11 : fn_len);
             fd[11] = 'C'; fd[16] = 30;
             file.insert(file.end(), fd.begin(), fd.end());
         }
