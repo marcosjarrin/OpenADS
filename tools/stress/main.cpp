@@ -90,7 +90,8 @@ int main(int argc, char** argv) {
     if (!skip_gen) {
         std::error_code ec;
         for (auto& f : {"stress.dbf", "stress.cdx", "stress.fpt",
-                         "stress.dbt"}) {
+                         "stress.dbt",
+                         "stress_a.cdx", "stress_b.cdx"}) {
             fs::remove(fs::path(data_dir) / f, ec);
         }
     }
@@ -182,8 +183,10 @@ run_indexes:
         }
         struct IdxDef { const char* file; const char* tag; const char* expr; };
         IdxDef idxs[] = {
-            {"stress.cdx",  "ID_TAG",  "ID"},
-            {"stress.cdx",  "TAG_TAG", "TAG"},
+            {"stress_a.cdx",  "A_ID",   "ID"},
+            {"stress_a.cdx",  "A_TAG",  "TAG"},
+            {"stress_b.cdx",  "B_AMT",  "AMT"},
+            {"stress_b.cdx",  "B_ID2",  "ID"},
         };
         for (auto& d : idxs) {
             double i0 = now_ms();
@@ -211,6 +214,27 @@ run_indexes:
                         static_cast<int>(elen), emsg);
         }
         AdsCloseTable(hIdxTable);
+
+        // Bind all three bags onto a single freshly-opened table to
+        // confirm parked-extra-index attachment across separate CDX
+        // files works at this scale.
+        ADSHANDLE hMulti = 0;
+        if (AdsOpenTable(hConn, leafbuf.data(), nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hMulti) == 0) {
+            const char* bags[] = {"stress_a.cdx", "stress_b.cdx"};
+            for (auto* f : bags) {
+                UNSIGNED8 file_buf[64]; std::strncpy(
+                    reinterpret_cast<char*>(file_buf), f,
+                    sizeof(file_buf) - 1);
+                file_buf[sizeof(file_buf) - 1] = 0;
+                ADSHANDLE harr[8] = {0};
+                UNSIGNED16 hcount = 8;
+                UNSIGNED32 rc = AdsOpenIndex(hMulti, file_buf, harr, &hcount);
+                std::printf("  open %-15s rc=%u tags=%u\n",
+                            f, rc, unsigned(hcount));
+            }
+            AdsCloseTable(hMulti);
+        }
     }
 
     AdsDisconnect(hConn);
