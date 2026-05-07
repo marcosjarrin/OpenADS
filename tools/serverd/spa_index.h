@@ -949,6 +949,11 @@ async function loadServerInfo() {
       <div>DBF total</div><div>${fmtBytes(d.dbf_bytes || 0)}</div>
       <div>Sidecar total</div><div>${fmtBytes(d.sidecar_bytes || 0)}</div>
       <div>On-disk total</div><div>${fmtBytes(d.total_bytes || 0)}</div>
+      </div>
+      <div class="toolbar" style="margin-top:18px">
+        <a class="btn" href="/api/server/backup" download>
+          ⇩ Download backup (.zip)
+        </a>
       </div>`;
   } catch (e) {
     $("server-body").innerHTML = `<div class="err">${esc(e.message)}</div>`;

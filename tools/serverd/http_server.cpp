@@ -21,6 +21,7 @@ extern "C" UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable,
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -707,6 +708,125 @@ json table_create_index(const std::string& dir,
     return json{{"ok", true}, {"sql", sql}};
 }
 
+// studio.web.0.12 — minimal STORE-only ZIP writer (no compression,
+// no encryption). Builds an in-memory archive of every regular
+// file under `dir` (one level deep) so admins can download a
+// snapshot of the data directory through the browser.
+//
+// Hand-rolled to avoid pulling in another vendored dependency.
+// Works for backup-style admin downloads; not a general-purpose
+// archiver.
+
+namespace {
+
+std::uint32_t crc32_calc(const std::uint8_t* data, std::size_t n) {
+    static std::uint32_t table[256];
+    static bool inited = false;
+    if (!inited) {
+        for (std::uint32_t i = 0; i < 256; ++i) {
+            std::uint32_t c = i;
+            for (int j = 0; j < 8; ++j)
+                c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            table[i] = c;
+        }
+        inited = true;
+    }
+    std::uint32_t c = 0xFFFFFFFFu;
+    for (std::size_t i = 0; i < n; ++i)
+        c = table[(c ^ data[i]) & 0xFFu] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+void put_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
+    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+}
+void put_u32(std::vector<std::uint8_t>& out, std::uint32_t v) {
+    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+}
+
+struct ZipEntry { std::string name; std::uint32_t local_off, crc, sz; };
+
+std::string build_zip(const std::string& dir) {
+    std::vector<std::uint8_t> out;
+    std::vector<ZipEntry> entries;
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return {};
+    for (auto& e : fs::directory_iterator(dir, ec)) {
+        if (!e.is_regular_file()) continue;
+        std::ifstream f(e.path(), std::ios::binary);
+        std::string body((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+        std::string name = e.path().filename().string();
+        ZipEntry ze;
+        ze.name      = name;
+        ze.local_off = static_cast<std::uint32_t>(out.size());
+        ze.crc       = crc32_calc(
+            reinterpret_cast<const std::uint8_t*>(body.data()),
+            body.size());
+        ze.sz        = static_cast<std::uint32_t>(body.size());
+
+        // Local file header.
+        put_u32(out, 0x04034b50u);          // signature
+        put_u16(out, 20);                    // version needed
+        put_u16(out, 0);                     // flags
+        put_u16(out, 0);                     // method = stored
+        put_u16(out, 0);                     // mtime
+        put_u16(out, 0);                     // mdate
+        put_u32(out, ze.crc);
+        put_u32(out, ze.sz);                 // compressed
+        put_u32(out, ze.sz);                 // uncompressed
+        put_u16(out, static_cast<std::uint16_t>(name.size()));
+        put_u16(out, 0);                     // extra
+        out.insert(out.end(), name.begin(), name.end());
+        out.insert(out.end(),
+                   reinterpret_cast<const std::uint8_t*>(body.data()),
+                   reinterpret_cast<const std::uint8_t*>(body.data() + body.size()));
+        entries.push_back(std::move(ze));
+    }
+
+    std::uint32_t cd_off = static_cast<std::uint32_t>(out.size());
+    for (auto& ze : entries) {
+        put_u32(out, 0x02014b50u);          // central dir signature
+        put_u16(out, 20);                    // version made by
+        put_u16(out, 20);                    // version needed
+        put_u16(out, 0);                     // flags
+        put_u16(out, 0);                     // method
+        put_u16(out, 0);                     // mtime
+        put_u16(out, 0);                     // mdate
+        put_u32(out, ze.crc);
+        put_u32(out, ze.sz);
+        put_u32(out, ze.sz);
+        put_u16(out, static_cast<std::uint16_t>(ze.name.size()));
+        put_u16(out, 0);                     // extra len
+        put_u16(out, 0);                     // comment len
+        put_u16(out, 0);                     // disk number
+        put_u16(out, 0);                     // internal attrs
+        put_u32(out, 0);                     // external attrs
+        put_u32(out, ze.local_off);
+        out.insert(out.end(), ze.name.begin(), ze.name.end());
+    }
+    std::uint32_t cd_size = static_cast<std::uint32_t>(out.size()) - cd_off;
+
+    // End of central dir.
+    put_u32(out, 0x06054b50u);
+    put_u16(out, 0);                         // disk
+    put_u16(out, 0);                         // disk with CD
+    put_u16(out, static_cast<std::uint16_t>(entries.size()));
+    put_u16(out, static_cast<std::uint16_t>(entries.size()));
+    put_u32(out, cd_size);
+    put_u32(out, cd_off);
+    put_u16(out, 0);                         // comment len
+
+    return std::string(reinterpret_cast<const char*>(out.data()),
+                       out.size());
+}
+
+} // namespace
+
 // studio.web.0.7 — companion files for a single DBF (.cdx / .ntx /
 // .fpt / .dbt / .dbv) with sizes. Useful for the Structure tab so
 // admins can see at a glance which sidecars exist + how big they
@@ -1032,6 +1152,25 @@ bool HttpConsole::start(const std::string& host,
             [this](const httplib::Request&, httplib::Response& res) {
         json j = server_info(data_dir_);
         res.set_content(j.dump(), "application/json");
+    });
+
+    // studio.web.0.12 — backup data dir as a STORE-only ZIP.
+    srv.Get("/api/server/backup",
+            [this](const httplib::Request&, httplib::Response& res) {
+        auto body = build_zip(data_dir_);
+        if (body.empty()) {
+            res.status = 500;
+            res.set_content(json_error("backup failed", 500).dump(),
+                            "application/json");
+            return;
+        }
+        char ts[32]; std::time_t t = std::time(nullptr);
+        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S",
+                      std::localtime(&t));
+        std::string fname = std::string("openads-backup-") + ts + ".zip";
+        res.set_header("Content-Disposition",
+                       "attachment; filename=\"" + fname + "\"");
+        res.set_content(body, "application/zip");
     });
 
     // studio.web.0.5 — Data Dictionary endpoints.
