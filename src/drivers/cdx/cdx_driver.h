@@ -49,6 +49,11 @@ public:
 
 private:
     util::Result<void> rewrite_header_();
+    // Re-read bytes 0..7 of the DBF header from disk and refresh
+    // rec_count_ from the on-disk truth. Caller must hold an
+    // exclusive byte-lock on the header before invoking, otherwise
+    // the refresh races against other writers.
+    util::Result<void> refresh_record_count_();
     void               apply_ctr_(std::uint8_t* buf, std::size_t n,
                                   std::uint32_t recno) const;
 

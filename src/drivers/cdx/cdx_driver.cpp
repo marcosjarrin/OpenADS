@@ -1,9 +1,12 @@
 #include "drivers/cdx/cdx_driver.h"
 
+#include "platform/lock.h"
 #include "platform/time.h"
 
+#include <chrono>
 #include <cstring>
 #include <ctime>
+#include <thread>
 #include <vector>
 
 namespace openads::drivers::cdx {
@@ -17,6 +20,41 @@ platform::OpenMode map_mode(DriverOpenMode m) {
         case DriverOpenMode::Exclusive: return platform::OpenMode::OpenExisting;
     }
     return platform::OpenMode::ReadOnly;
+}
+
+// Cross-connection / cross-process append serialisation. Each
+// CdxDriver instance caches `rec_count_` from the DBF header at
+// open() time. When two writers (separate connections in the same
+// process, or independent processes) append concurrently they will
+// each compute `recno = rec_count_ + 1` from their own stale cache,
+// overwrite each other's record, and produce a header whose
+// "record count" lags reality. Holding an exclusive byte-lock on
+// the header (offset 0..31) serialises all appenders against the
+// authoritative state on disk.
+//
+// `acquire_with_retry_` retries with a short back-off so well-
+// behaved contention does not spuriously fail; the caller still
+// times out after ~5 s of solid contention. Linux + macOS use
+// fcntl(F_SETLK), Windows uses LockFileEx — both honour
+// inter-process semantics, so this also fixes the cross-process
+// case (multiple openads_serverd / openads_concurrency_stress
+// invocations against the same DBF).
+util::Result<platform::ByteLock>
+acquire_with_retry_(platform::File& f,
+                    std::uint64_t   offset,
+                    std::uint64_t   length,
+                    int             max_retries = 200)
+{
+    util::Error last_err{};
+    for (int i = 0; i < max_retries; ++i) {
+        auto lk = platform::ByteLock::try_acquire(f, offset, length,
+                                                   platform::LockKind::Exclusive);
+        if (lk) return std::move(lk).value();
+        last_err = lk.error();
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(50 + (i * 25)));
+    }
+    return last_err;
 }
 
 } // namespace
@@ -119,6 +157,9 @@ CdxDriver::append_record_raw(const std::uint8_t* buf, std::size_t n) {
     if (n != rec_len_) {
         return util::Error{5000, 0, "record buffer length mismatch", ""};
     }
+    auto lk = acquire_with_retry_(file_, 0, 32);
+    if (!lk) return lk.error();
+    if (auto rh = refresh_record_count_(); !rh) return rh.error();
     std::uint32_t new_recno = rec_count_ + 1;
     std::uint64_t offset = static_cast<std::uint64_t>(hdr_len_) +
                            static_cast<std::uint64_t>(rec_count_) *
@@ -144,6 +185,21 @@ CdxDriver::append_record_raw(const std::uint8_t* buf, std::size_t n) {
     rec_count_ = new_recno;
     if (auto r = rewrite_header_(); !r) return r.error();
     return new_recno;
+}
+
+util::Result<void> CdxDriver::refresh_record_count_() {
+    std::uint8_t hdr_buf[8]{};
+    auto got = file_.read_at(0, hdr_buf, sizeof(hdr_buf));
+    if (!got) return got.error();
+    if (got.value() < 8) {
+        return util::Error{5103, 0,
+            "DBF header truncated during refresh", ""};
+    }
+    rec_count_ =  static_cast<std::uint32_t>(hdr_buf[4])        |
+                 (static_cast<std::uint32_t>(hdr_buf[5]) <<  8) |
+                 (static_cast<std::uint32_t>(hdr_buf[6]) << 16) |
+                 (static_cast<std::uint32_t>(hdr_buf[7]) << 24);
+    return {};
 }
 
 util::Result<void> CdxDriver::rewrite_header_() {
