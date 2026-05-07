@@ -994,12 +994,13 @@ UNSIGNED32 AdsDeleteFile(ADSHANDLE /*hConn*/, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsCloseAllTables(ADSHANDLE hConn) {
+// SAP's ace.h declares `AdsCloseAllTables(void)`: close every table
+// the calling process has opened. We accept the same 0-arg form;
+// per-connection close still works through AdsCloseTable().
+UNSIGNED32 AdsCloseAllTables(void) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
-    Connection* c = s.registry.lookup<Connection>(hConn,
-                            HandleKind::Connection);
-    if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    (void)0;
     // Walk every Table handle that points to a Table belonging to
     // this connection and release it. Connection's tables_ map owns
     // the unique_ptrs; the handle registry just borrows pointers.
@@ -2742,17 +2743,19 @@ UNSIGNED32 AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
 
 UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
                                    UNSIGNED8* pucName, UNSIGNED8* pucFail,
-                                   UNSIGNED8* pucParent, UNSIGNED8* pucChild,
-                                   UNSIGNED8* pucTag,
-                                   UNSIGNED16 usUpdate, UNSIGNED16 usDelete,
-                                   UNSIGNED8* /*pucDesc*/, UNSIGNED16 /*opt*/) {
+                                   UNSIGNED8* pucParent, UNSIGNED8* pucParentTag,
+                                   UNSIGNED8* pucChild, UNSIGNED8* pucChildTag,
+                                   UNSIGNED16 usUpdate, UNSIGNED16 usDelete) {
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::RiEntry e;
     e.name        = openads::abi::to_internal(pucName,   0);
     e.parent      = pucParent ? openads::abi::to_internal(pucParent, 0) : std::string();
     e.child       = pucChild  ? openads::abi::to_internal(pucChild,  0) : std::string();
-    e.tag         = pucTag    ? openads::abi::to_internal(pucTag,    0) : std::string();
+    // rddads passes parent + child tag names separately; the engine
+    // currently tracks one combined tag, so we record the parent's.
+    (void)pucChildTag;
+    e.tag         = pucParentTag ? openads::abi::to_internal(pucParentTag, 0) : std::string();
     e.update_opt  = std::to_string(static_cast<unsigned>(usUpdate));
     e.delete_opt  = std::to_string(static_cast<unsigned>(usDelete));
     e.fail_table  = pucFail   ? openads::abi::to_internal(pucFail,   0) : std::string();
@@ -3816,11 +3819,14 @@ UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 /*bEncrypt*/,
     return ok();
 }
 
+// SAP signature (rddads): (hConn, name, file, fileType, charType,
+// indexFile, comment). Matches Harbour's HB_FUNC(ADSDDADDTABLE).
 UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
-                         UNSIGNED8* pucTablePath, UNSIGNED8* /*pucIndexPath*/,
-                         UNSIGNED16 /*usCharType*/, UNSIGNED8* /*pucDescription*/,
-                         UNSIGNED8* /*pucValidationExpression*/,
-                         UNSIGNED8* /*pucValidationMessage*/) {
+                         UNSIGNED8* pucTablePath,
+                         UNSIGNED16 /*usFileType*/,
+                         UNSIGNED16 /*usCharType*/,
+                         UNSIGNED8* /*pucIndexPath*/,
+                         UNSIGNED8* /*pucComment*/) {
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
@@ -8279,7 +8285,7 @@ UNSIGNED32 AdsGetNumActiveLinks(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetNumLocks(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetNumOpenTables(ADSHANDLE, UNSIGNED16* p)
+UNSIGNED32 AdsGetNumOpenTables(UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
     { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
@@ -8344,7 +8350,7 @@ UNSIGNED32 AdsStmtSetTableType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUC
 UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsWriteAllRecords(ADSHANDLE hTable) { return AdsWriteRecord(hTable); }
+UNSIGNED32 AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
 
 // AdsMg* stubs are implemented elsewhere. Kept tests/unit/abi_mgmt_test.cpp's
 // existing pattern: zero-fill caller's buffer, return AE_SUCCESS so apps
@@ -8359,26 +8365,40 @@ UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE, void* p, UNSIGNED16* l)
     { mg_zero_(p, l); return openads::AE_SUCCESS; }
 UNSIGNED32 AdsMgGetCommStats(ADSHANDLE, void* p, UNSIGNED16* l)
     { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetConfigInfo(ADSHANDLE, void* pv, UNSIGNED16* lv,
+                               void* pm, UNSIGNED16* lm)
+    { mg_zero_(pv, lv); mg_zero_(pm, lm); return openads::AE_SUCCESS; }
 UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE, void* p, UNSIGNED16* l)
     { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetLocks(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetLockOwner(ADSHANDLE, UNSIGNED8*, UNSIGNED32, void* p,
+                              UNSIGNED16* l, UNSIGNED16* lt) {
+    if (l && p) {
+        // l is sizeof(struct), zero just up to that size.
+        std::memset(p, 0, *l);
+    }
+    if (lt) *lt = 0;
+    return openads::AE_SUCCESS;
+}
+UNSIGNED32 AdsMgGetLocks(ADSHANDLE, UNSIGNED8*, UNSIGNED8*, UNSIGNED16,
+                          void*, UNSIGNED16* c, UNSIGNED16*)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenIndexes(ADSHANDLE, UNSIGNED8*, UNSIGNED8*, UNSIGNED16,
+                                void*, UNSIGNED16* c, UNSIGNED16*)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenTables(ADSHANDLE, UNSIGNED8*, UNSIGNED16, void*,
+                               UNSIGNED16* c, UNSIGNED16*)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetOpenTables2(ADSHANDLE, UNSIGNED8*, UNSIGNED16, void*,
+                                UNSIGNED16* c, UNSIGNED16*)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsMgGetServerType(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, void*, UNSIGNED16* c)
+UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, UNSIGNED8*, void*, UNSIGNED16* c,
+                              UNSIGNED16*)
     { if (c) *c = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE, void* p, UNSIGNED16* l)
-    { mg_zero_(p, l); return openads::AE_SUCCESS; }
+UNSIGNED32 AdsMgGetWorkerThreadActivity(ADSHANDLE, void*, UNSIGNED16* c,
+                                         UNSIGNED16*)
+    { if (c) *c = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsMgKillUser(ADSHANDLE, UNSIGNED8*, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsMgResetCommStats(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 

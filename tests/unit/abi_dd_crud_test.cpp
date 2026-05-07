@@ -18,8 +18,8 @@ UNSIGNED32 AdsDDAddUserToGroup    (ADSHANDLE, UNSIGNED8*, UNSIGNED8*);
 UNSIGNED32 AdsDDRemoveUserFromGroup(ADSHANDLE, UNSIGNED8*, UNSIGNED8*);
 UNSIGNED32 AdsDDCreateRefIntegrity (ADSHANDLE, UNSIGNED8*, UNSIGNED8*,
                                     UNSIGNED8*, UNSIGNED8*, UNSIGNED8*,
-                                    UNSIGNED16, UNSIGNED16, UNSIGNED8*,
-                                    UNSIGNED16);
+                                    UNSIGNED8*,
+                                    UNSIGNED16, UNSIGNED16);
 UNSIGNED32 AdsDDRemoveRefIntegrity (ADSHANDLE, UNSIGNED8*);
 UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE, UNSIGNED16, void*, UNSIGNED16*);
 UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE, UNSIGNED16, void*, UNSIGNED16);
@@ -55,8 +55,8 @@ TEST_CASE("M9.25 DD CRUD calls accept silently and return AE_SUCCESS") {
     REQUIRE(AdsDDRemoveUserFromGroup(0, group, user) == 0);
     REQUIRE(AdsDDDeleteUser(0, user) == 0);
 
-    REQUIRE(AdsDDCreateRefIntegrity(0, ri, fail, par, chi, tag,
-                                    0, 0, desc, 0) == 0);
+    REQUIRE(AdsDDCreateRefIntegrity(0, ri, fail, par, tag, chi, tag,
+                                    0, 0) == 0);
     REQUIRE(AdsDDRemoveRefIntegrity(0, ri) == 0);
 }
 

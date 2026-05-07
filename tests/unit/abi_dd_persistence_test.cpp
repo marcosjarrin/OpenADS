@@ -20,8 +20,8 @@ UNSIGNED32 AdsDDCreateLink        (ADSHANDLE, UNSIGNED8*, UNSIGNED8*,
 UNSIGNED32 AdsDDAddIndexFile      (ADSHANDLE, UNSIGNED8*, UNSIGNED8*, UNSIGNED8*);
 UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE, UNSIGNED8*, UNSIGNED8*,
                                    UNSIGNED8*, UNSIGNED8*, UNSIGNED8*,
-                                   UNSIGNED16, UNSIGNED16, UNSIGNED8*,
-                                   UNSIGNED16);
+                                   UNSIGNED8*,
+                                   UNSIGNED16, UNSIGNED16);
 UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE, UNSIGNED16, void*, UNSIGNED16);
 UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE, UNSIGNED16, void*, UNSIGNED16*);
 }  // extern "C"
@@ -69,8 +69,8 @@ TEST_CASE("M10.1 DD CRUD round-trips through .add reopen") {
     REQUIRE(AdsDDAddUserToGroup(hConn, group, user) == 0);
     REQUIRE(AdsDDCreateLink(hConn, alias, path, user, pwd, 0) == 0);
     REQUIRE(AdsDDAddIndexFile(hConn, tbl, idx, cmt) == 0);
-    REQUIRE(AdsDDCreateRefIntegrity(hConn, ri, fail, par, chi, tag,
-                                    1, 2, desc, 0) == 0);
+    REQUIRE(AdsDDCreateRefIntegrity(hConn, ri, fail, par, tag, chi, tag,
+                                    1, 2) == 0);
     UNSIGNED8 propval[16] = "hello";
     REQUIRE(AdsDDSetDatabaseProperty(hConn, /*usProp=*/42,
                                      propval, 5) == 0);

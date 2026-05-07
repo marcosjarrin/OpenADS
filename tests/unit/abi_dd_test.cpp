@@ -57,8 +57,8 @@ TEST_CASE("AdsDDCreate + AdsDDAddTable + open table by alias") {
 
     UNSIGNED8 alias[64] = "clientes";
     UNSIGNED8 path [64] = "data.dbf";
-    REQUIRE(AdsDDAddTable(hConn, alias, path, nullptr, 0,
-                          nullptr, nullptr, nullptr) == 0);
+    REQUIRE(AdsDDAddTable(hConn, alias, path, /*fileType=*/0, /*charType=*/0,
+                          /*indexPath=*/nullptr, /*comment=*/nullptr) == 0);
 
     // Open the table by alias — DD resolves "clientes" -> "data.dbf".
     ADSHANDLE hTable = 0;
@@ -105,8 +105,8 @@ TEST_CASE("AdsDDRemoveTable drops alias; reopen by alias fails") {
     REQUIRE(AdsDDCreate(add_buf, 0, nullptr, &hConn) == 0);
     UNSIGNED8 alias[64] = "x";
     UNSIGNED8 path [64] = "data.dbf";
-    REQUIRE(AdsDDAddTable(hConn, alias, path, nullptr, 0,
-                          nullptr, nullptr, nullptr) == 0);
+    REQUIRE(AdsDDAddTable(hConn, alias, path, /*fileType=*/0, /*charType=*/0,
+                          /*indexPath=*/nullptr, /*comment=*/nullptr) == 0);
     REQUIRE(AdsDDRemoveTable(hConn, alias, 0) == 0);
 
     ADSHANDLE hTable = 0;

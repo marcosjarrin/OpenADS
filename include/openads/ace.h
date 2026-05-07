@@ -63,7 +63,7 @@ UNSIGNED32 AdsGetTableFilename(ADSHANDLE  hTable, UNSIGNED16 usOption,
 UNSIGNED32 AdsCheckExistence(ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED16* pbExists);
 UNSIGNED32 AdsDeleteFile    (ADSHANDLE  hConnect, UNSIGNED8* pucName);
-UNSIGNED32 AdsCloseAllTables(ADSHANDLE  hConnect);
+UNSIGNED32 AdsCloseAllTables(void);
 UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen);
 
 UNSIGNED32 AdsRefreshRecord (ADSHANDLE hTable);
@@ -301,11 +301,10 @@ UNSIGNED32 AdsDDCreate           (UNSIGNED8* pucDictionary,
 UNSIGNED32 AdsDDAddTable         (ADSHANDLE hConnect,
                                   UNSIGNED8* pucAlias,
                                   UNSIGNED8* pucTablePath,
-                                  UNSIGNED8* pucIndexPath,
+                                  UNSIGNED16 usFileType,
                                   UNSIGNED16 usCharType,
-                                  UNSIGNED8* pucDescription,
-                                  UNSIGNED8* pucValidationExpression,
-                                  UNSIGNED8* pucValidationMessage);
+                                  UNSIGNED8* pucIndexPath,
+                                  UNSIGNED8* pucComment);
 UNSIGNED32 AdsDDRemoveTable      (ADSHANDLE hConnect,
                                   UNSIGNED8* pucAlias,
                                   UNSIGNED16 usDeleteFiles);
@@ -367,28 +366,33 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 //    28   | HB_FT_MEMO             'M'   (nmemo)
 //    other| EDBF_CORRUPT (open fails)
 #define ADS_LOGICAL               1
+// SAP-canonical field-type codes. These values MUST match the
+// numeric assignments in the public ace.h so Harbour switch
+// statements over uiType-extended see no duplicate-case collisions.
 #define ADS_NUMERIC               2
 #define ADS_DATE                  3
 #define ADS_STRING                4
 #define ADS_MEMO                  5
 #define ADS_BINARY                6
-#define ADS_RAW                   6
 #define ADS_IMAGE                 7
 #define ADS_VARCHAR_FOX           8
-#define ADS_COMPACTDATE           9
+#define ADS_VARBINARY_FOX         9
 #define ADS_DOUBLE               10
 #define ADS_INTEGER              11
 #define ADS_SHORTINT             12
 #define ADS_TIME                 13
 #define ADS_TIMESTAMP            14
 #define ADS_AUTOINC              15
+#define ADS_RAW                  16
 #define ADS_CURDOUBLE            17
 #define ADS_MONEY                18
 #define ADS_LONGLONG             19
-#define ADS_CISTRING             20
+#define ADS_COMPACTDATE          20
 #define ADS_ROWVERSION           21
 #define ADS_MODTIME              22
-#define ADS_VARBINARY_FOX        24
+#define ADS_VARCHAR              23
+#define ADS_VARBINARY            24
+#define ADS_CISTRING             25
 #define ADS_NCHAR                26
 #define ADS_NVARCHAR             27
 #define ADS_NMEMO                28
@@ -496,14 +500,16 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_GET_FORMAT_WEB    0x00000040
 #define ADS_GET_UTF8          0x00000080
 #define ADS_ROOT_DD_ALIAS     0x00000100
-#define ADS_DD_VERSION        0x00000001
-#define ADS_DD_VERSION_MAJOR  0x00000002
-#define ADS_DD_VERSION_MINOR  0x00000003
+// ADS_DD_VERSION* assigned >22 to avoid switch collisions with the
+// ADS_DD_* string-property block below.
+#define ADS_DD_VERSION                       23
+#define ADS_DD_VERSION_MAJOR                 24
+#define ADS_DD_VERSION_MINOR                 25
 #define ADS_USER_DEFINED      0x00000200
 // rddads.h defines ADS_USE_OEM_TRANSLATION conditionally; do not
-// redefine here. Field type ADS_VARCHAR is 23 in the public SAP
-// documentation (the ace.h above uses 13 for ADS_TIME).
-#define ADS_VARCHAR           23
+// redefine here. ADS_VARCHAR / ADS_VARBINARY / ADS_CISTRING /
+// ADS_RAW / ADS_COMPACTDATE etc. are defined above with their
+// SAP-canonical numeric values.
 #define ADS_CURSOR_READONLY   1
 #define ADS_CS_AS_1252        1
 #define ADS_VERSION_STRING    "1.0.0-rc6"
@@ -542,21 +548,14 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_MAX_FAILED_ATTEMPTS           21
 #define ADS_DD_USER_DEFINED_PROP             22
 
-// Management API call selectors (AdsMgGet*).
-#define ADS_MGMT_                  0
+// Note: SAP's ace.h uses the ADS_MGMT_* names for management-info
+// struct typedefs (declared further below), not for numeric
+// selectors. The earlier integer #defines here would collide with
+// those typedefs, so they're removed. Lock-type constants live
+// elsewhere.
 #define ADS_MGMT_FILE_LOCK         1
 #define ADS_MGMT_RECORD_LOCK       2
 #define ADS_MGMT_NO_LOCK           3
-#define ADS_MGMT_TABLE_INFO        4
-#define ADS_MGMT_INDEX_INFO        5
-#define ADS_MGMT_RECORD_INFO       6
-#define ADS_MGMT_USER_INFO         7
-#define ADS_MGMT_INSTALL_INFO      8
-#define ADS_MGMT_CONFIG_PARAMS     9
-#define ADS_MGMT_CONFIG_MEMORY     10
-#define ADS_MGMT_ACTIVITY_INFO     11
-#define ADS_MGMT_COMM_STATS        12
-#define ADS_MGMT_THREAD_ACTIVITY   13
 
 // AE_* error code macros. The canonical enum lives in
 // openads/error.h, but rddads includes only ace.h so these need
@@ -569,6 +568,9 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define AE_FUNCTION_NOT_AVAILABLE  5004
 #define AE_LOCKED                  5012
 #define AE_LOCK_FAILED             5013
+#define AE_NO_FILE_FOUND           5018
+#define AE_NO_CONNECTION           5036
+#define AE_INVALID_CONNECTION_HANDLE 4097
 
 // Extra AE_* error codes referenced by Harbour rddads.
 #define AE_INVALID_HANDLE          5024
@@ -584,6 +586,157 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define AE_VALUE_OVERFLOW          5057
 #define AE_INVALID_EXPRESSION      5079
 #define AE_INDEX_ALREADY_OPEN      5108
+
+// ---- Management API struct typedefs (Harbour contrib/rddads) ----
+// Field names taken from public Sybase / SAP ace.h documentation;
+// rddads' adsmgmnt.c reads these field-by-field. OpenADS' local
+// implementation always returns zero-filled buffers (no actual
+// server-side stats), but Harbour code that uses Mg* still has to
+// link, so the structs must exist and have compatible field
+// shapes.
+
+typedef struct _ADS_MGMT_TIME_STRUCT {
+    UNSIGNED16 usDays;
+    UNSIGNED16 usHours;
+    UNSIGNED16 usMinutes;
+    UNSIGNED16 usSeconds;
+} ADS_MGMT_TIME_STRUCT;
+
+typedef struct _ADS_MGMT_USAGE_STRUCT {
+    UNSIGNED32 ulInUse;
+    UNSIGNED32 ulMaxUsed;
+    UNSIGNED32 ulRejected;
+} ADS_MGMT_USAGE_STRUCT;
+
+typedef struct _ADS_MGMT_INSTALL_INFO {
+    UNSIGNED32 ulUserOption;
+    UNSIGNED8  aucRegisteredOwner [128];
+    UNSIGNED8  aucVersionStr      [16];
+    UNSIGNED8  aucInstallDate     [32];
+    UNSIGNED8  aucOemCharName     [32];
+    UNSIGNED8  aucAnsiCharName    [32];
+    UNSIGNED8  aucEvalExpireDate  [32];
+    UNSIGNED8  aucSerialNumber    [32];
+} ADS_MGMT_INSTALL_INFO;
+
+typedef struct _ADS_MGMT_ACTIVITY_INFO {
+    UNSIGNED32             ulOperations;
+    UNSIGNED32             ulLoggedErrors;
+    ADS_MGMT_TIME_STRUCT   stUpTime;
+    ADS_MGMT_USAGE_STRUCT  stUsers;
+    ADS_MGMT_USAGE_STRUCT  stConnections;
+    ADS_MGMT_USAGE_STRUCT  stWorkAreas;
+    ADS_MGMT_USAGE_STRUCT  stTables;
+    ADS_MGMT_USAGE_STRUCT  stIndexes;
+    ADS_MGMT_USAGE_STRUCT  stLocks;
+    ADS_MGMT_USAGE_STRUCT  stTpsHeaderElems;
+    ADS_MGMT_USAGE_STRUCT  stTpsVisElems;
+    ADS_MGMT_USAGE_STRUCT  stTpsMemoElems;
+    ADS_MGMT_USAGE_STRUCT  stWorkerThreads;
+} ADS_MGMT_ACTIVITY_INFO;
+
+typedef struct _ADS_MGMT_COMM_STATS {
+    double      dPercentCheckSums;
+    UNSIGNED32  ulTotalPackets;
+    UNSIGNED32  ulRcvPktOutOfSeq;
+    UNSIGNED32  ulNotLoggedIn;
+    UNSIGNED32  ulRcvReqOutOfSeq;
+    UNSIGNED32  ulCheckSumFailures;
+    UNSIGNED32  ulDisconnectedUsers;
+    UNSIGNED32  ulPartialConnects;
+    UNSIGNED32  ulInvalidPackets;
+    UNSIGNED32  ulRecvFromErrors;
+    UNSIGNED32  ulSendToErrors;
+} ADS_MGMT_COMM_STATS;
+
+typedef struct _ADS_MGMT_USER_INFO {
+    UNSIGNED8   aucUserName        [32];
+    UNSIGNED16  usConnNumber;
+    UNSIGNED8   aucAddress         [64];
+    UNSIGNED8   aucTSAddress       [64];
+    UNSIGNED8   aucOSUserLoginName [64];
+    UNSIGNED8   aucAuthUserName    [64];
+} ADS_MGMT_USER_INFO;
+
+typedef struct _ADS_MGMT_THREAD_ACTIVITY {
+    UNSIGNED32  ulThreadNumber;
+    UNSIGNED16  usOpCode;
+    UNSIGNED8   aucUserName        [32];
+    UNSIGNED16  usConnNumber;
+    UNSIGNED16  usReserved1;
+    UNSIGNED8   aucOSUserLoginName [64];
+} ADS_MGMT_THREAD_ACTIVITY;
+
+typedef struct _ADS_MGMT_LOCK_INFO {
+    UNSIGNED8   aucUserName        [32];
+    UNSIGNED16  usConnNumber;
+    UNSIGNED32  ulRecordNumber;
+} ADS_MGMT_LOCK_INFO;
+
+typedef struct _ADS_MGMT_TABLE_INFO {
+    UNSIGNED8   aucTableName       [256];
+    UNSIGNED8   aucUserName        [32];
+    UNSIGNED16  usConnNumber;
+    UNSIGNED16  usOpenMode;
+    UNSIGNED16  usLockType;
+} ADS_MGMT_TABLE_INFO;
+
+typedef struct _ADS_MGMT_INDEX_INFO {
+    UNSIGNED8   aucIndexName       [256];
+    UNSIGNED8   aucTagName         [16];
+    UNSIGNED8   aucExpression      [256];
+} ADS_MGMT_INDEX_INFO;
+
+typedef struct _ADS_MGMT_RECORD_INFO {
+    UNSIGNED32  ulRecordNumber;
+    UNSIGNED8   aucUserName        [32];
+} ADS_MGMT_RECORD_INFO;
+
+typedef struct _ADS_MGMT_CONFIG_PARAMS {
+    UNSIGNED32  ulNumConnections;
+    UNSIGNED32  ulNumWorkAreas;
+    UNSIGNED32  ulNumTables;
+    UNSIGNED32  ulNumIndexes;
+    UNSIGNED32  ulNumLocks;
+    UNSIGNED32  ulUserBufferSize;
+    UNSIGNED32  ulStatDumpInterval;
+    UNSIGNED32  ulErrorLogMax;
+    UNSIGNED32  ulNumTPSHeaderElems;
+    UNSIGNED32  ulNumTPSVisibilityElems;
+    UNSIGNED32  ulNumTPSMemoTransElems;
+    UNSIGNED16  usNumReceiveECBs;
+    UNSIGNED16  usNumSendECBs;
+    UNSIGNED16  usNumBurstPackets;
+    UNSIGNED16  usNumWorkerThreads;
+    UNSIGNED32  ulSortBuffSize;
+    UNSIGNED16  usSortBuffSize;
+    UNSIGNED8   ucReserved1;
+    UNSIGNED8   ucReserved2;
+    UNSIGNED8   aucErrorLog       [256];
+    UNSIGNED8   aucSemaphore      [256];
+    UNSIGNED8   aucTransaction    [256];
+    UNSIGNED8   ucReserved3;
+    UNSIGNED8   ucReserved4;
+    UNSIGNED16  usSendIPPort;
+    UNSIGNED16  usReceiveIPPort;
+    UNSIGNED16  usReserved5;
+} ADS_MGMT_CONFIG_PARAMS;
+
+typedef struct _ADS_MGMT_CONFIG_MEMORY {
+    double      ulTotalConfigMem;
+    UNSIGNED32  ulConnectionMem;
+    UNSIGNED32  ulWorkAreaMem;
+    UNSIGNED32  ulTableMem;
+    UNSIGNED32  ulIndexMem;
+    UNSIGNED32  ulLockMem;
+    UNSIGNED32  ulUserBufferMem;
+    UNSIGNED32  ulTPSHeaderElemMem;
+    UNSIGNED32  ulTPSVisibilityElemMem;
+    UNSIGNED32  ulTPSMemoTransElemMem;
+    UNSIGNED32  ulReceiveEcbMem;
+    UNSIGNED32  ulSendEcbMem;
+    UNSIGNED32  ulWorkerThreadMem;
+} ADS_MGMT_CONFIG_MEMORY;
 
 // ---- Function declarations required by Harbour contrib/rddads ----
 // Many of these are already implemented in src/abi/ace_exports.cpp;
@@ -677,8 +830,7 @@ UNSIGNED32 ENTRYPOINT AdsGetNumActiveLinks (ADSHANDLE hTable,
                                              UNSIGNED16* pusCount);
 UNSIGNED32 ENTRYPOINT AdsGetNumLocks       (ADSHANDLE hTable,
                                              UNSIGNED16* pusCount);
-UNSIGNED32 ENTRYPOINT AdsGetNumOpenTables  (ADSHANDLE hConnect,
-                                             UNSIGNED16* pusCount);
+UNSIGNED32 ENTRYPOINT AdsGetNumOpenTables  (UNSIGNED16* pusCount);
 UNSIGNED32 ENTRYPOINT AdsGetRecord         (ADSHANDLE hTable,
                                              UNSIGNED8* pucBuf,
                                              UNSIGNED32* pulLen);
@@ -772,7 +924,7 @@ UNSIGNED32 ENTRYPOINT AdsTestLogin         (UNSIGNED8* pucServer,
                                              UNSIGNED8* pucPwd,
                                              UNSIGNED32 ulOptions);
 UNSIGNED32 ENTRYPOINT AdsTestRecLocks      (ADSHANDLE hTable);
-UNSIGNED32 ENTRYPOINT AdsWriteAllRecords   (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsWriteAllRecords   (void);
 
 // Management API stubs — wire-protocol-level operations. OpenADS local
 // mode returns AE_FUNCTION_NOT_AVAILABLE; the server build will route
@@ -786,24 +938,53 @@ UNSIGNED32 ENTRYPOINT AdsMgGetActivityInfo (ADSHANDLE hMg, void* pInfo,
                                              UNSIGNED16* pusSize);
 UNSIGNED32 ENTRYPOINT AdsMgGetCommStats    (ADSHANDLE hMg, void* pInfo,
                                              UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetConfigInfo   (ADSHANDLE hMg, void* pInfo,
-                                             UNSIGNED16* pusSize);
+UNSIGNED32 ENTRYPOINT AdsMgGetConfigInfo   (ADSHANDLE hMg,
+                                             void* pVals,
+                                             UNSIGNED16* pusValsSize,
+                                             void* pMem,
+                                             UNSIGNED16* pusMemSize);
 UNSIGNED32 ENTRYPOINT AdsMgGetInstallInfo  (ADSHANDLE hMg, void* pInfo,
                                              UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetLockOwner    (ADSHANDLE hMg, void* pInfo,
+UNSIGNED32 ENTRYPOINT AdsMgGetLockOwner    (ADSHANDLE hMg,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED32 ulRecord,
+                                             void* pInfo,
+                                             UNSIGNED16* pusSize,
+                                             UNSIGNED16* pusLockType);
+UNSIGNED32 ENTRYPOINT AdsMgGetLocks        (ADSHANDLE hMg,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED16 usConnNumber,
+                                             void* pInfo,
+                                             UNSIGNED16* pusCount,
                                              UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetLocks        (ADSHANDLE hMg, void* pInfo,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenIndexes  (ADSHANDLE hMg,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED16 usConnNumber,
+                                             void* pInfo,
+                                             UNSIGNED16* pusCount,
                                              UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetOpenIndexes  (ADSHANDLE hMg, void* pInfo,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables   (ADSHANDLE hMg,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED16 usConnNumber,
+                                             void* pInfo,
+                                             UNSIGNED16* pusCount,
                                              UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables   (ADSHANDLE hMg, void* pInfo,
-                                             UNSIGNED16* pusSize);
-UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables2  (ADSHANDLE hMg, void* pInfo,
+UNSIGNED32 ENTRYPOINT AdsMgGetOpenTables2  (ADSHANDLE hMg,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED16 usConnNumber,
+                                             void* pInfo,
+                                             UNSIGNED16* pusCount,
                                              UNSIGNED16* pusSize);
 UNSIGNED32 ENTRYPOINT AdsMgGetServerType   (ADSHANDLE hMg, UNSIGNED16* pusT);
-UNSIGNED32 ENTRYPOINT AdsMgGetUserNames    (ADSHANDLE hMg, void* pInfo,
-                                             UNSIGNED16* pusCount);
+UNSIGNED32 ENTRYPOINT AdsMgGetUserNames    (ADSHANDLE hMg,
+                                             UNSIGNED8* pucFile,
+                                             void* pInfo,
+                                             UNSIGNED16* pusCount,
+                                             UNSIGNED16* pusSize);
 UNSIGNED32 ENTRYPOINT AdsMgGetWorkerThreadActivity(ADSHANDLE hMg, void* pInfo,
+                                             UNSIGNED16* pusCount,
                                              UNSIGNED16* pusSize);
 UNSIGNED32 ENTRYPOINT AdsMgKillUser        (ADSHANDLE hMg, UNSIGNED8* pucUser,
                                              UNSIGNED16 usOption);
@@ -827,12 +1008,11 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateRefIntegrity(ADSHANDLE hConnect,
                                              UNSIGNED8* pucName,
                                              UNSIGNED8* pucFail,
                                              UNSIGNED8* pucParent,
+                                             UNSIGNED8* pucParentTag,
                                              UNSIGNED8* pucChild,
-                                             UNSIGNED8* pucTag,
+                                             UNSIGNED8* pucChildTag,
                                              UNSIGNED16 usUpdate,
-                                             UNSIGNED16 usDelete,
-                                             UNSIGNED8* pucDesc,
-                                             UNSIGNED16 usOptions);
+                                             UNSIGNED16 usDelete);
 UNSIGNED32 ENTRYPOINT AdsDDCreateUser      (ADSHANDLE hConnect,
                                              UNSIGNED8* pucGroup,
                                              UNSIGNED8* pucUser,

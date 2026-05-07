@@ -17,8 +17,10 @@ UNSIGNED32 AdsMgGetInstallInfo(ADSHANDLE hMgmt, void* pStruct,
                                UNSIGNED16* pusSize);
 UNSIGNED32 AdsMgGetActivityInfo(ADSHANDLE hMgmt, void* pStruct,
                                 UNSIGNED16* pusSize);
-UNSIGNED32 AdsMgGetUserNames(ADSHANDLE hMgmt, void* pBuf,
-                             UNSIGNED16* pusCount);
+UNSIGNED32 AdsMgGetUserNames(ADSHANDLE hMgmt,
+                             UNSIGNED8* pucFile, void* pBuf,
+                             UNSIGNED16* pusCount,
+                             UNSIGNED16* pusSize);
 UNSIGNED32 AdsMgKillUser(ADSHANDLE hMgmt, UNSIGNED8* pucUser,
                          UNSIGNED16 usOption);
 UNSIGNED32 AdsMgResetCommStats(ADSHANDLE hMgmt);
@@ -62,7 +64,9 @@ TEST_CASE("M9.24 AdsMgGetActivityInfo zero-fills caller's struct") {
 TEST_CASE("M9.24 AdsMgGetUserNames reports empty list") {
     UNSIGNED8 buf[64] = {0xCC};
     UNSIGNED16 cnt    = 5;
-    REQUIRE(AdsMgGetUserNames(/*hMgmt=*/1, buf, &cnt) == 0);
+    UNSIGNED16 sz     = static_cast<UNSIGNED16>(sizeof(buf));
+    REQUIRE(AdsMgGetUserNames(/*hMgmt=*/1, /*file=*/nullptr,
+                              buf, &cnt, &sz) == 0);
     CHECK(cnt == 0);
 }
 
