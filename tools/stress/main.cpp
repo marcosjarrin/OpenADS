@@ -132,8 +132,8 @@ int main(int argc, char** argv) {
         AdsAppendRecord(hTable);
         AdsSetDouble(hTable, fid, static_cast<double>(r));
         char tag[5] = "AAAA";
-        for (int i = 0; i < 4; ++i)
-            tag[i] = static_cast<char>('A' + ((r + i) % 26));
+        for (std::uint32_t i = 0; i < 4; ++i)
+            tag[i] = static_cast<char>('A' + ((r + i) % 26u));
         AdsSetString(hTable, ftag,
                      reinterpret_cast<UNSIGNED8*>(tag), 4);
         AdsSetDouble(hTable, famt,
