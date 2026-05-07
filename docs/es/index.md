@@ -28,6 +28,8 @@ recompilar.
   embebida en `openads_serverd`.
 - **[Benchmarks](benchmarks/)** — números cross-platform SQL
   (Windows MSVC / Linux clang -O3 / macOS AppleClang).
+- **[Despliegue TLS](tls-despliegue/)** — terminar HTTPS
+  delante de Studio con Caddy / nginx / stunnel / SSH tunnel.
 
 ## Otros idiomas
 

@@ -31,6 +31,8 @@ for the Advantage Client Engine (`ace32.dll` / `ace64.dll` /
   console hosted by `openads_serverd`.
 - **[Benchmarks](benchmarks/)** — cross-platform SQL workload
   numbers (Windows MSVC / Linux clang -O3 / macOS AppleClang).
+- **[TLS deployment](tls-deployment/)** — terminate HTTPS in
+  front of Studio with Caddy / nginx / stunnel / SSH tunnel.
 
 ## Other languages
 
