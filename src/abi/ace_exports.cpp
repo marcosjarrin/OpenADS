@@ -2267,19 +2267,25 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
 
     auto& m   = index_bindings();
     auto& act = active_binding_for();
-    bool table_has_active = false;
-    for (auto& kv : m) {
-        if (kv.second.table == t) { table_has_active = true; break; }
-    }
     ADSHANDLE h = next_index_handle();
-    if (!table_has_active) {
-        t->set_order(std::move(idx_owner));
-        m[h] = IndexBinding{t, tag, nullptr, p.string()};
-        act[t] = h;
-    } else {
-        t->register_extra_index_view(idx_view);
-        m[h] = IndexBinding{t, tag, std::move(idx_owner), p.string()};
+    // Each new CREATE INDEX makes itself the active order
+    // (Clipper / Harbour convention). Park the previous active
+    // (if any) so it stays openable + survives ORDSETFOCUS(N).
+    auto prev = act.find(t);
+    if (prev != act.end()) {
+        auto pit = m.find(prev->second);
+        if (pit != m.end()) {
+            // Move the soon-to-be-displaced active IIndex from
+            // Table::order_ back into its binding's `parked` slot
+            // so future OrdSetFocus can swap it back in.
+            auto displaced = t->take_order();
+            pit->second.parked = std::move(displaced);
+            t->register_extra_index_view(pit->second.parked.get());
+        }
     }
+    t->set_order(std::move(idx_owner));
+    m[h] = IndexBinding{t, tag, nullptr, p.string()};
+    act[t] = h;
     *phIndex = h;
     return ok();
 }
