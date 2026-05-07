@@ -2214,11 +2214,25 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         exists = is_cdx && fs::exists(p, ec);
     }
     if (is_cdx && exists) {
+        // Harbour rddads / Clipper semantics: re-creating an
+        // existing tag is a silent overwrite, not an error. If the
+        // tag already exists, open it and clear its B+tree so the
+        // caller's per-record insert loop rebuilds it fresh.
         auto added = openads::drivers::cdx::CdxIndex::add_tag(
             p.string(), tag, expr, klen, unique, descend);
-        if (!added) return fail(added.error());
-        idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
-            std::move(added).value());
+        if (!added && added.error().code == 5044) {
+            openads::drivers::cdx::CdxIndex existing;
+            auto reopen = existing.open_named(p.string(),
+                openads::drivers::IndexOpenMode::Shared, tag);
+            if (!reopen) return fail(reopen.error());
+            idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
+                std::move(existing));
+        } else if (!added) {
+            return fail(added.error());
+        } else {
+            idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
+                std::move(added).value());
+        }
     } else if (is_cdx) {
         auto created = openads::drivers::cdx::CdxIndex::create(
             p.string(), tag, expr, klen, unique, descend);

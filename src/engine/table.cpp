@@ -38,6 +38,9 @@ util::Result<Table> Table::open(const std::string& path,
     if (auto r = drv->open(path, dmode); !r) return r.error();
     Table t{std::move(drv), mode, locking, type};
     t.path_ = path;
+    if (t.driver_->record_count() == 0) {
+        t.state_ = State::Limbo;
+    }
     return t;
 }
 
@@ -154,6 +157,10 @@ void Table::set_recno_sequence(std::vector<std::uint32_t> seq) {
 }
 
 util::Result<void> Table::goto_top() {
+    // Empty table → Limbo regardless of active order / sequence.
+    if (driver_->record_count() == 0) {
+        state_ = State::Limbo; recno_ = 0; return {};
+    }
     if (!recno_sequence_.empty()) {
         sequence_idx_ = 0;
         std::uint32_t r = recno_sequence_.front();
@@ -182,7 +189,8 @@ util::Result<void> Table::goto_top() {
         return load_record_(r.value().recno);
     }
     if (driver_->record_count() == 0) {
-        state_ = State::Eof; recno_ = 0; return {};
+        // GOTOP on empty re-enters Limbo (BOF+EOF both true).
+        state_ = State::Limbo; recno_ = 0; return {};
     }
     if (auto r = load_record_(1); !r) return r.error();
     if (filter_ && state_ == State::Positioned && !filter_(*this)) {
@@ -192,6 +200,10 @@ util::Result<void> Table::goto_top() {
 }
 
 util::Result<void> Table::goto_bottom() {
+    // Empty table → Limbo regardless of active order / sequence.
+    if (driver_->record_count() == 0) {
+        state_ = State::Limbo; recno_ = 0; return {};
+    }
     if (!recno_sequence_.empty()) {
         sequence_idx_ = static_cast<std::int64_t>(recno_sequence_.size() - 1);
         return load_record_(recno_sequence_.back());
@@ -216,17 +228,19 @@ util::Result<void> Table::goto_bottom() {
         return load_record_(r.value().recno);
     }
     auto n = driver_->record_count();
-    if (n == 0) { state_ = State::Eof; recno_ = 0; return {}; }
+    if (n == 0) {
+        state_ = State::Limbo; recno_ = 0; return {};
+    }
     return load_record_(n);
 }
 
 util::Result<void> Table::goto_record(std::uint32_t recno) {
-    // Harbour / SAP-ACE / Clipper convention: GO 0 is a "phantom"
-    // position (BOF/EOF, no record). We model it as Eof, recno=0,
-    // returning success — the caller's next field-read will see
-    // is_eof() and treat values as blanks.
+    // Harbour / SAP-ACE / Clipper convention: GO 0 is the phantom
+    // position. On empty table → Limbo (BOF+EOF). Otherwise → Eof.
     if (recno == 0) {
-        state_ = State::Eof; recno_ = 0;
+        state_ = (driver_->record_count() == 0)
+                 ? State::Limbo : State::Eof;
+        recno_ = 0;
         return {};
     }
     if (recno > driver_->record_count()) {
@@ -281,7 +295,16 @@ util::Result<void> Table::skip(std::int32_t delta) {
         return load_record_(r.value().recno);
     }
     auto n = driver_->record_count();
-    if (n == 0) { state_ = State::Eof; recno_ = 0; return {}; }
+    if (n == 0) {
+        // Skip on empty:
+        //   delta == 0  -> preserve current state (Limbo / Bof / Eof
+        //                  per Clipper SKIP-zero "refresh, don't move").
+        //   delta > 0   -> Eof (single flag).
+        //   delta < 0   -> Bof (single flag).
+        if (delta > 0) state_ = State::Eof;
+        else if (delta < 0) state_ = State::Bof;
+        recno_ = 0; return {};
+    }
     std::int64_t target = static_cast<std::int64_t>(recno_) + delta;
     if (state_ == State::Bof && delta > 0) target = delta;
     if (target < 1) { state_ = State::Bof; recno_ = 0; return {}; }
@@ -791,7 +814,10 @@ Table::seek_key(const std::string& key, bool soft) {
     auto r = order_->index()->seek_key(key, soft);
     if (!r) return r.error();
     if (!r.value().positioned) {
-        state_ = State::Eof; recno_ = 0;
+        // Failed seek on empty table → Limbo. Otherwise → Eof.
+        state_ = (driver_->record_count() == 0) ? State::Limbo
+                                                  : State::Eof;
+        recno_ = 0;
         last_seek_found_ = false;
         return false;
     }

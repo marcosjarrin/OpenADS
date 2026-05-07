@@ -53,18 +53,22 @@ public:
     // record reports recno()=LastRec()+1, so an empty table reads
     // as recno=1.
     std::uint32_t recno() const noexcept {
-        if ((state_ == State::Eof || record_count() == 0) &&
+        if ((state_ == State::Eof || state_ == State::Limbo ||
+             record_count() == 0) &&
             (recno_ == 0 || recno_ > record_count())) {
             return record_count() + 1;
         }
         return recno_;
     }
-    // Empty table reports both BOF and EOF — Clipper convention.
+    // Limbo (freshly-opened empty table or after GOTOP / GOBOTTOM
+    // on empty) reports BOTH BOF and EOF true. The first explicit
+    // direction-bearing skip drops out into Bof or Eof proper.
+    // Plain Bof/Eof states report a single flag each.
     bool eof() const noexcept {
-        return state_ == State::Eof || record_count() == 0;
+        return state_ == State::Eof || state_ == State::Limbo;
     }
     bool bof() const noexcept {
-        return state_ == State::Bof || record_count() == 0;
+        return state_ == State::Bof || state_ == State::Limbo;
     }
 
     util::Result<void> goto_top();
@@ -202,7 +206,7 @@ public:
     std::optional<std::string> get_scope(bool top) const;
 
 private:
-    enum class State { Bof, Positioned, Eof };
+    enum class State { Bof, Positioned, Eof, Limbo };
 
     Table(std::unique_ptr<drivers::IDriver> drv,
           OpenMode mode, LockingMode locking, TableType type) noexcept
