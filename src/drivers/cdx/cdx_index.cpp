@@ -1024,6 +1024,17 @@ util::Result<void> CdxIndex::flush() {
     return file_.sync();
 }
 
+util::Result<void> CdxIndex::clear_data() {
+    root_page_ = 0;
+    page_cache_.clear();
+    dirty_.clear();
+    cur_leaf_  = 0;
+    cur_index_ = -1;
+    cur_state_ = CurState::Initial;
+    cur_decoded_.clear();
+    return rewrite_header_();
+}
+
 util::Result<void> CdxIndex::rewrite_header_() {
     if (sub_header_offset_ == 0) {
         return util::Error{6106, 0, "CDX sub-tag header offset uninitialised", ""};

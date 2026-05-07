@@ -2225,6 +2225,11 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             auto reopen = existing.open_named(p.string(),
                 openads::drivers::IndexOpenMode::Shared, tag);
             if (!reopen) return fail(reopen.error());
+            // Wipe the old B+tree before the per-record insert
+            // loop rebuilds it; otherwise duplicates from the
+            // prior CREATE INDEX accumulate and break SKIP walks.
+            if (auto cl = existing.clear_data(); !cl)
+                return fail(cl.error());
             idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
                 std::move(existing));
         } else if (!added) {

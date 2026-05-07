@@ -58,6 +58,12 @@ public:
         cur_index_ = -1;
     }
 
+    // Reset this sub-tag's B+tree to empty (drop the existing
+    // root) so a CREATE-INDEX-with-existing-tag can rebuild from
+    // scratch on top of an old layout. Old leaves stay on disk
+    // (page leak); a future M(cdx-compact) milestone can reclaim.
+    util::Result<void> clear_data();
+
     util::Result<void> insert(std::uint32_t recno,
                               const std::string& key) override;
     util::Result<void> erase (std::uint32_t recno,
