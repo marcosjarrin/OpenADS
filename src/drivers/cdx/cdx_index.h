@@ -154,6 +154,13 @@ private:
     // Cursor: a single (leaf_page, key_index_in_leaf) plus the cached
     // decoded keys for that leaf.
     std::uint32_t                                                 cur_leaf_      = 0;
+    // Cursor logical state. cur_index_ alone can't tell apart
+    // "uninitialised" (no seek yet) from "ran off the front via
+    // prev()" — both used to leave cur_index_ = -1. Track that
+    // explicitly so next() after a prev-off-front can resume at
+    // the first key (Clipper SKIP(>0) from BoF semantics).
+    enum class CurState { Initial, Positioned, BeforeBegin, AfterEnd };
+    CurState                                                      cur_state_ = CurState::Initial;
     std::int32_t                                                  cur_index_     = -1;
     std::vector<std::pair<std::string, std::uint32_t>>            cur_decoded_;
     std::string                                                   current_key_;

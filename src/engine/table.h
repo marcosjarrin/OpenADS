@@ -198,7 +198,8 @@ public:
     void unregister_extra_index_view(drivers::IIndex* idx);
     void clear_extra_index_views();
     const Order*       order() const noexcept { return order_ ? &*order_ : nullptr; }
-    util::Result<bool> seek_key(const std::string& key, bool soft);
+    util::Result<bool> seek_key(const std::string& key, bool soft,
+                                bool last = false);
     bool last_seek_found() const noexcept { return last_seek_found_; }
     util::Result<void> set_scope(bool top, const std::string& key);
     util::Result<void> clear_scope(bool top);

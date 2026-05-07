@@ -807,11 +807,12 @@ void Table::clear_extra_index_views() {
 }
 
 util::Result<bool>
-Table::seek_key(const std::string& key, bool soft) {
+Table::seek_key(const std::string& key, bool soft, bool last) {
     if (!order_ || !order_->index()) {
         return util::Error{6105, 0, "no active index for seek", ""};
     }
-    auto r = order_->index()->seek_key(key, soft);
+    auto* idx = order_->index();
+    auto r = idx->seek_key(key, soft);
     if (!r) return r.error();
     if (!r.value().positioned) {
         // Failed seek on empty table → Limbo. Otherwise → Eof.
@@ -821,9 +822,40 @@ Table::seek_key(const std::string& key, bool soft) {
         last_seek_found_ = false;
         return false;
     }
+    bool exact = r.value().hit == drivers::SeekHit::Exact;
+    // SAP-ACE / Clipper "AdsSeekLast" semantics: when fLast and we
+    // have an exact hit, walk forward across equal-key entries and
+    // stop on the last one. After the walk, idx's cursor is on
+    // the last matching entry; load_record_ syncs the table buffer.
+    if (last && exact) {
+        std::string padded_key = key;
+        if (padded_key.size() < idx->key_length())
+            padded_key.append(idx->key_length() - padded_key.size(), ' ');
+        if (padded_key.size() > idx->key_length())
+            padded_key.resize(idx->key_length());
+        std::uint32_t last_recno = r.value().recno;
+        while (true) {
+            auto step = idx->next();
+            if (!step || !step.value().positioned) break;
+            std::string ck = idx->current_key();
+            if (ck.size() < padded_key.size())
+                ck.append(padded_key.size() - ck.size(), ' ');
+            if (std::memcmp(ck.data(), padded_key.data(),
+                             padded_key.size()) != 0) {
+                // Past the equal-key run — step back one to leave
+                // cursor on the last matching entry.
+                (void)idx->prev();
+                break;
+            }
+            last_recno = step.value().recno;
+        }
+        auto load = load_record_(last_recno);
+        if (!load) return load.error();
+        last_seek_found_ = true;
+        return true;
+    }
     auto load = load_record_(r.value().recno);
     if (!load) return load.error();
-    bool exact = r.value().hit == drivers::SeekHit::Exact;
     last_seek_found_ = exact;
     return exact;
 }

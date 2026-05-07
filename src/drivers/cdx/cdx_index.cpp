@@ -548,6 +548,7 @@ util::Result<SeekOutcome> CdxIndex::seek_first() {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_index_ = 0;
+    cur_state_ = CurState::Positioned;
     current_key_ = cur_decoded_[0].first;
     return SeekOutcome{SeekHit::Exact, cur_decoded_[0].second, true};
 }
@@ -575,6 +576,7 @@ util::Result<SeekOutcome> CdxIndex::seek_last() {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_index_ = static_cast<std::int32_t>(cur_decoded_.size() - 1);
+    cur_state_ = CurState::Positioned;
     current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
     return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
 }
@@ -598,12 +600,14 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
                                   key_size_);
             if (cmp == 0) {
                 cur_index_ = static_cast<std::int32_t>(i);
+                cur_state_ = CurState::Positioned;
                 current_key_ = cur_decoded_[i].first;
                 return SeekOutcome{SeekHit::Exact, cur_decoded_[i].second, true};
             }
             if (cmp < 0) {
                 if (!soft) return SeekOutcome{SeekHit::AfterEnd, 0, false};
                 cur_index_ = static_cast<std::int32_t>(i);
+                cur_state_ = CurState::Positioned;
                 current_key_ = cur_decoded_[i].first;
                 return SeekOutcome{SeekHit::AfterKey, cur_decoded_[i].second, true};
             }
@@ -622,6 +626,23 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
 }
 
 util::Result<SeekOutcome> CdxIndex::next() {
+    // From BeforeBegin: clamp back to the first leaf's first key
+    // so a Clipper-style SKIP(>0) after the cursor ran off the
+    // front (prev() loop) resumes scanning forward.
+    if (cur_state_ == CurState::BeforeBegin) {
+        if (!cur_decoded_.empty()) {
+            cur_index_ = 0;
+            cur_state_ = CurState::Positioned;
+            current_key_ = cur_decoded_[0].first;
+            return SeekOutcome{SeekHit::Exact,
+                cur_decoded_[0].second, true};
+        }
+        return seek_first();
+    }
+    if (cur_state_ == CurState::AfterEnd ||
+        cur_state_ == CurState::Initial) {
+        return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    }
     if (cur_index_ < 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
     if (static_cast<std::size_t>(cur_index_ + 1) < cur_decoded_.size()) {
         cur_index_ += 1;
@@ -633,6 +654,7 @@ util::Result<SeekOutcome> CdxIndex::next() {
     std::uint32_t right = read_u32_le(pg.value()->data() + 8);
     if (right == 0xFFFFFFFFu || right == 0) {
         cur_index_ = -1;
+        cur_state_ = CurState::AfterEnd;
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_leaf_ = right;
@@ -641,14 +663,24 @@ util::Result<SeekOutcome> CdxIndex::next() {
     cur_decoded_ = std::move(dec).value();
     if (cur_decoded_.empty()) {
         cur_index_ = -1;
+        cur_state_ = CurState::AfterEnd;
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
     }
     cur_index_ = 0;
+    cur_state_ = CurState::Positioned;
     current_key_ = cur_decoded_[0].first;
     return SeekOutcome{SeekHit::Exact, cur_decoded_[0].second, true};
 }
 
 util::Result<SeekOutcome> CdxIndex::prev() {
+    if (cur_state_ == CurState::AfterEnd) {
+        // Resume from last key.
+        return seek_last();
+    }
+    if (cur_state_ == CurState::BeforeBegin ||
+        cur_state_ == CurState::Initial) {
+        return SeekOutcome{SeekHit::BeforeBegin, 0, false};
+    }
     if (cur_index_ < 0) return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     if (cur_index_ > 0) {
         cur_index_ -= 1;
@@ -660,6 +692,7 @@ util::Result<SeekOutcome> CdxIndex::prev() {
     std::uint32_t left = read_u32_le(pg.value()->data() + 4);
     if (left == 0xFFFFFFFFu || left == 0) {
         cur_index_ = -1;
+        cur_state_ = CurState::BeforeBegin;
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     cur_leaf_ = left;
@@ -668,9 +701,11 @@ util::Result<SeekOutcome> CdxIndex::prev() {
     cur_decoded_ = std::move(dec).value();
     if (cur_decoded_.empty()) {
         cur_index_ = -1;
+        cur_state_ = CurState::BeforeBegin;
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     cur_index_ = static_cast<std::int32_t>(cur_decoded_.size() - 1);
+    cur_state_ = CurState::Positioned;
     current_key_ = cur_decoded_[static_cast<std::size_t>(cur_index_)].first;
     return SeekOutcome{SeekHit::Exact, cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
 }
