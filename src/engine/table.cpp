@@ -221,9 +221,17 @@ util::Result<void> Table::goto_bottom() {
 }
 
 util::Result<void> Table::goto_record(std::uint32_t recno) {
-    if (recno == 0 || recno > driver_->record_count()) {
+    // Harbour / SAP-ACE / Clipper convention: GO 0 is a "phantom"
+    // position (BOF/EOF, no record). We model it as Eof, recno=0,
+    // returning success — the caller's next field-read will see
+    // is_eof() and treat values as blanks.
+    if (recno == 0) {
         state_ = State::Eof; recno_ = 0;
-        return util::Error{5000, 0, "recno out of range", ""};
+        return {};
+    }
+    if (recno > driver_->record_count()) {
+        state_ = State::Eof; recno_ = 0;
+        return util::Error{5025, 0, "recno out of range", ""};
     }
     return load_record_(recno);
 }
