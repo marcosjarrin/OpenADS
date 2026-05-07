@@ -1,8 +1,23 @@
 diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
-index 4c37b03a7a..0fc2c2ee91 100644
+index 4c37b03a7a..dc842cf62b 100644
 --- a/contrib/rddads/ads1.c
 +++ b/contrib/rddads/ads1.c
-@@ -1323,6 +1323,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1249,8 +1249,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+     * Clipper clears BOF after seek - I found only one strange situation
+     * when it doesn't but only sometimes. I've not been able to detect
+     * the rule yet. Any how it's much safer to clear it, Druzus.
++    *
++    * OpenADS rddads-compat: an empty (or fully-filtered) table reports
++    * BOTH BOF and EOF (Clipper "Limbo" phantom). Don't break the BOF
++    * half of that — only clear when EOF is not also set.
+     */
+-   pArea->area.fBof = HB_FALSE;
++   if( ! pArea->area.fEof )
++      pArea->area.fBof = HB_FALSE;
+ 
+    if( pucSavedKey )
+       hb_xfree( pucSavedKey );
+@@ -1323,6 +1328,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     {
        HB_ERRCODE errCode = HB_SUCCESS;
        HB_LONG lSkipper;
@@ -10,7 +25,7 @@ index 4c37b03a7a..0fc2c2ee91 100644
  
        if( ! pArea->fPositioned && lToSkip < 0 )
        {
-@@ -1332,10 +1333,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1332,10 +1338,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
  
        if( ! pArea->fPositioned )
        {
