@@ -203,6 +203,9 @@ util::Result<void> Table::goto_top() {
             state_ = State::Eof; recno_ = 0; return {};
         }
         // SET DELETE ON: skip deleted rows in the walk direction.
+        // If everything's deleted (or filtered out by the index +
+        // delete combo) → Limbo so DBGOTOP reports BOF+EOF both
+        // true (Clipper / DBFCDX convention for "no visible row").
         if (!openads::abi::show_deleted()) {
             while (r.value().positioned) {
                 if (auto ld = load_record_(r.value().recno); !ld) {
@@ -214,10 +217,10 @@ util::Result<void> Table::goto_top() {
                 if (!r) return r.error();
                 if (r.value().positioned &&
                     !key_in_bottom_scope_(idx->current_key())) {
-                    state_ = State::Eof; recno_ = 0; return {};
+                    state_ = State::Limbo; recno_ = 0; return {};
                 }
             }
-            state_ = State::Eof; recno_ = 0; return {};
+            state_ = State::Limbo; recno_ = 0; return {};
         }
         return load_record_(r.value().recno);
     }
@@ -262,6 +265,7 @@ util::Result<void> Table::goto_bottom() {
         // as deleted. The B+tree may still hold their entries
         // (CDX records deleted-row-keys; DBFCDX hides them from
         // navigation but keeps them so a later RECALL works).
+        // All deleted -> Limbo (no visible row).
         if (!openads::abi::show_deleted()) {
             while (r.value().positioned) {
                 if (auto ld = load_record_(r.value().recno); !ld) {
@@ -273,7 +277,7 @@ util::Result<void> Table::goto_bottom() {
                 r = idx->prev();
                 if (!r) return r.error();
             }
-            state_ = State::Eof; recno_ = 0; return {};
+            state_ = State::Limbo; recno_ = 0; return {};
         }
         return load_record_(r.value().recno);
     }
