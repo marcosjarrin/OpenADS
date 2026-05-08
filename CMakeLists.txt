@@ -1,10 +1,35 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(OpenADS
-    VERSION 0.0.1
+    VERSION 1.0.0
     LANGUAGES C CXX
     DESCRIPTION "Open-source ADS-compatible engine"
 )
+
+# Resolve the public version string the binary reports through
+# `--version`. Prefer `git describe --tags` so a build straight off
+# tag v1.0.0-rc13 reports "1.0.0-rc13", a build off main (between
+# tags) reports "1.0.0-rc13-7-g<sha>[-dirty]", and a tarball without
+# a .git tree falls back to ${PROJECT_VERSION} from project() above.
+# The previous hard-coded "1.0.0-rc1" string drifted six releases
+# behind reality and surprised users running rc12.
+set(OPENADS_VERSION_STR "${PROJECT_VERSION}")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE _git_describe
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _git_rc)
+    if(_git_rc EQUAL 0 AND NOT _git_describe STREQUAL "")
+        # Strip a leading "v" so tags v1.0.0-rc13 surface as 1.0.0-rc13.
+        string(REGEX REPLACE "^v" "" OPENADS_VERSION_STR "${_git_describe}")
+    endif()
+endif()
+message(STATUS "OpenADS version: ${OPENADS_VERSION_STR}")
+add_compile_definitions(OPENADS_VERSION_STR="${OPENADS_VERSION_STR}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

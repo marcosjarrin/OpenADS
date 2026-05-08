@@ -72,7 +72,16 @@ int main(int argc, char** argv) {
                                      up.substr(colon + 1));
         }
         else if (a == "--version") {
-            std::printf("openads_serverd 1.0.0-rc1\n");
+            // Version string is injected at configure time from
+            // `git describe --tags --always --dirty`, so a release
+            // tagged v1.0.0-rc13 reports "1.0.0-rc13" and a build
+            // straight off main between tags reports
+            // "1.0.0-rc13-7-g<sha>[-dirty]". Falls back to the
+            // CMake PROJECT_VERSION when no .git tree is present.
+#ifndef OPENADS_VERSION_STR
+#  define OPENADS_VERSION_STR "unknown"
+#endif
+            std::printf("openads_serverd %s\n", OPENADS_VERSION_STR);
             return 0;
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
