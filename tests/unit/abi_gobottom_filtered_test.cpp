@@ -67,8 +67,8 @@ TEST_CASE("DBGOBOTTOM with FOR-clause + deletes lands on last live recno") {
                              nullptr, 0, 0, &hI) == 0);
 
     // Delete recnos 1, 3, 6, 7, 13, 14, 15 like the rddtst flow.
-    int dels[] = {1, 3, 6, 7, 13, 14, 15};
-    for (int r : dels) {
+    UNSIGNED32 dels[] = {1u, 3u, 6u, 7u, 13u, 14u, 15u};
+    for (UNSIGNED32 r : dels) {
         REQUIRE(AdsGotoRecord(hT, r) == 0);
         REQUIRE(AdsDeleteRecord(hT) == 0);
     }

@@ -71,8 +71,8 @@ TEST_CASE("rddtst-flow: deletes/recalls/redelete + DBGOTOP under FOR + SET DELET
 
     // Round 1 deletes: 1, 3, 6, 7, 13, 14, 15
     AdsShowDeleted(0);  // SET DELETE ON
-    int dels[] = {1, 3, 6, 7, 13, 14, 15};
-    for (int r : dels) {
+    UNSIGNED32 dels[] = {1u, 3u, 6u, 7u, 13u, 14u, 15u};
+    for (UNSIGNED32 r : dels) {
         REQUIRE(AdsGotoRecord(hT, r) == 0);
         REQUIRE(AdsDeleteRecord(hT) == 0);
     }
@@ -105,7 +105,7 @@ TEST_CASE("rddtst-flow: deletes/recalls/redelete + DBGOTOP under FOR + SET DELET
 
     // SET DELETE ON, redelete 1,3,6,7,13,14,15
     AdsShowDeleted(0);
-    for (int r : dels) {
+    for (UNSIGNED32 r : dels) {
         REQUIRE(AdsGotoRecord(hT, r) == 0);
         REQUIRE(AdsDeleteRecord(hT) == 0);
     }

@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
     std::unordered_set<std::uint64_t> observed;
 
     std::vector<std::thread> ths;
-    ths.reserve(threads);
+    ths.reserve(static_cast<std::size_t>(threads));
     double t0 = now_s();
     for (int i = 0; i < threads; ++i) {
         ths.emplace_back(worker, i, std::ref(data_dir), std::ref(tname),
@@ -343,11 +343,11 @@ int main(int argc, char** argv) {
         "  RESULT: %s\n",
         elapsed, threads,
         static_cast<unsigned long long>(counters.appends.load()),
-        counters.appends.load() / elapsed,
+        static_cast<double>(counters.appends.load()) / elapsed,
         static_cast<unsigned long long>(counters.reads.load()),
-        counters.reads.load() / elapsed,
+        static_cast<double>(counters.reads.load()) / elapsed,
         static_cast<unsigned long long>(counters.locks_ok.load()),
-        counters.locks_ok.load() / elapsed,
+        static_cast<double>(counters.locks_ok.load()) / elapsed,
         static_cast<unsigned long long>(counters.locks_fail.load()),
         static_cast<unsigned long long>(counters.updates_ok.load()),
         static_cast<long long>(final_counter),
