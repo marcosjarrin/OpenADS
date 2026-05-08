@@ -42,6 +42,15 @@ if(OPENADS_WITH_TLS)
     set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
     set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
     set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+    # Force a STATIC mbedtls so the OpenADS DLL / server binary
+    # has no runtime dependency on a system OpenSSL. Reported by
+    # downstream users: a release ZIP without those system DLLs
+    # fails to launch on a clean Windows / macOS box. Static
+    # linking sidesteps that whole class of "missing libssl/
+    # libcrypto" deployment errors.
+    set(USE_STATIC_MBEDTLS_LIBRARY ON  CACHE BOOL "" FORCE)
+    set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS          OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         mbedtls
         GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
@@ -49,7 +58,7 @@ if(OPENADS_WITH_TLS)
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(mbedtls)
-    message(STATUS "OpenADS: TLS enabled via vendored mbedtls 3.6.2")
+    message(STATUS "OpenADS: TLS enabled via vendored mbedtls 3.6.2 (statically linked)")
 endif()
 
 if(OPENADS_WITH_HTTP)

@@ -92,6 +92,24 @@ int main(int argc, char** argv) {
     if (!r) {
         std::fprintf(stderr, "server start failed: %s (sub=%d)\n",
                      r.error().message.c_str(), r.error().sub_code);
+        // The default OpenADS / SAP-ACE wire port is 6262. Port
+        // collisions with the SAP Advantage Database Server service
+        // (when both run on the same host) surface as a generic
+        // bind failure; flag that case explicitly so the operator
+        // knows to either stop the ADS service or pick a free port.
+        if (port == 6262) {
+            std::fprintf(stderr,
+                "hint: port 6262 is the SAP Advantage Database Server\n"
+                "      default. If ADS is running on this host you'll\n"
+                "      hit a bind clash. Either stop the Advantage\n"
+                "      Database Server service first, or pick a free\n"
+                "      port via `--port <N>` (eg. --port 6263).\n");
+        } else {
+            std::fprintf(stderr,
+                "hint: another process is already bound to port %u.\n"
+                "      Either stop it or pick a free port via\n"
+                "      `--port <N>`.\n", port);
+        }
         return 1;
     }
     std::printf("openads_serverd listening on %s:%u (backlog=%d)\n",
