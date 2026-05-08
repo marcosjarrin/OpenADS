@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.0.0-rc11** | 2026-05-08 | M-AOF.1..4 — first working slice of **Advantage Optimized Filters (AOF) — Rushmore-style query optimisation**. `AdsSetAOF` now actually parses + evaluates the cond, installs a per-record bitmap as a filter predicate that `Skip` / `GoTop` honour, and routes individual leaves through CDX / NTX range scans whenever an open index's key expression matches the leaf's field. `AdsGetAOFOptLevel` reports `ADS_OPTIMIZED_FULL` / `PART` / `NONE` based on per-leaf coverage. V1 grammar: `<field> OP <literal>` (`= == != <> # < <= > >=`), `BETWEEN`, `IN`, `AND` / `OR` / `NOT`, parens; both Clipper-style (`.AND.`, `.T.`) and SQL-style keywords; index-accelerated leaves on character / memo fields with bare-field-name index expressions. `tools/bench/openads_bench` carries three AOF workloads — on a 100 000-row synthetic DBF, `AdsSetAOF("TAG='AAAA'")` is 1.83× faster with a TAG index installed (`OptLevel=FULL`) than without (`OptLevel=NONE`). Pinned by 367 / 367 tests, 43 424 / 43 424 assertions; nothing previously-tested broke. M-AOF.5 (sparse-bitmap Skip → O(M) walk through visible set) is the next step and is what unlocks the textbook 10-100× total speedup. |
 | **v1.0.0-rc10** | 2026-05-08 | studio.web.0.17 — Studio's SPA header now carries a deployment-mode badge: 🏠 `LocalServer` (green) when the console is hosted in-process by `ace64.dll` / `ace32.dll` (the rc9 in-DLL Studio), 🌐 `Remote Server` (blue) when hosted by `openads_serverd`. Hover surfaces the active data directory. Driven by a new `mode` field on `/api/health` (`"localserver"` when the `HttpConsole` was started without a backing wire-server pointer, `"remote-server"` otherwise) so two side-by-side Studio tabs are trivial to tell apart at a glance. Failure path is silent — the badge stays hidden if `/api/health` is unreachable, so reverse-proxy deployments that strip unknown fields keep working. |
 | **v1.0.0-rc9** | 2026-05-08 | Embedded Studio in `ace64.dll` / `ace32.dll`. Three new OpenADS-only entry points (`AdsStudioStart(port, data_dir)` / `AdsStudioStop()` / `AdsStudioPort(*port)`) plus an `OPENADS_STUDIO_PORT=<N>` (`OPENADS_STUDIO_DATA`, `OPENADS_STUDIO_HOST`) env-var auto-start hook driven from `DllMain` on Windows / a constructor attribute on POSIX. LocalServer apps (Harbour / X# / Clipper) loading the OpenADS DLL directly now get the same single-page Studio web console + REST surface in their own process — no `openads_serverd.exe` daemon required. The Studio HTTP target is built into the DLL only when `-DOPENADS_WITH_HTTP=ON`; without that flag the three entry points are still exported but return `AE_FUNCTION_NOT_AVAILABLE` so callers can detect the build flavour at runtime. Auto-start path is silent on bind failure so a host loading the DLL on a port-busy box doesn't crash; explicit `AdsStudioStart()` returns `AE_INTERNAL_ERROR` instead. Default bind host is `127.0.0.1` to keep the console off the LAN unless explicitly opted in. |
 | **v1.0.0-rc8** | 2026-05-08 | XSharp-feedback round (Robert van der Hulst): release ZIP now bundles **both** `ace64.dll` (x64) and `ace32.dll` (x86) via the new `tools/scripts/build_release_windows.bat` two-arch driver; vendored `mbedtls 3.6.2` is forced **statically linked** (`USE_STATIC_MBEDTLS_LIBRARY=ON`, `BUILD_SHARED_LIBS=OFF`) so the shipped DLL / `openads_serverd.exe` has zero runtime libssl/libcrypto dependency; `openads_serverd --port <N>` already accepted, the bind-failure path now prints an explicit "port 6262 is the SAP Advantage Database Server default" hint when the operator hits a clash with a running ADS service; `tools/bench/README.md` documents that `openads_bench` synthesises its three-column DBF (`ID N(8,0)`, `TAG C(4)`, `AMT N(8,2)`) on every run from a fixed seed — no shipped fixture, fully reproducible. |
@@ -217,6 +218,96 @@ local-only out of the box. Set `OPENADS_STUDIO_HOST=0.0.0.0` (or
 pass an explicit host through a wrapper) when the deployment
 genuinely needs LAN visibility, and pair it with
 `openads_serverd --http-user user:pass` for HTTP Basic auth.
+
+### AOF — Rushmore-style query optimisation
+
+OpenADS ships a working AOF (Advantage Optimized Filters) layer
+modelled on the Rushmore query-optimisation technique used by
+FoxPro and the original SAP Advantage Database Server. The idea
+is simple: instead of walking every record evaluating the filter
+expression against decoded field values, OpenADS builds a
+per-record bitmap once, with each `<field> OP <literal>` leaf
+served by an existing CDX / NTX index range scan when one is
+available, and Skip / GoTop only visit records whose bit is set.
+
+Minimal Harbour-flavoured C example:
+
+```c
+ADSHANDLE hT, hIdx;
+UNSIGNED8 dbf[]  = "people.dbf";
+UNSIGNED8 cdx[]  = "people.cdx";
+UNSIGNED8 nm[]   = "LASTNAME_IDX";
+UNSIGNED8 expr[] = "LASTNAME";
+UNSIGNED8 cond[] = "LASTNAME = 'SMITH'";
+
+AdsOpenTable(hConn, dbf, NULL, ADS_CDX, ADS_ANSI, 0, 0, 0, &hT);
+
+/* Build an index on the field used by the AOF leaf. Without it, */
+/* AdsSetAOF still works correctly (full-scan bitmap path) but no */
+/* range-scan speedup; AdsGetAOFOptLevel will report NONE.       */
+AdsCreateIndex61(hT, cdx, nm, expr, NULL, NULL, 0, 0, &hIdx);
+
+/* Install the AOF. Skip / GoTop now walk only matching records. */
+AdsSetAOF(hT, cond, 0);
+
+UNSIGNED16 lvl = 0;
+AdsGetAOFOptLevel(hT, &lvl, NULL, NULL);
+/* lvl == ADS_OPTIMIZED_FULL when every leaf served by an index, */
+/* PART when some leaves served + others scanned, NONE otherwise. */
+
+AdsGotoTop(hT);
+UNSIGNED16 eof = 0;
+while (AdsAtEOF(hT, &eof) == 0 && eof == 0) {
+    /* ... process visible record ... */
+    AdsSkip(hT, 1);
+}
+
+AdsClearAOF(hT);
+AdsCloseTable(hT);
+```
+
+V1 grammar (the AOF cond passed to `AdsSetAOF`):
+
+```
+<field> OP <literal>      OP in { = == != <> # < <= > >= }
+<field> BETWEEN a AND b
+<field> IN ( v1, v2, ... )
+expr AND expr             also `.AND.` (Clipper)
+expr OR  expr             also `.OR.`
+NOT expr                  also `.NOT.` and `!`
+( expr )
+```
+
+Identifiers and keywords are case-insensitive; both Clipper-style
+(`.T.`, `.AND.`) and SQL-style keywords are accepted because
+rddads forwards either depending on the call site. Anything
+outside the documented grammar (function calls, arithmetic, LIKE)
+returns `AE_PARSE_ERROR` so the caller can fall back to a manual
+walk; OpenADS does not silently swallow an unsupported expression.
+
+Index-accelerated leaves in V1 cover character / memo fields with
+a bare-field-name index expression. Numeric / date / logical
+fields, and indexes whose expression is `UPPER(field)` /
+`DTOC(field)` / a compound expression, still produce a correct
+bitmap via the per-record fallback — they just don't count as
+"served by index" in the OptLevel report.
+
+Measured speedup (`tools/bench/openads_bench`, 100 000 synthetic
+rows, Windows MSVC x64 Release):
+
+| AOF workload                              | med (ms) | OptLevel | Speedup |
+|-------------------------------------------|---------:|----------|--------:|
+| `AdsSetAOF("TAG='AAAA'")`, no TAG index    |     586  | NONE     |   1.0×  |
+| `AdsSetAOF("TAG='AAAA'")`, TAG indexed     |     321  | FULL     |   1.83× |
+| `AdsSetAOF("TAG BETWEEN 'AAAA' AND 'CCCC'")`, TAG indexed | 321 | FULL | 1.83× |
+
+The 1.83× is the `AdsSetAOF` call itself becoming a range scan
+instead of a full record decode + AST eval per row. The subsequent
+`Skip` / `GoTop` walk through the visible set is still O(N) today
+because `Skip` iterates every recno checking the bitmap. M-AOF.5
+(sparse-bitmap Skip — find-next-set-bit) lifts that to O(M) where
+M is the number of matching records, which is where the textbook
+Rushmore "10-100×" total speedup actually shows up.
 
 ### Performance — cross-platform SQL bench
 
