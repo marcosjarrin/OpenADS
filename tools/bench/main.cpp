@@ -78,12 +78,15 @@ fs::path stage_bench_dbf(const fs::path& dir, std::uint32_t rows) {
         file.push_back(' ');
         std::snprintf(buf, sizeof(buf), "%8u", r);
         for (int i = 0; i < 8; ++i) file.push_back(static_cast<std::uint8_t>(buf[i]));
-        std::array<std::uint8_t, 4> tag{};
-        for (std::size_t i = 0; i < 4; ++i) {
-            tag[i] = static_cast<std::uint8_t>('A' + ((r + static_cast<std::uint32_t>(i)) % 26));
-        }
-        for (std::size_t i = 0; i < 4; ++i)
-            file.push_back(tag[i]);
+        // Cyclic 4-char tags, all 4 chars equal so the literal
+        // value is human-friendly: AAAA, BBBB, CCCC, ..., ZZZZ,
+        // AAAA, ... 26 distinct tags, 100k / 26 ≈ 3846 rows per
+        // tag; selectivity for `TAG = 'AAAA'` is therefore ~3.85%.
+        // Shape matches the prior shifting-cycle generator (same
+        // count of distinct tags, same per-tag row count) but
+        // produces literals a user can type into AdsSetAOF as-is.
+        std::uint8_t tch = static_cast<std::uint8_t>('A' + ((r - 1) % 26));
+        for (std::size_t i = 0; i < 4; ++i) file.push_back(tch);
         seed = seed * 1664525u + 1013904223u;
         double amt = static_cast<double>((seed >> 8) % 100000u);
         amt /= 100.0;
