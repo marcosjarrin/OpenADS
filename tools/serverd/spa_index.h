@@ -17,6 +17,16 @@ namespace openads::studio {
 // All UI state lives in the SPA; the server is stateless. Each
 // REST round-trip opens a short-lived ABI connection.
 
+// The SPA literal exceeds the 65 535-byte minimum required by the
+// C++ standard for a single string literal; clang's
+// -Woverlength-strings flags this even when the concatenation is
+// split across adjacent raw-string chunks. Silence it for the
+// span of the constant only — every other -W flag stays active.
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverlength-strings"
+#endif
+
 inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
 <!doctype html>
 <html lang="en">
@@ -1662,6 +1672,10 @@ applyUrlState();
 </body>
 </html>
 )OPENADS_SPA";
+
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 } // namespace openads::studio
 
