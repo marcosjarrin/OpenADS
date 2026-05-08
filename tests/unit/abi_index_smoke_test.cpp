@@ -120,8 +120,14 @@ TEST_CASE("ABI index smoke: create NTX, seek, walk in order, scope") {
     CHECK(AdsPackTable(hTable) == 0);
     CHECK(AdsZapTable (hTable) == 0);
 
-    // AOF stubs: success and ADS_OPTIMIZED_NONE.
-    UNSIGNED8 cond[8] = "true";
+    // M-AOF.3 — AdsSetAOF now actually parses + evaluates the cond
+    // string. Use a real comparison expression here; the old "true"
+    // stub-friendly literal would no longer parse since bare bool
+    // literals aren't a valid AOF leaf in V1. OptLevel still reports
+    // NONE because the V1 path is a full table scan (M-AOF.4 will
+    // start reporting PART / FULL once leaves route through index
+    // range scans).
+    UNSIGNED8 cond[64] = "NAME = 'X'";
     REQUIRE(AdsSetAOF(hTable, cond, 1) == 0);
     UNSIGNED16 lvl = 0;
     REQUIRE(AdsGetAOFOptLevel(hTable, &lvl, nullptr, nullptr) == 0);

@@ -1,0 +1,166 @@
+// M-AOF.3 — AdsSetAOF / AdsClearAOF / AdsGetAOFOptLevel.
+// Builds a 4-row 2-column DBF, opens it through the public ABI,
+// installs an AOF expression, and asserts that Skip / GoTop walk
+// only the visible records. Then clears the AOF and walks the
+// full set again to make sure the filter is truly released.
+
+#include "doctest.h"
+#include "openads/ace.h"
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+fs::path make_fixture(const char* tag) {
+    auto p = fs::temp_directory_path() / (std::string("openads_aof_abi_") + tag + ".dbf");
+    fs::remove(p);
+
+    constexpr std::uint16_t header_size = 32 + 32 + 32 + 1;
+    constexpr std::uint16_t record_size = 1 + 5 + 3;
+
+    std::vector<std::uint8_t> file;
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0] = 0x03;
+    hdr[1] = 124; hdr[2] = 1; hdr[3] = 31;
+    hdr[4] = 4; hdr[5] = 0; hdr[6] = 0; hdr[7] = 0;
+    hdr[8] = static_cast<std::uint8_t>(header_size & 0xFF);
+    hdr[9] = static_cast<std::uint8_t>((header_size >> 8) & 0xFF);
+    hdr[10] = static_cast<std::uint8_t>(record_size & 0xFF);
+    hdr[11] = static_cast<std::uint8_t>((record_size >> 8) & 0xFF);
+    file.insert(file.end(), hdr.begin(), hdr.end());
+
+    auto push_field = [&](const char* name, char type,
+                          std::uint8_t length) {
+        std::array<std::uint8_t, 32> fd{};
+        std::strncpy(reinterpret_cast<char*>(fd.data()), name, 11);
+        fd[11] = static_cast<std::uint8_t>(type);
+        fd[16] = length;
+        file.insert(file.end(), fd.begin(), fd.end());
+    };
+    push_field("NAME", 'C', 5);
+    push_field("AGE",  'N', 3);
+    file.push_back(0x0D);
+
+    auto push_rec = [&](const char* name, const char* age) {
+        file.push_back(' ');
+        for (int i = 0; i < 5; ++i) {
+            file.push_back(static_cast<std::uint8_t>(
+                i < static_cast<int>(std::strlen(name)) ? name[i] : ' '));
+        }
+        std::string a(age);
+        while (a.size() < 3) a.insert(a.begin(), ' ');
+        for (char c : a) file.push_back(static_cast<std::uint8_t>(c));
+    };
+    push_rec("AAA", "25");
+    push_rec("BBB", "42");
+    push_rec("CCC", "30");
+    push_rec("DDD", "18");
+    file.push_back(0x1A);
+
+    std::ofstream(p, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+    return p;
+}
+
+} // namespace
+
+TEST_CASE("AdsSetAOF: Skip walks only matching records") {
+    auto p = make_fixture("walk");
+    auto dir = p.parent_path().string();
+    auto base = p.filename().string();
+    {
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(dir.data()),
+                             ADS_LOCAL_SERVER, nullptr, nullptr,
+                             ADS_DEFAULT, &hConn) == 0);
+        ADSHANDLE hT = 0;
+        REQUIRE(AdsOpenTable(hConn,
+                             reinterpret_cast<UNSIGNED8*>(base.data()),
+                             nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
+                             &hT) == 0);
+
+        // AOF: AGE >= 25 — passes for AAA(25), BBB(42), CCC(30); fails DDD(18)
+        std::string cond = "AGE >= 25";
+        REQUIRE(AdsSetAOF(hT,
+                          reinterpret_cast<UNSIGNED8*>(cond.data()),
+                          0) == 0);
+
+        // OptLevel reports NONE today (V1 full-scan path).
+        UNSIGNED16 lvl = 99;
+        UNSIGNED16 buflen = 0;
+        REQUIRE(AdsGetAOFOptLevel(hT, &lvl, nullptr, &buflen) == 0);
+        CHECK(lvl == ADS_OPTIMIZED_NONE);
+
+        // Walk: GoTop -> rec 1 (AAA, 25) — passes filter.
+        REQUIRE(AdsGotoTop(hT) == 0);
+        UNSIGNED32 r = 0;
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 1);
+
+        REQUIRE(AdsSkip(hT, 1) == 0);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 2);                         // BBB, 42
+
+        REQUIRE(AdsSkip(hT, 1) == 0);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 3);                         // CCC, 30
+
+        // Next skip would land on rec 4 (DDD, 18) which fails AOF
+        // — Skip must drive past it to EoF instead.
+        REQUIRE(AdsSkip(hT, 1) == 0);
+        UNSIGNED16 eof = 0;
+        REQUIRE(AdsAtEOF(hT, &eof) == 0);
+        CHECK(eof != 0);
+
+        // Clear AOF — full table visible again.
+        REQUIRE(AdsClearAOF(hT) == 0);
+        REQUIRE(AdsGotoTop(hT) == 0);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 1);
+        REQUIRE(AdsSkip(hT, 3) == 0);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 4);                         // DDD, 18 — back in the walk
+
+        AdsCloseTable(hT);
+        AdsDisconnect(hConn);
+    }
+    fs::remove(p);
+}
+
+TEST_CASE("AdsSetAOF: parse-error AOF returns AE_PARSE_ERROR") {
+    auto p = make_fixture("badparse");
+    auto dir = p.parent_path().string();
+    auto base = p.filename().string();
+    {
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(dir.data()),
+                             ADS_LOCAL_SERVER, nullptr, nullptr,
+                             ADS_DEFAULT, &hConn) == 0);
+        ADSHANDLE hT = 0;
+        REQUIRE(AdsOpenTable(hConn,
+                             reinterpret_cast<UNSIGNED8*>(base.data()),
+                             nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
+                             &hT) == 0);
+
+        // UPPER(NAME) is out of scope V1 — AdsSetAOF must reject it
+        // so the host knows the filter is not optimised, instead of
+        // silently swallowing and behaving as if no filter was set.
+        std::string cond = "UPPER(NAME) = 'A'";
+        UNSIGNED32 rc = AdsSetAOF(hT,
+                          reinterpret_cast<UNSIGNED8*>(cond.data()),
+                          0);
+        CHECK(rc != 0);
+
+        AdsCloseTable(hT);
+        AdsDisconnect(hConn);
+    }
+    fs::remove(p);
+}

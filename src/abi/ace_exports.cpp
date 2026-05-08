@@ -6,6 +6,8 @@
 #include "abi/charset.h"
 #include "abi/last_error.h"
 
+#include "engine/aof_eval.h"
+#include "engine/aof_expr.h"
 #include "engine/codepage.h"
 #include "engine/fts.h"
 #include "engine/index_expr.h"
@@ -3478,18 +3480,60 @@ UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
                 "AdsZapTable lands in M4 alongside memo store");
 }
 
-UNSIGNED32 AdsSetAOF(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucCondition*/,
+// M-AOF.3 — wire AdsSetAOF / AdsClearAOF to the
+// engine::aof::evaluate full-scan bitmap evaluator and install the
+// resulting per-record bitmap as the table-level filter predicate.
+// Skip / GoTop / GoBottom already honour the predicate, so the
+// ABI surface gets correct AOF semantics today; M-AOF.4 will swap
+// individual leaves to index range scans without changing this
+// entry-point contract.
+//
+// AdsGetAOFOptLevel still reports ADS_OPTIMIZED_NONE because the
+// V1 bitmap is built by a full table scan — no indexes are
+// consulted yet. M-AOF.4 will start reporting PART / FULL based
+// on per-leaf coverage. The "is an AOF currently installed at
+// all?" signal is exposed separately so the ABI layer can keep
+// AdsSetFilter and AdsSetAOF distinct.
+UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
                      UNSIGNED16 /*usResolve*/) {
-    return ok();   // accept silently; AOF level remains NONE
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (pucCondition == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "AdsSetAOF: NULL condition");
+    }
+    auto cond = openads::abi::to_internal(pucCondition, 0);
+    auto ast = openads::engine::aof::parse(cond);
+    if (!ast) {
+        // Per ADS docs, an AOF expression that cannot be parsed
+        // means the filter is not optimised at all — the caller
+        // is then free to walk the table manually. Surface the
+        // parse error so the host knows why optimisation was
+        // declined; don't degrade silently.
+        return fail(ast.error());
+    }
+    auto bm = openads::engine::aof::evaluate(*ast.value(), *t);
+    if (!bm) return fail(bm.error());
+    t->install_aof_bitmap(std::move(bm).value());
+    return ok();
 }
 
-UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE /*hTable*/, UNSIGNED16* pusLevel,
+UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
+    Table* t = get_table(hTable);
+    // V1 reports NONE even when AOF is installed: the bitmap was
+    // built by a full table scan, so by the strict ADS definition
+    // the filter is "not optimised" — no index range was used. The
+    // signal still flips to PART / FULL once M-AOF.4 starts routing
+    // individual leaves through CDX / NTX range scans.
+    (void)t;
     if (pusLevel != nullptr) *pusLevel = ADS_OPTIMIZED_NONE;
     return ok();
 }
 
-UNSIGNED32 AdsClearAOF(ADSHANDLE /*hTable*/) {
+UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    t->clear_filter();
     return ok();
 }
 

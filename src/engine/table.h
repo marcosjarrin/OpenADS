@@ -169,8 +169,29 @@ public:
     // advance past non-matching records in their movement direction.
     using RowPredicate = std::function<bool(Table&)>;
     void set_filter(RowPredicate p)   { filter_ = std::move(p); }
-    void clear_filter()                { filter_ = nullptr; }
+    void clear_filter()                { filter_ = nullptr; aof_active_ = false; }
     bool has_filter() const noexcept   { return static_cast<bool>(filter_); }
+
+    // M-AOF.3 — install a per-record bitmap built by aof::evaluate
+    // as the table-level filter predicate. Honoured by goto_top,
+    // goto_bottom, and skip exactly like a hand-rolled SetFilter
+    // closure; the difference is that the bitmap is precomputed
+    // once (O(N)) and the predicate at navigation time is O(1) per
+    // record rather than re-evaluating the filter expression.
+    // `aof_active()` lets the ABI layer report AdsGetAOFOptLevel
+    // distinctly from a plain SetFilter installation.
+    void install_aof_bitmap(std::vector<bool> bm) {
+        // The bitmap moves into the closure; navigation state
+        // owns it from this point on.
+        aof_active_ = true;
+        auto p = std::make_shared<std::vector<bool>>(std::move(bm));
+        filter_ = [p](Table& t) -> bool {
+            std::uint32_t r = t.recno();
+            if (r == 0 || r > p->size()) return false;
+            return static_cast<bool>((*p)[r - 1]);
+        };
+    }
+    bool aof_active() const noexcept   { return aof_active_; }
     bool passes_filter() {
         return !filter_ || filter_(*this);
     }
@@ -266,6 +287,7 @@ private:
     std::vector<std::uint8_t>                     record_buf_;
     std::string                                   path_;
     bool                                          last_seek_found_ = false;
+    bool                                          aof_active_      = false;
 
     // M10.6 recno-sequence cursor — empty means "natural order".
     std::vector<std::uint32_t>                    recno_sequence_;
