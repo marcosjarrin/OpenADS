@@ -37,15 +37,6 @@ std::string rtrim(std::string s) {
     return s;
 }
 
-// Lowercase a string for case-insensitive field name matching.
-std::string lower(std::string s) {
-    for (auto& c : s) {
-        c = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(c)));
-    }
-    return s;
-}
-
 // Compare a decoded field value against a literal Value. Returns -1
 // / 0 / +1 like strcmp. Coerces both sides into the field's
 // "natural" domain (string for C/M, double for N/F/I/B/Y/D, bool
@@ -229,31 +220,6 @@ std::optional<std::string>
 encode_char_key(const Value& v, std::uint16_t klen) {
     if (auto p = std::get_if<std::string>(&v)) return pad_key(*p, klen);
     return std::nullopt;
-}
-
-// Walk an index from the current cursor while pred(current_key())
-// is true; set the bit for each recno seen. Caller positions the
-// cursor before the call.
-util::Result<void>
-scan_while(drivers::IIndex& idx, Bitmap& bm,
-           std::uint32_t rc,
-           const std::function<bool(const std::string&)>& pred) {
-    for (;;) {
-        std::string k = idx.current_key();
-        if (!pred(k)) break;
-        // Index drivers may return SeekOutcome with positioned=false
-        // once we've walked off the end; loop terminator below covers
-        // that, but we still guard the recno write here.
-        // (recno fetched from a fresh next/seek call; current_key
-        //  alone doesn't carry it, so we can't write the bit until
-        //  the caller threads recno through. The driver-level cursor
-        //  state holds recno on each step — we read it via next().)
-        (void)bm; (void)rc;
-        // Defer write to driver-level recno: implemented in the
-        // outer loop by passing recno alongside current_key.
-        break;
-    }
-    return {};
 }
 
 // Drive a seek + walk loop: starting from `start`, advance with
