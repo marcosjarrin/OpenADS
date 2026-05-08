@@ -1292,8 +1292,17 @@ bool HttpConsole::start(const std::string& host,
 
     srv.Get("/api/health", [this](const httplib::Request&,
                                    httplib::Response& res) {
+        // studio.web.0.17 — expose deployment mode so the SPA can
+        // render a "LocalServer" vs "Remote Server" badge in the
+        // header. The presence of a backing wire-server pointer
+        // (wire_srv_) is the canonical signal: openads_serverd
+        // hands one in, the in-process ace64.dll path passes
+        // nullptr.
+        const char* mode =
+            (wire_srv_ != nullptr) ? "remote-server" : "localserver";
         json j{{"status", "ok"},
                {"engine", "openads"},
+               {"mode",   mode},
                {"data_dir", data_dir_}};
         res.set_content(j.dump(), "application/json");
     });

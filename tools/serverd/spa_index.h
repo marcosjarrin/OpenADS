@@ -175,6 +175,17 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
               padding:5px 12px;border-radius:3px">
       📖 Docs
     </a>
+    <!-- studio.web.0.17 — deployment-mode badge. Filled in by
+         applyUrlState() from /api/health: 🏠 LocalServer when
+         the console is hosted in-process by ace64.dll, 🌐 Remote
+         Server when hosted by openads_serverd. -->
+    <div id="mode-badge"
+         title="Studio deployment mode"
+         style="font-size:13px;font-weight:600;letter-spacing:0.3px;
+                padding:4px 10px;border-radius:3px;
+                background:rgba(255,255,255,0.18);
+                border:1px solid rgba(255,255,255,0.4);
+                color:white;display:none"></div>
     <div class="status" id="status">…</div>
   </div>
 </header>
@@ -1411,9 +1422,41 @@ $("dd-drop").addEventListener("click", async () => {
   } catch (e) { alert(e.message); }
 });
 
+// studio.web.0.17 — paint the mode badge once /api/health responds.
+// Works alongside loadTables() in applyUrlState() rather than as a
+// separate boot path so the SPA only does one extra round-trip on
+// startup.
+async function paintModeBadge() {
+  try {
+    const r = await fetch("/api/health");
+    if (!r.ok) return;
+    const j = await r.json();
+    const el = document.getElementById("mode-badge");
+    if (!el) return;
+    if (j.mode === "localserver") {
+      el.textContent = "🏠 LocalServer";
+      el.style.background = "rgba(34,197,94,0.30)";  // green tint
+      el.style.borderColor = "rgba(34,197,94,0.65)";
+      el.style.display = "inline-block";
+      el.title = "Studio is running in-process inside ace64.dll / "
+               + "ace32.dll (LocalServer). Data dir: "
+               + (j.data_dir || ".");
+    } else if (j.mode === "remote-server") {
+      el.textContent = "🌐 Remote Server";
+      el.style.background = "rgba(59,130,246,0.30)"; // blue tint
+      el.style.borderColor = "rgba(59,130,246,0.65)";
+      el.style.display = "inline-block";
+      el.title = "Studio is hosted by openads_serverd alongside the "
+               + "OpenADS TCP wire protocol. Data dir: "
+               + (j.data_dir || ".");
+    }
+  } catch (e) { /* ignore — badge stays hidden on failure */ }
+}
+
 // URL params let docs / scripts deep-link to a specific tab + table.
 //   /?table=employees.dbf&tab=structure
 async function applyUrlState() {
+  paintModeBadge();
   await loadTables();
   const u = new URL(location.href);
   const t = u.searchParams.get("table");
