@@ -257,6 +257,14 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
                 data-i18n="apply">Apply</button>
         <button class="btn btn-secondary" id="browse-aof-clear"
                 data-i18n="clear">Clear</button>
+        <!-- studio.web.0.20 — guided demo button. One click runs
+             the full AOF (Rushmore) story end-to-end against the
+             active table: pick a real value from row 1, install
+             the AOF (lands at NONE since no index yet), trigger
+             the auto-suggested CREATE INDEX, re-apply, end at
+             FULL. Status line below narrates each step. -->
+        <button class="btn btn-secondary" id="browse-aof-demo"
+                title="Run the full AOF demo end-to-end on the active table">▶ Demo</button>
         <span id="browse-aof-badge"
               title="AdsGetAOFOptLevel — shows whether the filter is served by an index"
               style="font-size:13px;font-weight:600;
@@ -272,6 +280,10 @@ inline constexpr const char kSpaIndexHtml[] = R"OPENADS_SPA(
               style="font-size:13px;color:var(--muted);
                      display:none"></span>
       </div>
+      <!-- studio.web.0.20 — narration line for the guided Demo. -->
+      <div id="browse-aof-demo-status"
+           style="font-size:13px;color:var(--muted);
+                  margin:2px 0 4px 0;display:none"></div>
       <div id="browse-grid" class="empty" data-i18n="browse_pick">Select a table on the left.</div>
       <div class="pager" id="browse-pager"></div>
     </div>
@@ -1644,6 +1656,109 @@ document.getElementById("browse-aof")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     document.getElementById("browse-aof-apply").click();
   }
+});
+
+// studio.web.0.20 — guided demo. Walks the AOF story end-to-end
+// against whatever table is currently active in the Browse pane:
+//   1. read row 1 to pick a real value the user will see match;
+//   2. install the AOF — lands at NONE because no index exists;
+//   3. find the auto-suggested "Create index on <field>" chip and
+//      click it; on success the AOF is re-applied automatically
+//      and the badge flips to FULL;
+//   4. narrate every step in the status line so the user can read
+//      what just happened without having to know the underlying
+//      ABI calls.
+async function runAofDemo() {
+  const status = document.getElementById("browse-aof-demo-status");
+  const setStatus = (msg) => {
+    if (!status) return;
+    status.style.display = "block";
+    status.textContent = msg;
+  };
+  if (!state.table) { alert("Pick a table on the left first."); return; }
+
+  setStatus("Step 1/4 — peeking at row 1 to find a real TAG value to filter on…");
+  let demoCol = null, demoVal = null;
+  try {
+    const peek = await api(`/api/tables/${encodeURIComponent(state.table)}` +
+                            `/rows?offset=0&limit=1`);
+    const cols = peek.cols || [];
+    const types = peek.col_types || [];
+    const r0 = (peek.rows || [])[0];
+    if (!r0) { setStatus("Demo aborted — table is empty."); return; }
+    // Pick the first character/memo column (V1 indexable types).
+    for (let i = 0; i < cols.length; ++i) {
+      if (types[i] === 4 || types[i] === 5) {
+        demoCol = cols[i];
+        demoVal = ("" + r0[i + 1]).trim();   // r0[0] is meta
+        break;
+      }
+    }
+    if (!demoCol) {
+      setStatus("Demo aborted — no character/memo column to filter on. " +
+                "(V1 only accelerates char/memo leaves; numeric/date/" +
+                "logical leaves stay on the per-record fallback.)");
+      return;
+    }
+  } catch (e) { setStatus("Demo aborted: " + e.message); return; }
+
+  const cond = `${demoCol} = '${demoVal}'`;
+  document.getElementById("browse-aof").value = cond;
+  state.aofCond = cond;
+  state.browseOffset = 0;
+
+  setStatus(`Step 2/4 — applying AOF: ${cond}. ` +
+            `Skip / GoTop will now walk only matching records. ` +
+            `(No index on ${demoCol} yet, so AdsGetAOFOptLevel reports NONE — bitmap built by full-scan.)`);
+  await loadBrowse();
+  await new Promise(r => setTimeout(r, 1500));
+
+  const data = state.lastBrowseData || {};
+  if (data.aof_level === "FULL") {
+    setStatus(`Demo done — AOF for ${cond} already at OptLevel FULL ` +
+              `(an index on ${demoCol} was already in place).`);
+    return;
+  }
+
+  // Find the chip we just rendered and click it.
+  setStatus(`Step 3/4 — clicking the suggested "Create index on ${demoCol}" chip. ` +
+            `This runs CREATE INDEX ${demoCol}_IDX ON ${state.table} (${demoCol}) ` +
+            `and re-applies the AOF.`);
+  const hints = document.getElementById("browse-aof-hints");
+  let chip = null;
+  if (hints) {
+    chip = Array.from(hints.querySelectorAll("button"))
+                .find(b => (b.textContent || "").indexOf(demoCol) >= 0);
+  }
+  if (!chip) {
+    setStatus("Demo aborted — could not find the auto-suggested " +
+              `"Create index on ${demoCol}" chip.`);
+    return;
+  }
+  chip.click();
+  await new Promise(r => setTimeout(r, 1500));
+
+  // After the chip's own loadBrowse() finishes, the badge should be FULL.
+  const final = state.lastBrowseData || {};
+  if (final.aof_level === "FULL") {
+    setStatus(`Step 4/4 — done. AOF for ${cond} is now served by the new ` +
+              `${demoCol}_IDX index range scan: OptLevel = FULL. The same ` +
+              `Skip / GoTop walk now visits only the ~${(final.total||0)} ` +
+              `matching records, bypassing the per-record AST evaluation. ` +
+              `Try Clear to drop the AOF and walk the whole table again.`);
+  } else if (final.aof_level === "PART") {
+    setStatus(`Step 4/4 — partial. OptLevel = PART. Some leaves still fall ` +
+              `back to the per-record evaluation; chips above remain for the ` +
+              `unindexed fields.`);
+  } else {
+    setStatus(`Step 4/4 — index created but OptLevel still NONE. ` +
+              `That can happen if the field type isn't index-accelerated ` +
+              `in V1 (only char / memo qualify). See the docs for details.`);
+  }
+}
+
+document.getElementById("browse-aof-demo")?.addEventListener("click", () => {
+  runAofDemo();
 });
 
 // URL params let docs / scripts deep-link to a specific tab + table.
