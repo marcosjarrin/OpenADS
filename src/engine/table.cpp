@@ -290,10 +290,16 @@ util::Result<void> Table::goto_bottom() {
 
 util::Result<void> Table::goto_record(std::uint32_t recno) {
     // Harbour / SAP-ACE / Clipper convention: GO 0 is the phantom
-    // position. On empty table → Limbo (BOF+EOF). Otherwise → Eof.
+    // position. On empty table → Limbo (BOF+EOF). Otherwise → Eof,
+    // unless we were already sitting in Limbo (e.g. after a
+    // GOTOP that walked over an all-deleted set under SET
+    // DELETE ON) — preserve Limbo then so DBGOTO(0) doesn't
+    // accidentally promote to Eof and lose the BOF half.
     if (recno == 0) {
-        state_ = (driver_->record_count() == 0)
-                 ? State::Limbo : State::Eof;
+        if (driver_->record_count() == 0 || state_ == State::Limbo) {
+            state_ = State::Limbo; recno_ = 0; return {};
+        }
+        state_ = State::Eof;
         recno_ = 0;
         return {};
     }

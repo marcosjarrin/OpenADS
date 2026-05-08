@@ -637,6 +637,14 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
         cur_decoded_ = std::move(dec).value();
         if (cur_decoded_.empty()) break;
     }
+    // Search key was strictly greater than every key in the tree.
+    // Park the cursor "past" the last entry so the next prev()
+    // walks back onto the real last key, and next() reports
+    // AfterEnd. Without this the cursor would stay at whatever
+    // seek_first left it (first leaf, index 0), which made SKIP
+    // after a hard-seek miss > all walk forward from the front.
+    cur_state_ = CurState::AfterEnd;
+    cur_index_ = -1;
     return SeekOutcome{SeekHit::AfterEnd, 0, false};
 }
 
