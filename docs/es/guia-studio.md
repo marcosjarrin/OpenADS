@@ -8,12 +8,23 @@ permalink: /es/guia-studio/
 
 # Studio — consola web
 
-OpenADS Studio es una consola web estilo phpMyAdmin embebida en
-el binario `openads_serverd`. Corre donde corre el daemon
-(Windows, Linux, macOS) y se accede desde cualquier navegador
-de la red — sin cliente nativo que instalar.
+OpenADS Studio es una consola web estilo phpMyAdmin que lista
+las tablas de la conexión, muestra su esquema, ejecuta SQL ad-hoc
+e inspecciona registros (incluidos campos memo / binarios). Viene
+en dos modos:
 
-## Habilitar + arrancar
+- **Modo Remote-Server** — embebida dentro de `openads_serverd.exe`.
+  El daemon expone tanto el protocolo wire OpenADS (TCP) como el
+  listener HTTP de Studio en paralelo. Recomendado para
+  despliegues compartidos / multi-usuario.
+- **Modo LocalServer** — embebida dentro de `ace64.dll` /
+  `ace32.dll`. Una aplicación Harbour / X# / Clipper que carga la
+  DLL OpenADS directamente obtiene la misma consola web Studio en
+  su propio proceso, sin necesidad de daemon separado. Recomendado
+  para apps de escritorio mono-usuario, sesiones de depuración o
+  para inspeccionar un proceso Clipper en marcha desde el navegador.
+
+## Habilitar + arrancar — Remote Server (`openads_serverd`)
 
 ```sh
 cmake -S . -B build/http -DOPENADS_WITH_HTTP=ON
@@ -27,6 +38,77 @@ cmake --build build/http --target openads_serverd --config Release
 ```
 
 Después abre `http://<host-servidor>:6263/`.
+
+## Habilitar + arrancar — LocalServer (in-process)
+
+Studio se compila dentro de `openads_ace` (es decir, `ace64.dll` /
+`ace32.dll`) cuando el build se configura con
+`-DOPENADS_WITH_HTTP=ON`. Tres entry points propios de OpenADS
+controlan la consola in-process:
+
+```c
+UNSIGNED32 AdsStudioStart(UNSIGNED16 usPort, UNSIGNED8* pucDataDir);
+UNSIGNED32 AdsStudioStop (void);
+UNSIGNED32 AdsStudioPort (UNSIGNED16* pusPort);
+```
+
+Dos formas de habilitarlo:
+
+**1) Programáticamente.** Desde la app anfitriona (cualquier
+lenguaje que pueda llamar al ABI C — Harbour, X#, Clipper, C++,
+Python vía `ctypes`, …):
+
+```c
+AdsStudioStart(8080, (UNSIGNED8*)"C:\\app\\datos");
+/* ... ShellExecute("http://localhost:8080") ... */
+AdsStudioStop();
+```
+
+`AdsStudioStart` devuelve `AE_SUCCESS` (0) si todo va bien,
+`AE_INTERNAL_ERROR` si el bind / listen falla (puerto ocupado o
+`pucDataDir == NULL`), o `AE_FUNCTION_NOT_AVAILABLE` si la DLL se
+compiló sin `-DOPENADS_WITH_HTTP=ON`.
+
+**2) Auto-start por variable de entorno.** Define
+`OPENADS_STUDIO_PORT=<puerto>` antes de lanzar la app anfitriona
+y la DLL arranca Studio automáticamente al cargarse:
+
+```bat
+set OPENADS_STUDIO_PORT=8080
+set OPENADS_STUDIO_DATA=C:\app\datos      :: por defecto = "."
+set OPENADS_STUDIO_HOST=127.0.0.1         :: por defecto = 127.0.0.1
+start MiApp.exe
+```
+
+El hook de auto-start corre desde `DllMain DLL_PROCESS_ATTACH` en
+Windows y desde un constructor attribute en POSIX. Sin
+`OPENADS_STUDIO_PORT` el hook no hace nada — la DLL no bindea
+ningún puerto a menos que la app lo pida expresamente. Los
+fallos de bind durante el auto-start son silenciosos para que el
+proceso anfitrión nunca falle al cargar por una colisión de
+puerto Studio; el `AdsStudioStart()` explícito sí devuelve
+`AE_INTERNAL_ERROR` en ese caso.
+
+### Locking + acceso compartido
+
+Studio abre las tablas en sólo-lectura mediante conexiones ABI
+de corta vida. Si la app tiene una tabla en modo EXCLUSIVE, el
+navegador verá un error "table busy" para esa tabla hasta que la
+app libere el lock exclusivo. Los opens compartidos conviven sin
+problema, así que el patrón típico `USE … SHARED` de Harbour
+funciona out of the box.
+
+### Host de bind por defecto
+
+El host de bind por defecto es `127.0.0.1`, **no** `0.0.0.0` —
+Studio queda local-only por defecto, así que una app de escritorio
+que cargue la DLL no expone silenciosamente su directorio de datos
+en la LAN. Define `OPENADS_STUDIO_HOST=0.0.0.0` (o pasa un host
+explícito por wrapper) cuando se necesite visibilidad LAN, y
+combínalo con HTTP Basic auth (Remote Server admite usuarios vía
+`--http-user`; LocalServer deja la consola abierta por diseño —
+ponla detrás de un reverse proxy si tiene que estar en algo
+distinto de `localhost`).
 
 ![Pestaña inicio de Studio](/OpenADS/assets/img/studio/01-home.png)
 

@@ -265,4 +265,7 @@ EXPORTS
     AdsRegisterProgressCallback
     AdsTestLogin
     AdsTestRecLocks
+    AdsStudioStart
+    AdsStudioStop
+    AdsStudioPort
 

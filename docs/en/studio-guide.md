@@ -8,12 +8,23 @@ permalink: /en/studio-guide/
 
 # Studio — web console
 
-OpenADS Studio is a phpMyAdmin-style web console embedded in the
-`openads_serverd` binary. It runs anywhere the daemon runs
-(Windows, Linux, macOS) and is reachable from any browser on
-the network — no native client to install.
+OpenADS Studio is a phpMyAdmin-style web console that lists the
+connection's tables, shows their schema, runs ad-hoc SQL, and
+inspects records (including memo / binary fields). It comes in
+two flavours:
 
-## Enable + launch
+- **Remote-Server mode** — embedded inside `openads_serverd.exe`.
+  The daemon serves both the OpenADS wire protocol (TCP) and the
+  Studio HTTP listener side-by-side. Best for shared / multi-user
+  deployments.
+- **LocalServer mode** — embedded inside `ace64.dll` / `ace32.dll`
+  itself. A Harbour / X# / Clipper application that loads the
+  OpenADS DLL directly gets the same Studio web console in its
+  own process, no separate daemon required. Best for single-user
+  desktop apps, debugging sessions, or inspecting a running
+  Clipper process from a browser.
+
+## Enable + launch — Remote Server (`openads_serverd`)
 
 ```sh
 # Configure with HTTP support
@@ -29,6 +40,75 @@ cmake --build build/http --target openads_serverd --config Release
 ```
 
 Then open `http://<server-host>:6263/` in any browser.
+
+## Enable + launch — LocalServer (in-process)
+
+The Studio HTTP target is folded into `openads_ace` (i.e.
+`ace64.dll` / `ace32.dll`) when the build is configured with
+`-DOPENADS_WITH_HTTP=ON`. Three OpenADS-only entry points drive
+the in-process console:
+
+```c
+UNSIGNED32 AdsStudioStart(UNSIGNED16 usPort, UNSIGNED8* pucDataDir);
+UNSIGNED32 AdsStudioStop (void);
+UNSIGNED32 AdsStudioPort (UNSIGNED16* pusPort);
+```
+
+Two ways to enable it:
+
+**1) Programmatic.** From the host application (any language that
+can call the C ABI — Harbour, X#, Clipper, C++, Python via
+`ctypes`, …):
+
+```c
+AdsStudioStart(8080, (UNSIGNED8*)"C:\\app\\data");
+/* ... ShellExecute("http://localhost:8080") ... */
+AdsStudioStop();
+```
+
+`AdsStudioStart` returns `AE_SUCCESS` (0) on success,
+`AE_INTERNAL_ERROR` if the bind / listen fails (port in use, or
+`pucDataDir == NULL`), or `AE_FUNCTION_NOT_AVAILABLE` if the DLL
+was built without `-DOPENADS_WITH_HTTP=ON`.
+
+**2) Environment-driven auto-start.** Set
+`OPENADS_STUDIO_PORT=<port>` before launching the host app and
+the DLL boots Studio automatically when it loads:
+
+```bat
+set OPENADS_STUDIO_PORT=8080
+set OPENADS_STUDIO_DATA=C:\app\data       :: default = "."
+set OPENADS_STUDIO_HOST=127.0.0.1         :: default = 127.0.0.1
+start MyApp.exe
+```
+
+The auto-start hook runs from `DllMain DLL_PROCESS_ATTACH` on
+Windows and a constructor attribute on POSIX. Without
+`OPENADS_STUDIO_PORT` the hook is a no-op — the DLL will not
+bind any port unless the host explicitly asks for one. Bind
+failures during auto-start are silent so the host process never
+fails to load over a Studio port collision; explicit
+`AdsStudioStart()` returns `AE_INTERNAL_ERROR` instead.
+
+### Locking + shared access
+
+Studio opens tables read-only via short-lived ABI connections.
+If your application holds a table in EXCLUSIVE mode, the
+browser will see a "table busy" error for that table until the
+app releases the exclusive lock. Shared opens coexist fine, so
+the typical Harbour `USE … SHARED` pattern works out of the box.
+
+### Bind-host default
+
+The default bind host is `127.0.0.1`, **not** `0.0.0.0` — Studio
+is local-only out of the box, so a desktop app loading the DLL
+does not silently expose its data directory to the LAN. Set
+`OPENADS_STUDIO_HOST=0.0.0.0` (or pass an explicit host through
+a wrapper) when LAN visibility is required, and pair it with
+HTTP Basic auth (Remote Server mode adds users via
+`--http-user`; LocalServer mode currently leaves the console
+open by design — wrap it behind a reverse proxy if it needs to
+face anything other than `localhost`).
 
 ![Studio home pane — table list + welcome](/OpenADS/assets/img/studio/01-home.png)
 

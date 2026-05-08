@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.0.0-rc9** | 2026-05-08 | Embedded Studio in `ace64.dll` / `ace32.dll`. Three new OpenADS-only entry points (`AdsStudioStart(port, data_dir)` / `AdsStudioStop()` / `AdsStudioPort(*port)`) plus an `OPENADS_STUDIO_PORT=<N>` (`OPENADS_STUDIO_DATA`, `OPENADS_STUDIO_HOST`) env-var auto-start hook driven from `DllMain` on Windows / a constructor attribute on POSIX. LocalServer apps (Harbour / X# / Clipper) loading the OpenADS DLL directly now get the same single-page Studio web console + REST surface in their own process — no `openads_serverd.exe` daemon required. The Studio HTTP target is built into the DLL only when `-DOPENADS_WITH_HTTP=ON`; without that flag the three entry points are still exported but return `AE_FUNCTION_NOT_AVAILABLE` so callers can detect the build flavour at runtime. Auto-start path is silent on bind failure so a host loading the DLL on a port-busy box doesn't crash; explicit `AdsStudioStart()` returns `AE_INTERNAL_ERROR` instead. Default bind host is `127.0.0.1` to keep the console off the LAN unless explicitly opted in. |
 | **v1.0.0-rc8** | 2026-05-08 | XSharp-feedback round (Robert van der Hulst): release ZIP now bundles **both** `ace64.dll` (x64) and `ace32.dll` (x86) via the new `tools/scripts/build_release_windows.bat` two-arch driver; vendored `mbedtls 3.6.2` is forced **statically linked** (`USE_STATIC_MBEDTLS_LIBRARY=ON`, `BUILD_SHARED_LIBS=OFF`) so the shipped DLL / `openads_serverd.exe` has zero runtime libssl/libcrypto dependency; `openads_serverd --port <N>` already accepted, the bind-failure path now prints an explicit "port 6262 is the SAP Advantage Database Server default" hint when the operator hits a clash with a running ADS service; `tools/bench/README.md` documents that `openads_bench` synthesises its three-column DBF (`ID N(8,0)`, `TAG C(4)`, `AMT N(8,2)`) on every run from a fixed seed — no shipped fixture, fully reproducible. |
 | **v1.0.0-rc7** | 2026-05-08 | Harbour `rddtst.prg`: 442 / 442 PASS via `contrib/rddads` against OpenADS `ace64.dll` (vs 369 / 442 for native DBFCDX). 28 commits in the session: rddads default-connection fallback, ORDSETFOCUS by CDX-insertion order, CDX FOR-clause filter + sibling-tag resync on CREATE INDEX, SET DELETED skip-deleted in goto/skip walks, AfterEndKey / Between cursor states, empty-key DBSEEK quirk, DOUBLEKEY field-width formatting, soft-seek-key-below-first → EoF, DESCEND walk-to-last-ASC, INDEX inserts deleted rows, key_size sub-tag-header rewrite on re-CREATE, plus the patched `tools/harbour_patch/rddads-compat.patch` (rddads-side fBof Limbo carve-out, bFindLast retry guarded by `u16Found`, ASC-only Brian-Hays trick) and the regenerated `tools/harbour_patch/adscl52_ads.prg` ADS-baseline fixture. |
 | **v1.0.0-rc6** | 2026-05-07 | studio.web.0.16: schema view now renders single-letter dBASE field-type labels (C / N / D / L / M / B / P / I / T / @ / +) instead of the raw ADS_* numeric code; `/api/tables/<t>/schema` adds a `type_name` field alongside the existing `type` integer. |
@@ -158,6 +159,63 @@ Drop the resulting `ace64.dll` (under
 `build/default/src/Release/`) onto a Harbour app's `PATH` ahead of
 any SAP-shipped copy and the standard `contrib/rddads` calls land
 on OpenADS without recompiling Harbour.
+
+### Studio web console (in-process, LocalServer mode)
+
+OpenADS ships a single-page web admin console (Studio) that lists
+the connection's tables, shows their schema, runs ad-hoc SQL, and
+inspects records — including memo / binary fields. Studio comes in
+two flavours:
+
+- **Remote-server mode**: `openads_serverd.exe --http-port 8080
+  --data c:\app\data` exposes Studio alongside the TCP wire server.
+- **LocalServer mode**: the DLL itself spins up Studio in the
+  caller's process, so a Harbour / X# / Clipper app loading
+  `ace64.dll` (or `ace32.dll`) directly gets the same UI without
+  launching any extra daemon.
+
+Two ways to enable LocalServer Studio:
+
+1. **Programmatic** — call the OpenADS-only extension entry points:
+
+   ```c
+   AdsStudioStart(8080, (UNSIGNED8*)"c:\\app\\data"); // bind 127.0.0.1:8080
+   /* ... ShellExecute("http://localhost:8080") ... */
+   AdsStudioStop();
+   ```
+
+   `AdsStudioPort(&port)` reports the bound port.
+   `AdsStudioStart` returns `AE_SUCCESS` on success,
+   `AE_INTERNAL_ERROR` if the bind / listen fails (e.g. another
+   process already holds the port), or `AE_FUNCTION_NOT_AVAILABLE`
+   if OpenADS was built without `-DOPENADS_WITH_HTTP=ON`.
+
+2. **Environment-driven auto-start** — set
+   `OPENADS_STUDIO_PORT=<port>` before launching the host app and
+   the DLL boots Studio automatically when it loads:
+
+   ```bat
+   set OPENADS_STUDIO_PORT=8080
+   set OPENADS_STUDIO_DATA=C:\app\data       :: default = "."
+   set OPENADS_STUDIO_HOST=127.0.0.1         :: default = 127.0.0.1
+   start MyApp.exe
+   ```
+
+   The auto-start hook runs from `DllMain DLL_PROCESS_ATTACH` on
+   Windows and a constructor attribute on POSIX. Without
+   `OPENADS_STUDIO_PORT` the hook is a no-op — the DLL will not
+   bind any port unless the host explicitly asks for it.
+
+Locking. Studio opens tables read-only via short-lived ABI
+connections, so tables your app holds in EXCLUSIVE mode show up
+as "table busy" in the browser until the app releases the lock;
+shared opens coexist fine.
+
+Default bind host is `127.0.0.1`, not `0.0.0.0` — the console is
+local-only out of the box. Set `OPENADS_STUDIO_HOST=0.0.0.0` (or
+pass an explicit host through a wrapper) when the deployment
+genuinely needs LAN visibility, and pair it with
+`openads_serverd --http-user user:pass` for HTTP Basic auth.
 
 ### Performance — cross-platform SQL bench
 

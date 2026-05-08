@@ -8,12 +8,23 @@ permalink: /pt/guia-studio/
 
 # Studio — console web
 
-OpenADS Studio é um console web no estilo phpMyAdmin embutido
-no binário `openads_serverd`. Roda onde o daemon roda (Windows,
-Linux, macOS) e é acessível de qualquer navegador na rede —
-sem cliente nativo para instalar.
+OpenADS Studio é um console web estilo phpMyAdmin que lista as
+tabelas da conexão, mostra o esquema, executa SQL ad-hoc e
+inspeciona registros (incluindo campos memo / binários). Vem em
+dois modos:
 
-## Habilitar + iniciar
+- **Modo Remote-Server** — embutido em `openads_serverd.exe`.
+  O daemon expõe simultaneamente o protocolo wire OpenADS (TCP)
+  e o listener HTTP do Studio. Recomendado para implantações
+  compartilhadas / multi-usuário.
+- **Modo LocalServer** — embutido em `ace64.dll` / `ace32.dll`.
+  Uma aplicação Harbour / X# / Clipper que carrega a DLL OpenADS
+  diretamente passa a ter o mesmo console web Studio dentro do
+  próprio processo, sem precisar de daemon separado. Recomendado
+  para apps desktop monousuário, sessões de depuração ou para
+  inspecionar um processo Clipper em execução pelo navegador.
+
+## Habilitar + iniciar — Remote Server (`openads_serverd`)
 
 ```sh
 cmake -S . -B build/http -DOPENADS_WITH_HTTP=ON
@@ -27,6 +38,76 @@ cmake --build build/http --target openads_serverd --config Release
 ```
 
 Depois abra `http://<host-servidor>:6263/`.
+
+## Habilitar + iniciar — LocalServer (in-process)
+
+O Studio é compilado dentro de `openads_ace` (i.e. `ace64.dll` /
+`ace32.dll`) quando o build é configurado com
+`-DOPENADS_WITH_HTTP=ON`. Três entry points exclusivos do OpenADS
+controlam o console in-process:
+
+```c
+UNSIGNED32 AdsStudioStart(UNSIGNED16 usPort, UNSIGNED8* pucDataDir);
+UNSIGNED32 AdsStudioStop (void);
+UNSIGNED32 AdsStudioPort (UNSIGNED16* pusPort);
+```
+
+Duas formas de habilitar:
+
+**1) Programaticamente.** A partir da aplicação host (qualquer
+linguagem capaz de chamar a ABI C — Harbour, X#, Clipper, C++,
+Python via `ctypes`, …):
+
+```c
+AdsStudioStart(8080, (UNSIGNED8*)"C:\\app\\dados");
+/* ... ShellExecute("http://localhost:8080") ... */
+AdsStudioStop();
+```
+
+`AdsStudioStart` retorna `AE_SUCCESS` (0) em caso de sucesso,
+`AE_INTERNAL_ERROR` quando bind / listen falha (porta ocupada ou
+`pucDataDir == NULL`), ou `AE_FUNCTION_NOT_AVAILABLE` quando a
+DLL foi compilada sem `-DOPENADS_WITH_HTTP=ON`.
+
+**2) Auto-start via variável de ambiente.** Defina
+`OPENADS_STUDIO_PORT=<porta>` antes de iniciar a app host e a
+DLL inicia o Studio automaticamente ao carregar:
+
+```bat
+set OPENADS_STUDIO_PORT=8080
+set OPENADS_STUDIO_DATA=C:\app\dados      :: padrão = "."
+set OPENADS_STUDIO_HOST=127.0.0.1         :: padrão = 127.0.0.1
+start MeuApp.exe
+```
+
+O hook de auto-start roda em `DllMain DLL_PROCESS_ATTACH` no
+Windows e em um constructor attribute no POSIX. Sem
+`OPENADS_STUDIO_PORT` o hook é no-op — a DLL não vincula porta
+alguma a menos que o host peça explicitamente. Falhas de bind
+durante o auto-start são silenciosas para que o processo host
+nunca falhe ao carregar por colisão de porta do Studio; o
+`AdsStudioStart()` explícito retorna `AE_INTERNAL_ERROR` nesse
+caso.
+
+### Locking + acesso compartilhado
+
+Studio abre tabelas somente leitura via conexões ABI de curta
+duração. Se sua aplicação mantém uma tabela em modo EXCLUSIVE, o
+navegador verá erro "table busy" para essa tabela até que a app
+libere o lock exclusivo. Aberturas compartilhadas convivem sem
+problema, então o padrão Harbour `USE … SHARED` funciona direto.
+
+### Host de bind padrão
+
+O host de bind padrão é `127.0.0.1`, **não** `0.0.0.0` — Studio
+fica local-only por padrão, então uma app desktop que carregue
+a DLL não expõe silenciosamente o diretório de dados na LAN.
+Defina `OPENADS_STUDIO_HOST=0.0.0.0` (ou passe um host
+explícito via wrapper) quando precisar de visibilidade LAN, e
+combine com HTTP Basic auth (Remote Server registra usuários
+via `--http-user`; LocalServer mantém o console aberto por
+design — coloque atrás de um reverse proxy se tiver de servir
+algo além de `localhost`).
 
 ![Aba inicial do Studio](/OpenADS/assets/img/studio/01-home.png)
 

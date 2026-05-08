@@ -1052,6 +1052,49 @@ UNSIGNED32 ENTRYPOINT AdsDDSetDatabaseProperty(ADSHANDLE hConnect,
                                              void* pvBuf,
                                              UNSIGNED16 usLen);
 
+// --------------------------------------------------------------------
+// OpenADS-only extension: in-process Studio web console.
+//
+// These three entry points are NOT part of the SAP-shipped ACE ABI;
+// they live in the OpenADS DLL only. They let a LocalServer
+// application (one that loads ace64.dll / ace32.dll directly,
+// without launching the openads_serverd.exe daemon) spin up the
+// Studio HTTP web console alongside the engine in the same
+// process. The console serves the same single-page admin UI and
+// REST surface (`/api/...`) as openads_serverd, reading the DBF /
+// CDX / FPT / DBT files directly from the on-disk data directory.
+//
+// Auto-start. If the environment variable OPENADS_STUDIO_PORT is
+// set when ace64.dll / ace32.dll loads, the DLL boots Studio
+// automatically on that port; OPENADS_STUDIO_DATA picks the data
+// directory (default = current working directory) and
+// OPENADS_STUDIO_HOST picks the bind address (default 127.0.0.1).
+// Without OPENADS_STUDIO_PORT the auto-start path stays silent —
+// no port is bound unless the host application asks for one.
+//
+// Build flag. The Studio target is only compiled into the DLL when
+// OpenADS is built with -DOPENADS_WITH_HTTP=ON. When that flag is
+// off, all three entry points are still exported but return
+// AE_FUNCTION_NOT_AVAILABLE so the caller can detect it gracefully.
+//
+// Locking. Studio opens tables read-only via short-lived ABI
+// connections. If your app holds a table in EXCLUSIVE mode, the
+// browser will see a "table busy" error for that table until the
+// app releases the exclusive lock; shared opens coexist fine.
+//
+// Returns AE_SUCCESS (0) on success, or an AE_* error code:
+//   AE_FUNCTION_NOT_AVAILABLE  — DLL was built without HTTP support.
+//   AE_INTERNAL_ERROR          — bind / listen failed (port in
+//                                use), or pucDataDir == NULL.
+UNSIGNED32 ENTRYPOINT AdsStudioStart(UNSIGNED16 usPort,
+                                     UNSIGNED8* pucDataDir);
+UNSIGNED32 ENTRYPOINT AdsStudioStop (void);
+// Returns the port Studio is currently bound to, or 0 when not
+// running. Useful when AdsStudioStart was passed port == 0
+// (ephemeral) and the caller needs to know which port the OS
+// picked.
+UNSIGNED32 ENTRYPOINT AdsStudioPort (UNSIGNED16* pusPort);
+
 #ifdef __cplusplus
 }
 #endif

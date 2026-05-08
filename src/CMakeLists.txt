@@ -122,6 +122,24 @@ target_include_directories(openads_ace
 
 target_link_libraries(openads_ace PRIVATE openads_core)
 
+# studio.embed — when OPENADS_WITH_HTTP is on, fold the same
+# Studio HTTP console that openads_serverd ships into the DLL,
+# behind the AdsStudioStart / AdsStudioStop / AdsStudioPort
+# extension entry points (plus the OPENADS_STUDIO_PORT env-var
+# auto-start hook). Without HTTP support the three entry points
+# are still exported but return AE_FUNCTION_NOT_AVAILABLE so
+# callers can detect the build flavour at runtime.
+target_sources(openads_ace PRIVATE abi/studio_embed.cpp)
+if(OPENADS_WITH_HTTP)
+    target_sources(openads_ace PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/serverd/http_server.cpp)
+    target_compile_definitions(openads_ace PRIVATE OPENADS_WITH_HTTP=1)
+    target_include_directories(openads_ace PRIVATE ${CMAKE_SOURCE_DIR})
+    target_link_libraries(openads_ace PRIVATE
+        httplib::httplib
+        nlohmann_json::nlohmann_json)
+endif()
+
 # Output name follows ACE convention.
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set_target_properties(openads_ace PROPERTIES OUTPUT_NAME "ace64")
