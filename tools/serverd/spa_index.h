@@ -1529,7 +1529,9 @@ function paintAofBadge(data) {
   paintAofHints(data);
 }
 
-// studio.web.0.19 — when the AOF didn't reach FULL, suggest a
+)OPENADS_SPA"
+R"OPENADS_SPA()OPENADS_SPA"
+R"OPENADS_SPA(// studio.web.0.19 — when the AOF didn't reach FULL, suggest a
 // CREATE INDEX for each character / memo field referenced by the
 // cond that doesn't already have a matching index. V1's index-
 // accelerated path only serves char / memo leaves; numeric / date /
