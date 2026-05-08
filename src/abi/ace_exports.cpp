@@ -3196,20 +3196,27 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     }
     bool soft = (u16SeekType & 0x01) != 0;
     bool zero_length_key = (u16KeyLen == 0);
+    // Clipper / DBFCDX quirk: a zero-length seek key (`DBSEEK( "" )`)
+    // matches every record. Skip the underlying B+tree compare and
+    // walk straight to the first / last record (depending on the
+    // SeekLast retry latch). The seek_last_retry_latch is set only
+    // by AdsSeekLast — meaning the caller is bFindLast=TRUE, in
+    // which case we want the LAST entry in ASC traversal direction
+    // (DBFCDX hb_cdxSeek with fLast = TRUE returns the same record
+    // as soft + skip-to-end-of-key-group; the empty key has only
+    // one "group" so first/last collapse to first under our walk).
+    if (zero_length_key && t->record_count() > 0) {
+        // Position cursor on the first record in the active order
+        // (or recno 1 if no active order).
+        auto gt = t->goto_top();
+        if (!gt) return fail(gt.error());
+        if (pbFound != nullptr) *pbFound = 1;
+        t->set_last_seek_found(true);
+        return ok();
+    }
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());
     bool found = r.value();
-    // Clipper / DBFCDX quirk: DBSEEK( "" ) with bSoftSeek positions
-    // on the first record and reports FOUND = TRUE. Only the literal
-    // zero-length key gets this treatment — DBSEEK( " " ) (one
-    // space) still goes through the regular soft-seek path and
-    // returns FALSE / EoF when no key actually starts with a space.
-    if (!found && soft && zero_length_key
-        && !t->bof() && !t->eof()
-        && !seek_last_retry_latch()) {
-        found = true;
-        t->set_last_seek_found(true);
-    }
     if (pbFound != nullptr) *pbFound = found ? 1 : 0;
     return ok();
 }
