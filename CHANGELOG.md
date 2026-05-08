@@ -5,6 +5,255 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## Unreleased
+
+Post-v1.0.0-rc6 work, all rddads-compat deepening so a real Harbour
+`rddads` `.prg` drives OpenADS through the same edge cases Clipper
+exposes against original ACE.
+
+- **Clipper-convention empty / past-end / Limbo states.**
+  `goto_record(0)` is no-op + Eof (not error 5000); empty table
+  reports BOF / EOF + `RecNo() = LastRec()+1`; GO past-end enters
+  Limbo; CDX dup-tag silent reopen; CDX dup-key insertion uses recno
+  tie-break.
+- **Index cursor consistency.** `goto_record` re-syncs the index
+  cursor to the row's key (so the next SKIP walks the right
+  neighbour); CDX cursor state tracking + `Table::seek_key` last-key
+  variant; hard-seek miss parks the cursor on the `>` neighbour for
+  SKIP; hard-seek past every key parks at AfterEnd; `GO 0` keeps
+  Limbo.
+- **`SET DELETED ON` everywhere.** Index walks skip deleted rows;
+  natural-order GOTOP / GOBOTTOM skip deleted; all-deleted under
+  `SET DELETED` reports Limbo (not Eof); `GOTOP` / `GOBOTTOM` on an
+  empty index report Limbo.
+- **DESCEND wired through.** `bFindLast` retry on DESCEND retired;
+  `DBSEEK( '' )` with `bSoftSeek` lands at the first record + `FOUND
+  = .T.`; the empty-key shortcut applies only to ASC orders.
+- **CDX FOR-clause filter.** `CREATE INDEX … FOR <expr>` honoured at
+  build time and on every subsequent insert; `CREATE INDEX` inserts
+  deleted rows too (DBFCDX semantics); each new `CREATE INDEX`
+  replaces the active order (Clipper convention); re-`CREATE INDEX`
+  with an existing tag clears the old B+tree first; `ADS_DOUBLEKEY`
+  ASCII conversion + creation-order tag ordinals.
+- **rddads compat patches** (`tools/harbour_patch/`). `adsSeek`
+  carve-out: `Seek( '' )` with the soft-seek flag now leaves `fBof`
+  alone under Limbo so Harbour's own EOF logic doesn't snap to recno
+  0; `ORDSETFOCUS(N)` uses CDX-file insertion order, not handle
+  ids; `rddads-compat` default connection + `CREATE INDEX` goto-top.
+- **SKIP overshoot.** Cursor stays on the last live record, not
+  recno 0.
+- Tests: `rddtst-flow` repro for `DBGOTOP` after delete / recall /
+  redelete; unit test for `DBGOBOTTOM` + FOR-clause + deletes.
+
+## 1.0.0-rc6 — 2026-05-07
+
+Studio schema view shows the ADS field-type *letter* (C / N / M / D
+/ L / I / Y / B / V / Q / G) instead of the numeric code, with the
+ADS type-letter mapping corrected; the numeric tooltip is dropped.
+
+## 1.0.0-rc5 — 2026-05-07
+
+Studio binary-memo serializer + Win x86 build fix. Binary memo
+cells are now base64-encoded in `/api/tables/<t>/rows` so JSON
+round-trips cleanly through the SPA.
+
+## 1.0.0-rc4 — 2026-05-07
+
+CDX leaf+branch full multi-level split + memo > 64 K fix +
+cross-platform `-Werror` clean.
+
+- **`M(cdx-split)`** — full multi-level B+tree leaf+branch split.
+  Stress harness now exercises 2 bags × 2 tags each at 200 K rows;
+  `CREATE INDEX` defaults back to CDX (the previous NTX fallback is
+  retired).
+- **DBF compat.** Accept 0xF5 / 0xFB headers + single-letter type
+  codes; `AdsGetField` no longer truncates memos > 64 K to 65534
+  bytes.
+- **Cross-platform.** `ace32.lib` / `ace64.lib` import libs +
+  ordinal-compat tooling shipped. GCC 13 (Ubuntu 24.04) + clang
+  Release pass `-Werror` cleanly: `-Wshadow`,
+  `-Wstringop-truncation`, `-Wformat-truncation`, `-Wsign-conversion`
+  in `julian_to_ymd`, `COL%zu` field-name copy, stress harnesses,
+  `probe_cdx2`, drivers/cdx iterators.
+- **Studio.** `studio.web.0.12` ZIP backup of data dir,
+  `studio.web.0.13` table-type override + memo hex viewer,
+  `studio.web.0.14` host OS / arch / compiler banner.
+
+## 1.0.0-rc3 — 2026-05-07
+
+Studio sessions kill + JSON export + TLS deployment docs.
+
+- **Studio.** `studio.web.0.10` bulk select + saved queries + SQL
+  highlight; `studio.web.0.11` kill-session button + JSON export.
+- **TLS deployment guide** (EN / ES / PT) — proxy, stunnel, SSH
+  tunnel recipes for fronting the cleartext server with TLS until
+  M12.12 ships.
+- CI release-workflow build timeout bumped 45 → 60 minutes.
+
+## 1.0.0-rc2 — 2026-05-07
+
+Studio web 0.4 – 0.10: Sessions, Data Dictionary tab + REST,
+Reindex / Pack / Zap + `CREATE INDEX` wizard + memo viewer, sidecar
+list / server stats / DBF upload, HTTP Basic auth + table download
++ theme toggle, Browse sort + filter + i18n (EN / ES / PT). Data
+Dictionary documentation pages (EN / ES / PT). `b64decode`
+sign-conversion fix.
+
+## 1.0.0-rc1 — 2026-05-07
+
+Studio web console + bilingual+ documentation site + release CI.
+
+- **OpenADS Studio** (`studio.web.0.1` … `0.3`) — clean-room
+  ARS-equivalent web console embedded in `serverd`. CRUD + paginated
+  browse + server info; `CREATE` / `DROP` / encrypt + SQL history.
+  All third-party-product-name references scrubbed from Studio
+  copy. `AdsGetLastError` captured before close + 'did you mean'
+  hint on connection failures. Docs link in header.
+- **Documentation site** — bilingual+ EN / ES / PT under `docs/`,
+  published through GitHub Pages workflow. Benchmarks pages +
+  Studio screenshots.
+- **Release CI** — `release` workflow builds + packages + publishes
+  on tag push. `docs/superpowers` and `build/` are export-ignored
+  from source archives.
+
+## 0.4.1 — 2026-05-06
+
+`openads_bench` v2 + CI matrix gains a TLS=ON entry.
+
+## 0.4.0 — 2026-05-06
+
+Real TLS transport, transport abstraction, wire-protocol spec.
+
+- **M12.12** — real TLS via vendored mbedtls 3.6 LTS (Apache-2.0).
+  The `tls://` URI scheme reserved in 0.3.6 now wires through to a
+  real handshake on both client and server.
+- **M12.13** — transport abstraction. The wire protocol no longer
+  bakes in the socket type; cleartext, TLS, and any future
+  transport plug in through a single virtual interface.
+  `docs/wire-protocol.md` documents the wire format.
+- CI runners + actions bumped to current versions; missing
+  `<tuple>` include added.
+
+## 0.3.6 — 2026-05-06
+
+`tls://` URI scheme reserved (M12.12 stub) ahead of the real
+handshake landing in 0.4.0.
+
+## 0.3.5 — 2026-05-06
+
+Wire-protocol semantics complete: ACE error-code propagation
+(M12.10) and batched row fetch (M12.11 — `Fetch` / `FetchAck`).
+
+## 0.3.4 — 2026-05-06
+
+Phase 2 server feature-complete (read + write + SQL + index +
+auth).
+
+- **M12.6** — remote write surface (`append` / `set` / `delete` /
+  `recall` / `goto` / `flush`).
+- **M12.7** — remote SQL exec (`ExecuteSQL` wire op).
+- **M12.8** — remote `AdsReindex`.
+- **M12.9** — server-side authentication.
+- `RemoteConnection` dtor now calls `disconnect`.
+
+## 0.3.3 — 2026-05-06
+
+Phase 2 server alive end-to-end + cross-platform SQL bench.
+
+- **M12.3** — server accept loop + `Hello` / `Connect` dispatch.
+- **M12.4** — remote read-only table ops.
+- **M12.5** — dual-mode DLL: `tcp://` URIs route the ABI to the
+  server; local-mode paths still hit the in-process engine.
+- `openads_serverd` standalone TCP server CLI.
+- `openads_bench` cross-platform SQL workload timer.
+- macOS bring-up: `setup_macos.sh` one-shot script,
+  `HOST_NAME_MAX` fallback, `accept()` self-connect wake-up,
+  same-process lock contention test skip.
+- Linux bring-up: OFD locks for fd-scope contention,
+  `shutdown(SHUT_RDWR)` before `close()` so blocked `accept()`
+  wakes, third + fourth waves of clang `-Werror` sign /
+  include / unused fixes,
+  `-Wreturn-type-c-linkage` cleanup on internal helpers.
+
+## 0.3.2 — 2026-05-05
+
+SQL window-function + scalar-fn deepening + sockets layer.
+
+- **M10.49** PARTITION BY.
+- **M10.50** RANK / DENSE_RANK.
+- **M10.51** qualified column refs.
+- **M10.52** multi-row `VALUES`.
+- **M10.53** `NULLIF` / `COALESCE` / `IFNULL`.
+- **M10.54** `FILTER (WHERE …)` aggregate clause.
+- **M12.2** sockets layer (cross-platform).
+
+## 0.3.1 — 2026-05-05
+
+SQL date / CTE / NULL surface + collation + wire skeleton.
+
+- **M10.43** multi-arg scalar fns.
+- **M10.44** `IS NULL` / `IS NOT NULL`.
+- **M10.45** date scalar fns.
+- **M10.46** derived tables.
+- **M10.47** `ROW_NUMBER()`.
+- **M10.48** CTE (`WITH …`).
+- **M11.6** NULL bitmap.
+- **M11.7** collation.
+- **M11.8** OEM / UTF-8 conversion.
+- **M12.1** wire skeleton.
+
+## 0.3.0 — 2026-05-05
+
+SQL maturity wave: every JOIN flavour, the full subquery /
+aggregate / DISTINCT / UNION / CASE / LIMIT surface, plus the AEP
+host, AES-256-CTR encrypted DBFs, VFP V / Q field types, and
+nested transactions. Brings the SQL layer to "real apps run
+through it" status.
+
+### Highlights
+
+- **JOIN matrix.** `INNER` (M10.13 parse + M10.14 executor), `LEFT
+  OUTER` (M10.16), `RIGHT OUTER` (M10.21), `FULL OUTER` (M10.22 —
+  union of LEFT + RIGHT), `JOIN` + `WHERE` / `ORDER BY` combos
+  (M10.20), `JOIN` + aggregate combo (M10.23), `GROUP BY` across
+  `JOIN` (M10.34).
+- **Subqueries.** `IN` literal lists + subqueries (M10.15),
+  `EXISTS` uncorrelated (M10.17), correlated `EXISTS` (M10.24),
+  scalar subquery `<col> op (SELECT col FROM t)` (M10.18),
+  aggregate scalar subquery (M10.19), correlated scalar subquery
+  (M10.29), correlated `IN` subquery (M10.35).
+- **Aggregates + grouping.** `COUNT(*)` / `COUNT` / `SUM` / `AVG`
+  / `MIN` / `MAX` (M10.10), `GROUP BY` + `HAVING` (M10.25), HAVING
+  expression tree (M10.30), aggregate / `GROUP BY` inside `UNION`
+  members (M10.36).
+- **Set + shape ops.** `UNION` / `UNION ALL` (M10.26),
+  `UNION` + projection (M10.27), `UNION` + `ORDER BY` (M10.28),
+  `DISTINCT` (M10.31), `LIMIT` / `OFFSET` (M10.32),
+  `BETWEEN` / `LIKE` (M10.33), multi-column `ORDER BY` (M10.37),
+  `CASE WHEN` in projection (M10.38).
+- **DML / DDL.** `INSERT` (M10.5), `ORDER BY` execution (M10.6),
+  `UPDATE` / `DELETE` bulk through `AdsExecuteSQLDirect` (M10.7),
+  projection lists (M10.8), DDL `CREATE TABLE` / `CREATE INDEX`
+  (M10.9), VFP autoinc fields with persistent counter (M10.11),
+  `AdsRestructureTable` CHANGE (same-type length / decimals)
+  (M10.12), `INSERT INTO … SELECT` (M10.41), `CREATE TABLE AS
+  SELECT` (M10.42).
+- **Other SQL.** `WHERE` `OR` / `NOT` / parens + numeric literals
+  (M10.3), scalar string fns (M10.39), arithmetic in projection
+  (M10.40).
+- **Engine + drivers.** Real `.add` Data Dictionary persistence —
+  round-trips through `.add` reopen (M10.1); VFP I / Y / B field
+  decode + encode (M10.2); branch-level MISS closure
+  (`AdsRestructureTable` DELETE-fields + `AdsSetIndexDirection`)
+  (M10.4).
+- **AEP host (M11.4).** `CREATE PROCEDURE` + `EXECUTE PROCEDURE`
+  through the OpenADS clean-room AEP runtime.
+- **Encrypted DBFs (M11.2).** OpenADS-encrypted DBF — AES-256-CTR
+  per-page, transparent through the read / write path.
+- **VFP V / Q (M11.1).** Varchar + Varbinary field types.
+- **Nested transactions (M11.3).** `AdsReleaseSavepoint` + nested
+  `BEGIN` / `COMMIT` (proper save-point stack).
+
 ## 0.2.0 — 2026-05-04
 
 The 0.2.0 release closes the entire 226-symbol Harbour-reachable
