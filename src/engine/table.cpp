@@ -344,13 +344,30 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
     if (!r) return r.error();
     // Re-position the active index cursor on this row's key so a
     // subsequent SKIP walks from here (and not from wherever the
-    // index was last left after a previous SEEK / SKIP-past-end).
+    // index was left after a previous SEEK / SKIP-past-end). When
+    // multiple records share the key we need to walk forward to
+    // the entry whose recno actually equals what the caller asked
+    // for — otherwise SKIP(±1) jumps to a sibling-key boundary.
     if (order_ && order_->index()) {
-        order_->index()->invalidate_cursor();
-        std::string key = compute_index_key_(
-            order_->index()->expression(),
-            order_->index()->key_length());
-        (void)order_->index()->seek_key(key, /*soft=*/false);
+        auto* idx = order_->index();
+        idx->invalidate_cursor();
+        std::string key = compute_index_key_(idx->expression(),
+                                             idx->key_length());
+        auto sk = idx->seek_key(key, /*soft=*/false);
+        if (sk && sk.value().positioned) {
+            std::uint32_t guard = 0;
+            while (sk.value().recno != recno && guard++ < 1024) {
+                auto nx = idx->next();
+                if (!nx || !nx.value().positioned) break;
+                std::string ck = idx->current_key();
+                if (ck.size() < key.size())
+                    ck.append(key.size() - ck.size(), ' ');
+                if (ck.size() > key.size()) ck.resize(key.size());
+                if (std::memcmp(ck.data(), key.data(), key.size()) != 0)
+                    break;
+                sk = nx;
+            }
+        }
     }
     return {};
 }
