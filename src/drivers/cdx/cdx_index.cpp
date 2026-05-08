@@ -607,17 +607,17 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
             if (cmp < 0) {
                 if (!soft) {
                     // Hard seek miss with key strictly less than
-                    // cur_decoded_[i]: park the cursor on the
-                    // boundary so the next next() walks forward
-                    // onto cur_decoded_[i] (Clipper SKIP after a
-                    // failed hard seek). i==0 -> BeforeBegin so
-                    // next() jumps to cur_decoded_[0].
+                    // cur_decoded_[i]: park cursor "between"
+                    // cur_decoded_[i-1] and cur_decoded_[i]. The
+                    // Between state lets next() advance onto idx i
+                    // and prev() retreat onto idx i-1, matching
+                    // Clipper SKIP after a failed hard seek.
                     if (i == 0) {
                         cur_state_ = CurState::BeforeBegin;
                         cur_index_ = -1;
                     } else {
-                        cur_index_ = static_cast<std::int32_t>(i) - 1;
-                        cur_state_ = CurState::Positioned;
+                        cur_index_ = static_cast<std::int32_t>(i);
+                        cur_state_ = CurState::Between;
                     }
                     return SeekOutcome{SeekHit::AfterEnd, 0, false};
                 }
@@ -662,6 +662,20 @@ util::Result<SeekOutcome> CdxIndex::next() {
         }
         return seek_first();
     }
+    // Between(cur_index): next() returns the entry AT cur_index
+    // (the first key strictly greater than the search key that
+    // produced this state) and transitions to Positioned.
+    if (cur_state_ == CurState::Between) {
+        if (cur_index_ >= 0 &&
+            static_cast<std::size_t>(cur_index_) < cur_decoded_.size()) {
+            cur_state_ = CurState::Positioned;
+            current_key_ = cur_decoded_[
+                static_cast<std::size_t>(cur_index_)].first;
+            return SeekOutcome{SeekHit::Exact,
+                cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
+        }
+        return SeekOutcome{SeekHit::AfterEnd, 0, false};
+    }
     if (cur_state_ == CurState::AfterEnd ||
         cur_state_ == CurState::Initial) {
         return SeekOutcome{SeekHit::AfterEnd, 0, false};
@@ -702,6 +716,22 @@ util::Result<SeekOutcome> CdxIndex::prev() {
     }
     if (cur_state_ == CurState::BeforeBegin ||
         cur_state_ == CurState::Initial) {
+        return SeekOutcome{SeekHit::BeforeBegin, 0, false};
+    }
+    // Between(cur_index): prev() returns the entry AT cur_index-1
+    // (last lesser entry) and transitions to Positioned there.
+    if (cur_state_ == CurState::Between) {
+        if (cur_index_ > 0 &&
+            static_cast<std::size_t>(cur_index_ - 1) < cur_decoded_.size()) {
+            cur_index_ -= 1;
+            cur_state_ = CurState::Positioned;
+            current_key_ = cur_decoded_[
+                static_cast<std::size_t>(cur_index_)].first;
+            return SeekOutcome{SeekHit::Exact,
+                cur_decoded_[static_cast<std::size_t>(cur_index_)].second, true};
+        }
+        cur_state_ = CurState::BeforeBegin;
+        cur_index_ = -1;
         return SeekOutcome{SeekHit::BeforeBegin, 0, false};
     }
     if (cur_index_ < 0) return SeekOutcome{SeekHit::BeforeBegin, 0, false};

@@ -181,7 +181,11 @@ private:
     // prev()" — both used to leave cur_index_ = -1. Track that
     // explicitly so next() after a prev-off-front can resume at
     // the first key (Clipper SKIP(>0) from BoF semantics).
-    enum class CurState { Initial, Positioned, BeforeBegin, AfterEnd };
+    // Between: cursor virtually parked between cur_index-1 and
+    // cur_index (set after a hard-seek miss when the search key
+    // lies strictly between two existing entries). next() returns
+    // cur_decoded_[cur_index]; prev() returns cur_decoded_[cur_index-1].
+    enum class CurState { Initial, Positioned, BeforeBegin, AfterEnd, Between };
     CurState                                                      cur_state_ = CurState::Initial;
     std::int32_t                                                  cur_index_     = -1;
     std::vector<std::pair<std::string, std::uint32_t>>            cur_decoded_;
