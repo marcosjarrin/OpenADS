@@ -2328,6 +2328,37 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     }
     if (auto fl = idx_owner->flush(); !fl) return fail(fl.error());
 
+    // Sibling tag refresh: a fresh CREATE INDEX implicitly resyncs
+    // every tag in the bag (rddads' ORDLSTCLEAR + INDEX cycle drops
+    // every other tag's binding so sync_all_indexes_ skipped them
+    // on subsequent dbappend / replace, leaving stale or empty
+    // B+trees on disk). Walk the bag's other sub-tags, clear them,
+    // then per-record-insert from scratch using each tag's own key
+    // expression. Skip the just-rebuilt tag.
+    if (is_cdx) {
+        auto sibs = openads::drivers::cdx::CdxIndex::list_tags(p.string());
+        if (sibs) {
+            for (const auto& sib : sibs.value()) {
+                if (sib == tag) continue;
+                openads::drivers::cdx::CdxIndex sub;
+                if (auto r0 = sub.open_named(p.string(),
+                        openads::drivers::IndexOpenMode::Shared,
+                        sib); !r0) continue;
+                if (auto cl = sub.clear_data(); !cl) continue;
+                std::string sib_expr = sub.expression();
+                std::uint16_t sib_klen = sub.key_length();
+                for (std::uint32_t r2 = 1; r2 <= rec_count; ++r2) {
+                    if (auto g = t->goto_record(r2); !g) continue;
+                    auto k2 = openads::engine::evaluate_index_expr(
+                        *t, sib_expr, sib_klen);
+                    if (!k2) continue;
+                    (void)sub.insert(r2, k2.value());
+                }
+                (void)sub.flush();
+            }
+        }
+    }
+
     auto& m   = index_bindings();
     auto& act = active_binding_for();
     // Drop ANY existing binding whose tag matches the one we're

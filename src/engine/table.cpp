@@ -258,10 +258,8 @@ util::Result<void> Table::goto_bottom() {
         util::Result<drivers::SeekOutcome> r = idx->seek_last();
         if (!r) return r.error();
         if (!r.value().positioned) {
-            // Empty index → Limbo, same rationale as goto_top above.
             state_ = State::Limbo; recno_ = 0; return {};
         }
-        // Walk backwards while bottom scope is exceeded.
         while (r.value().positioned &&
                !key_in_bottom_scope_(idx->current_key())) {
             r = idx->prev();
@@ -271,11 +269,6 @@ util::Result<void> Table::goto_bottom() {
             !key_in_top_scope_(idx->current_key())) {
             state_ = State::Eof; recno_ = 0; return {};
         }
-        // SET DELETE ON: walk back over rows currently flagged
-        // as deleted. The B+tree may still hold their entries
-        // (CDX records deleted-row-keys; DBFCDX hides them from
-        // navigation but keeps them so a later RECALL works).
-        // All deleted -> Limbo (no visible row).
         if (!openads::abi::show_deleted()) {
             while (r.value().positioned) {
                 if (auto ld = load_record_(r.value().recno); !ld) {
