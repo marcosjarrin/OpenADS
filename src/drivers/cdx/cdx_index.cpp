@@ -605,7 +605,22 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
                 return SeekOutcome{SeekHit::Exact, cur_decoded_[i].second, true};
             }
             if (cmp < 0) {
-                if (!soft) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+                if (!soft) {
+                    // Hard seek miss with key strictly less than
+                    // cur_decoded_[i]: park the cursor on the
+                    // boundary so the next next() walks forward
+                    // onto cur_decoded_[i] (Clipper SKIP after a
+                    // failed hard seek). i==0 -> BeforeBegin so
+                    // next() jumps to cur_decoded_[0].
+                    if (i == 0) {
+                        cur_state_ = CurState::BeforeBegin;
+                        cur_index_ = -1;
+                    } else {
+                        cur_index_ = static_cast<std::int32_t>(i) - 1;
+                        cur_state_ = CurState::Positioned;
+                    }
+                    return SeekOutcome{SeekHit::AfterEnd, 0, false};
+                }
                 cur_index_ = static_cast<std::int32_t>(i);
                 cur_state_ = CurState::Positioned;
                 current_key_ = cur_decoded_[i].first;
