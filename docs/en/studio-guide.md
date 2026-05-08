@@ -121,6 +121,11 @@ The top bar carries:
 - **🌙 / ☀ theme toggle** — flips the SPA between dark and light
   palettes (CSS-variable driven; persisted in `localStorage`).
 - **📖 Docs** — link to this site.
+- **Mode badge** — 🏠 `LocalServer` (green) when the console runs
+  in-process inside `ace64.dll` / `ace32.dll`, or 🌐 `Remote Server`
+  (blue) when hosted by `openads_serverd`. Hover the badge to see
+  the active data directory. The signal comes from `/api/health`'s
+  new `mode` field.
 - **Status** — current dataset summary or last error.
 
 ## Sidebar

@@ -120,6 +120,11 @@ A barra superior tem:
 - **🌙 / ☀ tema** — alterna paleta dark / light (CSS variables;
   persistido em `localStorage`).
 - **📖 Docs** — link para este site.
+- **Badge de modo** — 🏠 `LocalServer` (verde) quando o console
+  roda in-process dentro de `ace64.dll` / `ace32.dll`, ou
+  🌐 `Remote Server` (azul) quando hospedado por `openads_serverd`.
+  Hover sobre o badge mostra o diretório de dados ativo. O sinal
+  vem do campo `mode` de `/api/health`.
 - **Status** — resumo do dataset atual ou último erro.
 
 ## Sidebar
