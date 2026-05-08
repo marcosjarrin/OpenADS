@@ -1008,6 +1008,28 @@ Table::seek_key(const std::string& key, bool soft, bool last) {
     auto load = load_record_(r.value().recno);
     if (!load) return load.error();
     last_seek_found_ = exact;
+    // Clipper 5.2 / DBFCDX-baseline quirk: when a SOFT seek lands on
+    // a record whose key is strictly greater than the searched key
+    // (i.e. we positioned BEFORE the first equal-key entry — there
+    // is no equal-key entry at all), the baseline reports EOF
+    // instead of "positioned at next-greater". Reproduce that by
+    // probing the loaded record's key vs the search key.
+    if (!exact && soft && !last) {
+        std::string padded = key;
+        if (padded.size() < idx->key_length())
+            padded.append(idx->key_length() - padded.size(), ' ');
+        if (padded.size() > idx->key_length())
+            padded.resize(idx->key_length());
+        std::string ck = idx->current_key();
+        if (ck.size() < padded.size())
+            ck.append(padded.size() - ck.size(), ' ');
+        if (ck.size() > padded.size()) ck.resize(padded.size());
+        if (std::memcmp(padded.data(), ck.data(), padded.size()) < 0) {
+            state_ = State::Eof; recno_ = 0;
+            last_seek_found_ = false;
+            return false;
+        }
+    }
     return exact;
 }
 
