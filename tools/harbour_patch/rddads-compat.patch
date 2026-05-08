@@ -1,8 +1,8 @@
 diff --git a/contrib/rddads/ads1.c b/contrib/rddads/ads1.c
-index 4c37b03a7a..4aafe2e39d 100644
+index 4c37b03a7a..12b8b1daf5 100644
 --- a/contrib/rddads/ads1.c
 +++ b/contrib/rddads/ads1.c
-@@ -1112,14 +1112,24 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1112,14 +1112,30 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
                                 pszKey, u16KeyLen, u16KeyType, &u16Found );
        if( u32RetVal == AE_SUCCESS && bSoftSeek && ! u16Found )
        {
@@ -11,6 +11,9 @@ index 4c37b03a7a..4aafe2e39d 100644
 -            Clipper behavior, Druzus */
 -         u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
 -                              u16KeyType, u16SeekType, &u16Found );
+-
+-         if( u32RetVal == AE_SUCCESS )
+-            u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
 +         /* OpenADS rddads-compat: DBFCDX bFindLast soft-seeks
 +            that miss every key stay at EOF; the original ADS
 +            retry-with-soft-then-skip-back path overshoots. Only
@@ -25,16 +28,20 @@ index 4c37b03a7a..4aafe2e39d 100644
 +         {
 +            u32RetVal = AdsSeek( pArea->hOrdCurrent, pszKey, u16KeyLen,
 +                                 u16KeyType, u16SeekType, &u16Found );
- 
--         if( u32RetVal == AE_SUCCESS )
--            u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
-+            if( u32RetVal == AE_SUCCESS )
++
++            /* OpenADS rddads-compat: only walk back if the soft
++               retry actually landed on a record. If the retry
++               also missed (search key past every key in the tag)
++               the table is at EOF and AdsSkip(-1) would trigger
++               its Brian-Hays GOBOTTOM, dragging us onto the last
++               raw record — DBFCDX leaves the workarea at EOF. */
++            if( u32RetVal == AE_SUCCESS && u16Found )
 +               u32RetVal = AdsSkip( pArea->hOrdCurrent, -1 );
 +         }
        }
     }
     else
-@@ -1142,7 +1152,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1142,7 +1158,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
        #if 0
        HB_ERRCODE errCode = SELF_GOTOP( &pArea->area );
        #endif
@@ -49,7 +56,7 @@ index 4c37b03a7a..4aafe2e39d 100644
  #if defined( ADS_USE_OEM_TRANSLATION ) && ADS_LIB_VERSION < 600
        if( pszKeyFree )
           hb_adsOemAnsiFree( ( char * ) pszKeyFree );
-@@ -1249,8 +1265,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
+@@ -1249,8 +1271,13 @@ static HB_ERRCODE adsSeek( ADSAREAP pArea, HB_BOOL bSoftSeek, PHB_ITEM pKey, HB_
      * Clipper clears BOF after seek - I found only one strange situation
      * when it doesn't but only sometimes. I've not been able to detect
      * the rule yet. Any how it's much safer to clear it, Druzus.
@@ -64,7 +71,7 @@ index 4c37b03a7a..4aafe2e39d 100644
  
     if( pucSavedKey )
        hb_xfree( pucSavedKey );
-@@ -1323,6 +1344,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1323,6 +1350,7 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
     {
        HB_ERRCODE errCode = HB_SUCCESS;
        HB_LONG lSkipper;
@@ -72,7 +79,7 @@ index 4c37b03a7a..4aafe2e39d 100644
  
        if( ! pArea->fPositioned && lToSkip < 0 )
        {
-@@ -1332,10 +1354,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
+@@ -1332,10 +1360,21 @@ static HB_ERRCODE adsSkip( ADSAREAP pArea, HB_LONG lToSkip )
  
        if( ! pArea->fPositioned )
        {
