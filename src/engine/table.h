@@ -201,6 +201,7 @@ public:
     util::Result<bool> seek_key(const std::string& key, bool soft,
                                 bool last = false);
     bool last_seek_found() const noexcept { return last_seek_found_; }
+    void set_last_seek_found(bool v) noexcept { last_seek_found_ = v; }
     util::Result<void> set_scope(bool top, const std::string& key);
     util::Result<void> clear_scope(bool top);
     util::Result<void> clear_scopes();

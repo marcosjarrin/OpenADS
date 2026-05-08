@@ -198,6 +198,14 @@ openads::network::RemoteTable* get_remote_table(ADSHANDLE h) {
         h, HandleKind::RemoteTable);
 }
 
+// Latch set by AdsSeekLast. AdsSeek consults this to suppress its
+// empty-key always-found quirk when called as part of rddads'
+// AdsSeekLast retry chain. AdsSkip clears it.
+bool& seek_last_retry_latch() {
+    static thread_local bool v = false;
+    return v;
+}
+
 // Harbour rddads' default connection handle is 0 when the caller
 // never AdsConnect'd. SAP-ACE in this mode auto-connects against the
 // current working directory; mirror that by lazily creating one
@@ -1113,6 +1121,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
+    seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
         auto r = rt->conn->skip(rt->id, lRows);
         if (!r) return fail(r.error());
@@ -3169,9 +3178,24 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
                    static_cast<std::size_t>(u16KeyLen));
     }
     bool soft = (u16SeekType & 0x01) != 0;
+    // Trim trailing whitespace so an "all-spaces" key reduces to the
+    // empty-string special case below.
+    std::string trimmed = key;
+    while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
     auto r = t->seek_key(key, soft);
     if (!r) return fail(r.error());
-    if (pbFound != nullptr) *pbFound = r.value() ? 1 : 0;
+    bool found = r.value();
+    // Clipper / DBFCDX quirk: DBSEEK( "" ) with bSoftSeek positions
+    // on the first record and reports FOUND = TRUE. Mirror that
+    // when the seek landed on a record (state == Positioned) so we
+    // don't undo a successful Eof/Limbo classification above.
+    if (!found && soft && trimmed.empty()
+        && !t->bof() && !t->eof()
+        && !seek_last_retry_latch()) {
+        found = true;
+        t->set_last_seek_found(true);
+    }
+    if (pbFound != nullptr) *pbFound = found ? 1 : 0;
     return ok();
 }
 
@@ -3180,8 +3204,14 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
                        UNSIGNED16 u16KeyLen,
                        UNSIGNED16 u16KeyType,
                        UNSIGNED16* pbFound) {
-    return AdsSeek(hIndex, pucKey, u16KeyLen, u16KeyType,
-                   /*soft*/ 0, pbFound);
+    // Latch the "we're inside an AdsSeekLast cycle" flag. rddads'
+    // adsSeek retries via AdsSeek soft + AdsSkip(-1) when this hard
+    // seek misses; AdsSeek consults the latch to suppress its
+    // empty-key always-found quirk. AdsSkip clears the latch.
+    seek_last_retry_latch() = true;
+    auto rc = AdsSeek(hIndex, pucKey, u16KeyLen, u16KeyType,
+                      /*soft*/ 0, pbFound);
+    return rc;
 }
 
 UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
