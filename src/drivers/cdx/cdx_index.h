@@ -69,6 +69,12 @@ public:
     // with new options (Clipper / Harbour silent overwrite).
     util::Result<void> set_options(bool unique, bool descend);
 
+    // Same as above plus rewrite the key_size in the sub-tag
+    // header — covers the case where a re-CREATE INDEX produces a
+    // different key length than the prior version of the tag.
+    util::Result<void> set_options(bool unique, bool descend,
+                                   std::uint16_t new_key_size);
+
     util::Result<void> insert(std::uint32_t recno,
                               const std::string& key) override;
     util::Result<void> erase (std::uint32_t recno,

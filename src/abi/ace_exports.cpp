@@ -2281,9 +2281,10 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
             if (auto cl = existing.clear_data(); !cl)
                 return fail(cl.error());
             // CREATE INDEX overwrite must also pick up the new
-            // UNIQUE / DESCEND options; the sub-header was loaded
-            // from disk with the prior options.
-            if (auto so = existing.set_options(unique, descend); !so)
+            // UNIQUE / DESCEND options + the freshly-probed key
+            // size; the sub-header was loaded from disk with the
+            // prior options.
+            if (auto so = existing.set_options(unique, descend, klen); !so)
                 return fail(so.error());
             idx_owner = std::make_unique<openads::drivers::cdx::CdxIndex>(
                 std::move(existing));

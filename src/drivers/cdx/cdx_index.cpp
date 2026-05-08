@@ -1048,18 +1048,26 @@ util::Result<void> CdxIndex::flush() {
 }
 
 util::Result<void> CdxIndex::set_options(bool unique, bool descend) {
+    return set_options(unique, descend, key_size_);
+}
+
+util::Result<void> CdxIndex::set_options(bool unique, bool descend,
+                                         std::uint16_t new_key_size) {
     if (sub_header_offset_ == 0) {
         return util::Error{6106, 0,
             "CDX sub-tag header offset uninitialised", ""};
     }
     unique_  = unique;
     descend_ = descend;
+    if (new_key_size != 0) key_size_ = new_key_size;
     index_opt_ = static_cast<std::uint8_t>(
         (unique ? 0x01 : 0x00) | 0x20);
     std::array<std::uint8_t, CDX_HEADER_LEN> hdr{};
     auto got = file_.read_at(sub_header_offset_, hdr.data(), hdr.size());
     if (!got) return got.error();
     hdr[14] = index_opt_;
+    if (new_key_size != 0)
+        write_u16_le(hdr.data() + 12, new_key_size);
     write_u16_le(hdr.data() + 502, descend ? 1 : 0);
     auto wrote = file_.write_at(sub_header_offset_, hdr.data(), hdr.size());
     if (!wrote) return wrote.error();
