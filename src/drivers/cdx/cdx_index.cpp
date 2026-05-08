@@ -638,12 +638,13 @@ CdxIndex::seek_key(const std::string& key, bool soft) {
         if (cur_decoded_.empty()) break;
     }
     // Search key was strictly greater than every key in the tree.
-    // Park the cursor "past" the last entry so the next prev()
-    // walks back onto the real last key, and next() reports
-    // AfterEnd. Without this the cursor would stay at whatever
-    // seek_first left it (first leaf, index 0), which made SKIP
-    // after a hard-seek miss > all walk forward from the front.
-    cur_state_ = CurState::AfterEnd;
+    // For SOFT seeks: park at AfterEnd (real past-end behaviour).
+    // For HARD seeks (eg. goto_record's index resync on a recno
+    // whose key is past every indexed key): use AfterEndKey so
+    // SKIP(+1) wraps to the first entry and SKIP(-1) resumes from
+    // the last entry. Mirrors Clipper / DBFCDX SKIP-from-out-of-
+    // range-recno semantics.
+    cur_state_ = soft ? CurState::AfterEnd : CurState::AfterEndKey;
     cur_index_ = -1;
     return SeekOutcome{SeekHit::AfterEnd, 0, false};
 }
@@ -660,6 +661,12 @@ util::Result<SeekOutcome> CdxIndex::next() {
             return SeekOutcome{SeekHit::Exact,
                 cur_decoded_[0].second, true};
         }
+        return seek_first();
+    }
+    // AfterEndKey: hard-seek miss past every key. next() wraps
+    // around to the first entry (Clipper SKIP(+1)-from-out-of-
+    // range-recno). After wrap, transitions to Positioned.
+    if (cur_state_ == CurState::AfterEndKey) {
         return seek_first();
     }
     // Between(cur_index): next() returns the entry AT cur_index
@@ -710,7 +717,8 @@ util::Result<SeekOutcome> CdxIndex::next() {
 }
 
 util::Result<SeekOutcome> CdxIndex::prev() {
-    if (cur_state_ == CurState::AfterEnd) {
+    if (cur_state_ == CurState::AfterEnd ||
+        cur_state_ == CurState::AfterEndKey) {
         // Resume from last key.
         return seek_last();
     }

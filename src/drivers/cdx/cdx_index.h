@@ -185,7 +185,14 @@ private:
     // cur_index (set after a hard-seek miss when the search key
     // lies strictly between two existing entries). next() returns
     // cur_decoded_[cur_index]; prev() returns cur_decoded_[cur_index-1].
-    enum class CurState { Initial, Positioned, BeforeBegin, AfterEnd, Between };
+    enum class CurState {
+        Initial,       // never sought
+        Positioned,    // cur_index_ valid
+        BeforeBegin,   // walked off front (prev from idx 0); next -> first
+        AfterEnd,      // walked off back (next from last); prev -> last
+        Between,       // hard-seek miss between two existing entries
+        AfterEndKey    // hard-seek miss > every key; next -> wrap to first
+    };
     CurState                                                      cur_state_ = CurState::Initial;
     std::int32_t                                                  cur_index_     = -1;
     std::vector<std::pair<std::string, std::uint32_t>>            cur_decoded_;
