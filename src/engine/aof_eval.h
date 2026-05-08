@@ -1,0 +1,43 @@
+#pragma once
+
+// M-AOF.2 — evaluate an AOF AST against a Table and produce a
+// per-record bitmap. The bitmap drives M-AOF.3 (Skip / GoTop honour
+// the bitmap and AdsGetAOFOptLevel reports FULL / PART / NONE).
+//
+// V1 implementation walks every record once and evaluates the AST
+// against the record's decoded field values. That gives us a
+// correctness baseline end-to-end before we add index-accelerated
+// leaf evaluation in M-AOF.4 — the index path is pure perf, the
+// AST → bitmap contract stays identical.
+//
+// Provenance / clean-room. Same constraints as aof_expr.{h,cpp}: no
+// GPL Harbour `contrib/rddbm/bmdbfx.c` internals were read while
+// authoring this file. Only its public symbol list (`rddbm.hbx`)
+// was consulted.
+
+#include "engine/aof_expr.h"
+#include "util/result.h"
+
+#include <cstdint>
+#include <vector>
+
+namespace openads::engine {
+
+class Table;
+
+namespace aof {
+
+// One bit per record: bitmap[recno - 1] == true means the record
+// passes the filter. Size always equals record_count(); for an
+// empty table the bitmap is empty and every Skip / GoTop call
+// short-circuits to EoF.
+using Bitmap = std::vector<bool>;
+
+// Evaluate `n` against every record of `t` and produce the bitmap.
+// Reads the current cursor and walks all recnos in [1, count()];
+// the table position on return is unspecified — callers wanting to
+// keep their position must save and restore it themselves.
+util::Result<Bitmap> evaluate(const Node& n, Table& t);
+
+} // namespace aof
+} // namespace openads::engine

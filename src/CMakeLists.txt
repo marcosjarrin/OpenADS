@@ -31,6 +31,7 @@ add_library(openads_core STATIC
     engine/order.cpp
     engine/index_expr.cpp
     engine/aof_expr.cpp
+    engine/aof_eval.cpp
     engine/aes.cpp
     engine/tx.cpp
     engine/tx_log.cpp
