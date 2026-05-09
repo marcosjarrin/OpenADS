@@ -269,6 +269,12 @@ void Server::accept_loop() {
 
 namespace {
 
+inline std::uint16_t read_u16_le(const std::uint8_t* p) {
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(p[0]) |
+        (static_cast<std::uint16_t>(p[1]) << 8));
+}
+
 inline std::uint32_t read_u32_le(const std::uint8_t* p) {
     return  static_cast<std::uint32_t>(p[0])        |
            (static_cast<std::uint32_t>(p[1]) <<  8) |
@@ -1233,6 +1239,100 @@ void Server::session_loop(Socket s) {
                     ? Opcode::SeekLastAck : Opcode::SeekAck;
                 reply.payload.push_back(static_cast<std::uint8_t>(found != 0 ? 1 : 0));
                 write_u32_le(rn, reply.payload);
+                break;
+            }
+            // CreateIndex / SkipUnique / SetScope / ClearScope —
+            // remote bridges for the remaining index ops. CreateIndex
+            // takes the full AdsCreateIndex61 input and returns a
+            // single index id (multi-tag CDX additions are supported
+            // via repeated calls). SkipUnique walks distinct keys via
+            // the active order; SetScope / ClearScope manage top /
+            // bottom range bounds on an existing hIndex.
+            case Opcode::CreateIndex: {
+                if (f.payload.size() < 4 + 4 + 2) {
+                    reply = err("CreateIndex: bad payload"); break;
+                }
+                std::size_t pos = 0;
+                std::uint32_t tid     = read_u32_le(f.payload.data() + pos); pos += 4;
+                std::uint32_t options = read_u32_le(f.payload.data() + pos); pos += 4;
+                std::uint16_t pgsize  = read_u16_le(f.payload.data() + pos); pos += 2;
+                auto pop_str = [&](std::string& out) -> bool {
+                    if (pos + 2 > f.payload.size()) return false;
+                    std::uint16_t n = read_u16_le(f.payload.data() + pos);
+                    pos += 2;
+                    if (pos + n > f.payload.size()) return false;
+                    out.assign(reinterpret_cast<const char*>(
+                                   f.payload.data() + pos), n);
+                    pos += n;
+                    return true;
+                };
+                std::string path, tag, expr, cond, key_filter;
+                if (!pop_str(path) || !pop_str(tag) || !pop_str(expr) ||
+                    !pop_str(cond) || !pop_str(key_filter)) {
+                    reply = err("CreateIndex: short payload"); break;
+                }
+                ADSHANDLE ht = ensure_abi_handle(tid);
+                if (ht == 0) { reply = err("CreateIndex: bad table id"); break; }
+                std::vector<UNSIGNED8> pb (path .size() + 1);  std::memcpy(pb .data(), path .data(), path .size());
+                std::vector<UNSIGNED8> tb (tag  .size() + 1);  std::memcpy(tb .data(), tag  .data(), tag  .size());
+                std::vector<UNSIGNED8> eb (expr .size() + 1);  std::memcpy(eb .data(), expr .data(), expr .size());
+                std::vector<UNSIGNED8> cb (cond .size() + 1);  std::memcpy(cb .data(), cond .data(), cond .size());
+                std::vector<UNSIGNED8> kfb(key_filter.size() + 1);
+                std::memcpy(kfb.data(), key_filter.data(), key_filter.size());
+                ADSHANDLE hidx = 0;
+                UNSIGNED32 rrc = AdsCreateIndex61(
+                    ht, pb.data(), tb.data(), eb.data(),
+                    cond.empty() ? nullptr : cb.data(),
+                    key_filter.empty() ? nullptr : kfb.data(),
+                    options, pgsize, &hidx);
+                if (rrc != 0) { reply = err("CreateIndex", rrc); break; }
+                std::uint32_t iid = next_id++;
+                index_h[iid]     = hidx;
+                index_table[iid] = tid;
+                reply.opcode = Opcode::CreateIndexAck;
+                write_u32_le(iid, reply.payload);
+                break;
+            }
+            case Opcode::SkipUnique: {
+                if (f.payload.size() < 8) { reply = err("SkipUnique: bad payload"); break; }
+                std::uint32_t iid = read_u32_le(f.payload.data());
+                std::int32_t  dir = static_cast<std::int32_t>(
+                    read_u32_le(f.payload.data() + 4));
+                auto iit = index_h.find(iid);
+                if (iit == index_h.end()) { reply = err("SkipUnique: bad index id"); break; }
+                UNSIGNED32 rrc = AdsSkipUnique(iit->second, dir);
+                if (rrc != 0) { reply = err("SkipUnique", rrc); break; }
+                if (auto tit = index_table.find(iid); tit != index_table.end()) {
+                    sync_engine_cursor(tit->second);
+                }
+                reply.opcode = Opcode::SkipUniqueAck;
+                break;
+            }
+            case Opcode::SetScope: {
+                if (f.payload.size() < 6) { reply = err("SetScope: bad payload"); break; }
+                std::uint32_t iid   = read_u32_le(f.payload.data());
+                std::uint16_t which = read_u16_le(f.payload.data() + 4);
+                std::string key(reinterpret_cast<const char*>(
+                                    f.payload.data() + 6),
+                                f.payload.size() - 6);
+                auto iit = index_h.find(iid);
+                if (iit == index_h.end()) { reply = err("SetScope: bad index id"); break; }
+                std::vector<UNSIGNED8> kb(key.size() + 1);
+                std::memcpy(kb.data(), key.data(), key.size());
+                UNSIGNED32 rrc = AdsSetScope(iit->second, which, kb.data());
+                if (rrc != 0) { reply = err("SetScope", rrc); break; }
+                reply.opcode = Opcode::SetScopeAck;
+                break;
+            }
+            case Opcode::ClearScope: {
+                if (f.payload.size() < 6) { reply = err("ClearScope: bad payload"); break; }
+                std::uint32_t iid   = read_u32_le(f.payload.data());
+                std::uint16_t which = read_u16_le(f.payload.data() + 4);
+                auto iit = index_h.find(iid);
+                if (iit == index_h.end()) { reply = err("ClearScope: bad index id"); break; }
+                UNSIGNED32 rrc = AdsClearScope(iit->second, which);
+                if (rrc != 0) { reply = err("ClearScope", rrc); break; }
+                reply.opcode = Opcode::ClearScopeAck;
                 break;
             }
             // M12.7 — remote SQL exec. Lazy-creates a parallel ABI

@@ -826,6 +826,92 @@ RemoteConnection::set_order_by_name(std::uint32_t table_id,
     return {};
 }
 
+namespace {
+
+// Push a u16-prefixed length + bytes string into a payload buffer.
+inline void push_lp_str(std::vector<std::uint8_t>& buf,
+                        const std::string& s) {
+    auto n = static_cast<std::uint16_t>(s.size());
+    buf.push_back(static_cast<std::uint8_t>( n        & 0xFFu));
+    buf.push_back(static_cast<std::uint8_t>((n >>  8) & 0xFFu));
+    buf.insert(buf.end(), s.begin(), s.end());
+}
+
+} // namespace
+
+util::Result<std::uint32_t>
+RemoteConnection::create_index(std::uint32_t table_id,
+                                const std::string& path,
+                                const std::string& tag,
+                                const std::string& expr,
+                                const std::string& cond,
+                                const std::string& key_filter,
+                                std::uint32_t options,
+                                std::uint16_t page_size) {
+    Frame req;
+    req.opcode = Opcode::CreateIndex;
+    write_u32_le(table_id, req.payload);
+    write_u32_le(options, req.payload);
+    write_u16_le(page_size, req.payload);
+    push_lp_str(req.payload, path);
+    push_lp_str(req.payload, tag);
+    push_lp_str(req.payload, expr);
+    push_lp_str(req.payload, cond);
+    push_lp_str(req.payload, key_filter);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::CreateIndexAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "CreateIndex: server error",
+                           tag.empty() ? path : tag};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
+util::Result<void>
+RemoteConnection::skip_unique(std::uint32_t index_id,
+                               std::int32_t  direction) {
+    Frame req; req.opcode = Opcode::SkipUnique;
+    write_u32_le(index_id, req.payload);
+    write_u32_le(static_cast<std::uint32_t>(direction), req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SkipUniqueAck) {
+        return util::Error{5000, 0, "SkipUnique: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void>
+RemoteConnection::set_scope(std::uint32_t index_id,
+                             std::uint16_t which,
+                             const std::string& key) {
+    Frame req; req.opcode = Opcode::SetScope;
+    write_u32_le(index_id, req.payload);
+    write_u16_le(which, req.payload);
+    req.payload.insert(req.payload.end(), key.begin(), key.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetScopeAck) {
+        return util::Error{5000, 0, "SetScope: server error", key};
+    }
+    return {};
+}
+
+util::Result<void>
+RemoteConnection::clear_scope(std::uint32_t index_id,
+                               std::uint16_t which) {
+    Frame req; req.opcode = Opcode::ClearScope;
+    write_u32_le(index_id, req.payload);
+    write_u16_le(which, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::ClearScopeAck) {
+        return util::Error{5000, 0, "ClearScope: server error", ""};
+    }
+    return {};
+}
+
 util::Result<RemoteConnection::SeekOutcome>
 RemoteConnection::seek(std::uint32_t index_id,
                         const std::string& key,

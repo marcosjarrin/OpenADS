@@ -2490,15 +2490,45 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
                             UNSIGNED8*  pucIndexName,
                             UNSIGNED8*  pucExpr,
                             UNSIGNED8*  pucCondition,
-                            UNSIGNED8*  /*pucKeyFilter*/,
+                            UNSIGNED8*  pucKeyFilter,
                             UNSIGNED32  ulOptions,
-                            UNSIGNED16  /*usPageSize*/,
+                            UNSIGNED16  usPageSize,
                             ADSHANDLE*  phIndex) {
-    Table* t = get_table(hTable);
-    if (!t || phIndex == nullptr || pucFileName == nullptr ||
+    if (phIndex == nullptr || pucFileName == nullptr ||
         pucIndexName == nullptr || pucExpr == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     }
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string path = openads::abi::to_internal(pucFileName, 0);
+        std::string tag  = openads::abi::to_internal(pucIndexName, 0);
+        std::string expr = openads::abi::to_internal(pucExpr, 0);
+        std::string cond = pucCondition
+            ? openads::abi::to_internal(pucCondition, 0) : std::string();
+        std::string kf   = pucKeyFilter
+            ? openads::abi::to_internal(pucKeyFilter, 0) : std::string();
+        auto r = rt->conn->create_index(rt->id, path, tag, expr,
+                                         cond, kf,
+                                         ulOptions, usPageSize);
+        if (!r) return fail(r.error());
+        auto& s = state();
+        std::lock_guard<std::recursive_mutex> lk(s.mu);
+        static std::unordered_map<Handle,
+            std::unique_ptr<openads::network::RemoteIndex>> remote_indexes;
+        auto ri = std::make_unique<openads::network::RemoteIndex>();
+        ri->conn   = rt->conn;
+        ri->id     = r.value();
+        ri->tbl_id = rt->id;
+        Handle gh = s.registry.register_object(
+            HandleKind::RemoteIndex, ri.get());
+        *phIndex = gh;
+        remote_indexes.emplace(gh, std::move(ri));
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) {
+        return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    }
+    (void)pucKeyFilter; (void)usPageSize;
     auto bag  = openads::abi::to_internal(pucFileName, 0);
     auto tag  = openads::abi::to_internal(pucIndexName, 0);
     auto expr = openads::abi::to_internal(pucExpr, 0);
@@ -2982,6 +3012,11 @@ UNSIGNED32 AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
 }
 
 UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        auto r = ri->conn->skip_unique(ri->id, lDirection);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     auto* idx = iindex_for_handle(hIndex);
@@ -3611,6 +3646,13 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
 
 UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
                        UNSIGNED8* pucKey) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        std::string key = pucKey
+            ? openads::abi::to_internal(pucKey, 0) : std::string();
+        auto r = ri->conn->set_scope(ri->id, usScope, key);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     auto key = openads::abi::to_internal(pucKey, 0);
@@ -3620,6 +3662,11 @@ UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
 }
 
 UNSIGNED32 AdsClearScope(ADSHANDLE hIndex, UNSIGNED16 usScope) {
+    if (auto* ri = get_remote_index(hIndex)) {
+        auto r = ri->conn->clear_scope(ri->id, usScope);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
     auto r = t->clear_scope(usScope == ADS_TOP);

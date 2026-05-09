@@ -104,6 +104,21 @@ public:
                                      const std::string& key,
                                      std::uint8_t soft,
                                      std::uint8_t last);
+    util::Result<std::uint32_t> create_index(std::uint32_t table_id,
+                                              const std::string& path,
+                                              const std::string& tag,
+                                              const std::string& expr,
+                                              const std::string& cond,
+                                              const std::string& key_filter,
+                                              std::uint32_t options,
+                                              std::uint16_t page_size);
+    util::Result<void>          skip_unique(std::uint32_t index_id,
+                                            std::int32_t  direction);
+    util::Result<void>          set_scope(std::uint32_t index_id,
+                                          std::uint16_t which,
+                                          const std::string& key);
+    util::Result<void>          clear_scope(std::uint32_t index_id,
+                                            std::uint16_t which);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
