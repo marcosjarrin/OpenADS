@@ -799,7 +799,17 @@ void Server::session_loop(Socket s) {
                 // M12.21 — sequential Skip(1) is the xbrowse PgDn
                 // pattern; piggyback up to 19 lookahead rows so the
                 // remaining cells in the repaint hit the client cache.
-                std::uint16_t lookahead = (step == 1) ? 19 : 0;
+                // M12.21 disabled (option B). Sequential prefetch is
+                // correct only when client + server agree on the
+                // logical cursor; the lookahead variant didn't carry
+                // a "prefetch_consumed" hint, so a Skip(-1) after K
+                // drained prefetch rows reads from server cursor at
+                // N+1 instead of N+K, surfacing the wrong row. Until
+                // option C (bidirectional prefetch with consumed-
+                // counter sync) lands, ack with no lookahead — every
+                // other M12.17/18/19/20 win still applies.
+                std::uint16_t lookahead = 0;
+                (void)step;
                 if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
                     (void)AdsSkip(cit->second, step);
                     reply.opcode = Opcode::SkipAck;
