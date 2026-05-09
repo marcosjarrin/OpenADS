@@ -187,6 +187,12 @@ struct RemoteTable {
     // cache instead of a separate RTT each.
     std::uint32_t            current_recno   = 0;
     bool                     current_deleted = false;
+    // M12.19 — cached record count. Serves AdsGetRecordCount and
+    // AdsGetRelKeyPos (scrollbar) without an extra RTT. Invalidated
+    // on writes that may change the row count: AppendBlank /
+    // DeleteRecord / RecallRecord / Pack / Zap.
+    std::uint32_t            cached_rec_count   = 0;
+    bool                     rec_count_cached   = false;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag

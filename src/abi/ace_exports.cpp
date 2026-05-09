@@ -1537,9 +1537,20 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                              UNSIGNED32* pulRecordCount) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        // M12.19 — record count is invariant outside of explicit
+        // writes (AppendBlank / DeleteRecord / RecallRecord / Pack
+        // / Zap), so cache the value on first hit and serve every
+        // subsequent AdsGetRecordCount + AdsGetRelKeyPos (scrollbar)
+        // call from cache. Each cache hit saves one wire RTT.
+        if (rt->rec_count_cached) {
+            *pulRecordCount = rt->cached_rec_count;
+            return ok();
+        }
         auto r = rt->conn->record_count(rt->id);
         if (!r) return fail(r.error());
-        *pulRecordCount = static_cast<UNSIGNED32>(r.value());
+        rt->cached_rec_count = static_cast<UNSIGNED32>(r.value());
+        rt->rec_count_cached = true;
+        *pulRecordCount = rt->cached_rec_count;
         return ok();
     }
     Table* t = get_table(hTable);
@@ -1679,7 +1690,8 @@ UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
 
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
+        rt->row_valid        = false;               // M12.17
+        rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->append_blank(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1707,7 +1719,8 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
+        rt->row_valid        = false;               // M12.17
+        rt->rec_count_cached = false;               // M12.19 (Pack drops the row)
         auto r = rt->conn->delete_record(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1721,7 +1734,8 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
-        rt->row_valid = false;                      // M12.17 cache invalidation
+        rt->row_valid        = false;               // M12.17
+        rt->rec_count_cached = false;               // M12.19
         auto r = rt->conn->recall_record(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -3838,6 +3852,8 @@ UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
 
 UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid        = false;               // M12.17/19
+        rt->rec_count_cached = false;
         auto r = rt->conn->pack_table(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -3851,6 +3867,8 @@ UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid        = false;               // M12.17/19
+        rt->rec_count_cached = false;
         auto r = rt->conn->zap_table(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -9198,12 +9216,29 @@ UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0.0;
     if (auto* rt = get_remote_table(h)) {
-        auto rcr = rt->conn->record_count(rt->id);
-        if (!rcr) return fail(rcr.error());
-        auto rnr = rt->conn->get_record_num(rt->id);
-        if (!rnr) return fail(rnr.error());
-        std::uint32_t rc = rcr.value();
-        std::uint32_t rn = rnr.value();
+        // M12.19 — scrollbar callers (xbrowse) hit this every paint.
+        // current_recno arrives with the row trailer (M12.18) and
+        // cached_rec_count survives every nav, so the hot path is
+        // 0 RTT. Fall back to a wire RTT only if either piece of
+        // state is cold (e.g. just-opened table before first nav).
+        std::uint32_t rc = 0;
+        if (rt->rec_count_cached) {
+            rc = rt->cached_rec_count;
+        } else {
+            auto rcr = rt->conn->record_count(rt->id);
+            if (!rcr) return fail(rcr.error());
+            rc = static_cast<std::uint32_t>(rcr.value());
+            rt->cached_rec_count = rc;
+            rt->rec_count_cached = true;
+        }
+        std::uint32_t rn = 0;
+        if (rt->row_valid) {
+            rn = rt->current_recno;
+        } else {
+            auto rnr = rt->conn->get_record_num(rt->id);
+            if (!rnr) return fail(rnr.error());
+            rn = rnr.value();
+        }
         if (rc <= 1 || rn == 0) { *p = 0.0; return ok(); }
         if (rn > rc) rn = rc;
         *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
