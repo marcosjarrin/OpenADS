@@ -6,6 +6,7 @@
 #include <cstring>
 #include <errno.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -60,6 +61,16 @@ util::Result<PeerAddr> socket_peer_addr(const Socket& sock) {
                     static_cast<std::uint16_t>(ntohs(addr.sin_port))};
 }
 
+// M12.20 — disable Nagle on every per-connection socket. The
+// wire protocol is strict request/response (ping-pong), so the
+// kernel's Nagle delay (up to 200 ms accumulating small frames)
+// is pure latency tax. xbrowse PgDn × 20 RTT × 40 ms Nagle =
+// ~800 ms of pure delay per repaint pre-fix.
+static void disable_nagle(int s) {
+    int on = 1;
+    (void)::setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+}
+
 util::Result<Socket> accept_one(Socket& listener) {
     sockaddr_in addr{};
     socklen_t len = sizeof(addr);
@@ -68,6 +79,7 @@ util::Result<Socket> accept_one(Socket& listener) {
     if (c < 0) {
         return util::Error{5000, errno, "accept() failed", ""};
     }
+    disable_nagle(c);
     Socket out;
     out.handle = static_cast<std::uintptr_t>(c);
     return out;
@@ -87,6 +99,7 @@ util::Result<Socket> connect_tcp(const std::string& host,
         int e = errno; ::close(s);
         return util::Error{5000, e, "connect() failed", host};
     }
+    disable_nagle(s);
     Socket out;
     out.handle = static_cast<std::uintptr_t>(s);
     return out;
