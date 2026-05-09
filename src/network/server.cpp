@@ -581,6 +581,184 @@ void Server::session_loop(Socket s) {
                 reply.payload.push_back(tbl->eof() ? 1 : 0);
                 break;
             }
+            // M12.14 — DescribeTable: serialize the schema in one
+            // round-trip so rddads' adsOpen field-iteration loop
+            // doesn't generate 5 × num_fields hops.
+            case Opcode::DescribeTable: {
+                if (f.payload.size() < 4) {
+                    reply = err("DescribeTable: bad payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                ADSHANDLE       cur_h  = 0;
+                openads::engine::Table* tbl = nullptr;
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    cur_h = cit->second;
+                } else {
+                    auto it = tbls.find(id);
+                    if (it == tbls.end() || !sess_conn) {
+                        reply = err("DescribeTable: bad table id"); break;
+                    }
+                    tbl = sess_conn->lookup_table(it->second);
+                    if (!tbl) {
+                        reply = err("DescribeTable: lookup failed"); break;
+                    }
+                }
+                reply.opcode = Opcode::DescribeTableAck;
+                if (cur_h != 0) {
+                    UNSIGNED16 nf = 0;
+                    AdsGetNumFields(cur_h, &nf);
+                    reply.payload.push_back(static_cast<std::uint8_t>(nf & 0xFFu));
+                    reply.payload.push_back(static_cast<std::uint8_t>((nf >> 8) & 0xFFu));
+                    for (UNSIGNED16 i = 1; i <= nf; ++i) {
+                        UNSIGNED8  nm[64] = {0};
+                        UNSIGNED16 cap = sizeof(nm);
+                        AdsGetFieldName(cur_h, i, nm, &cap);
+                        std::vector<UNSIGNED8> nbuf(cap + 1, 0);
+                        std::memcpy(nbuf.data(), nm, cap);
+                        UNSIGNED16 ftype = 0;
+                        UNSIGNED32 flen  = 0;
+                        UNSIGNED16 fdec  = 0;
+                        AdsGetFieldType    (cur_h, nbuf.data(), &ftype);
+                        AdsGetFieldLength  (cur_h, nbuf.data(), &flen);
+                        AdsGetFieldDecimals(cur_h, nbuf.data(), &fdec);
+                        reply.payload.push_back(static_cast<std::uint8_t>(cap));
+                        reply.payload.insert(reply.payload.end(),
+                            nm, nm + cap);
+                        reply.payload.push_back(static_cast<std::uint8_t>( ftype       & 0xFFu));
+                        reply.payload.push_back(static_cast<std::uint8_t>((ftype >> 8) & 0xFFu));
+                        write_u32_le(flen, reply.payload);
+                        reply.payload.push_back(static_cast<std::uint8_t>( fdec       & 0xFFu));
+                        reply.payload.push_back(static_cast<std::uint8_t>((fdec >> 8) & 0xFFu));
+                    }
+                } else {
+                    // Mirror the ABI map_field_type() table so the wire
+                    // payload reports ADS_* type codes (4 = STRING, 2 =
+                    // NUMERIC, 11 = INTEGER, …) regardless of which
+                    // server-side branch we took.
+                    auto map_type = [](openads::drivers::DbfFieldType t) -> std::uint16_t {
+                        using T = openads::drivers::DbfFieldType;
+                        switch (t) {
+                            case T::Character: return ADS_STRING;
+                            case T::Numeric:
+                            case T::Float:     return ADS_NUMERIC;
+                            case T::Logical:   return ADS_LOGICAL;
+                            case T::Date:      return ADS_DATE;
+                            case T::DateTime:  return ADS_TIMESTAMP;
+                            case T::Memo:      return ADS_MEMO;
+                            case T::Integer:   return ADS_INTEGER;
+                            case T::Currency:  return ADS_MONEY;
+                            case T::Double:    return ADS_DOUBLE;
+                            case T::Varchar:   return ADS_STRING;
+                            case T::Varbinary: return ADS_RAW;
+                            case T::Unknown:   return ADS_FIELD_TYPE_UNKNOWN;
+                        }
+                        return ADS_FIELD_TYPE_UNKNOWN;
+                    };
+                    auto nf = static_cast<std::uint16_t>(tbl->field_count());
+                    reply.payload.push_back(static_cast<std::uint8_t>(nf & 0xFFu));
+                    reply.payload.push_back(static_cast<std::uint8_t>((nf >> 8) & 0xFFu));
+                    for (std::uint16_t i = 0; i < nf; ++i) {
+                        const auto& fd = tbl->field_descriptor(i);
+                        std::uint8_t name_len =
+                            static_cast<std::uint8_t>(fd.name.size() & 0xFFu);
+                        std::uint16_t ftype = map_type(fd.type);
+                        std::uint32_t flen = fd.length;
+                        std::uint16_t fdec = fd.decimals;
+                        reply.payload.push_back(name_len);
+                        reply.payload.insert(reply.payload.end(),
+                            fd.name.begin(),
+                            fd.name.begin() + name_len);
+                        reply.payload.push_back(static_cast<std::uint8_t>( ftype       & 0xFFu));
+                        reply.payload.push_back(static_cast<std::uint8_t>((ftype >> 8) & 0xFFu));
+                        write_u32_le(flen, reply.payload);
+                        reply.payload.push_back(static_cast<std::uint8_t>( fdec       & 0xFFu));
+                        reply.payload.push_back(static_cast<std::uint8_t>((fdec >> 8) & 0xFFu));
+                    }
+                }
+                break;
+            }
+            case Opcode::AtBOF: {
+                if (f.payload.size() < 4) { reply = err("AtBOF: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsAtBOF(cit->second, &v);
+                    reply.opcode = Opcode::AtBOFAck;
+                    reply.payload.push_back(v != 0 ? 1 : 0);
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("AtBOF: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("AtBOF: lookup failed"); break; }
+                reply.opcode = Opcode::AtBOFAck;
+                reply.payload.push_back(tbl->bof() ? 1 : 0);
+                break;
+            }
+            case Opcode::GetRecordNum: {
+                if (f.payload.size() < 4) { reply = err("GetRecordNum: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED32 rn = 0;
+                    AdsGetRecordNum(cit->second, 0, &rn);
+                    reply.opcode = Opcode::GetRecordNumAck;
+                    write_u32_le(rn, reply.payload);
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetRecordNum: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetRecordNum: lookup failed"); break; }
+                reply.opcode = Opcode::GetRecordNumAck;
+                write_u32_le(tbl->recno(), reply.payload);
+                break;
+            }
+            case Opcode::IsRecordDeleted: {
+                if (f.payload.size() < 4) { reply = err("IsRecordDeleted: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsIsRecordDeleted(cit->second, &v);
+                    reply.opcode = Opcode::IsRecordDeletedAck;
+                    reply.payload.push_back(v != 0 ? 1 : 0);
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("IsRecordDeleted: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("IsRecordDeleted: lookup failed"); break; }
+                reply.opcode = Opcode::IsRecordDeletedAck;
+                reply.payload.push_back(tbl->is_deleted() ? 1 : 0);
+                break;
+            }
+            case Opcode::GotoBottom: {
+                if (f.payload.size() < 4) { reply = err("GotoBottom: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    AdsGotoBottom(cit->second);
+                    reply.opcode = Opcode::GotoBottomAck;
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GotoBottom: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GotoBottom: lookup failed"); break; }
+                auto rb = tbl->goto_bottom();
+                if (!rb) {
+                    reply = err("GotoBottom: " + rb.error().message);
+                    break;
+                }
+                reply.opcode = Opcode::GotoBottomAck;
+                break;
+            }
             // M12.7 — remote SQL exec. Lazy-creates a parallel ABI
             // connection on the server side; cursor handles returned
             // by AdsExecuteSQLDirect get wrapped in cursor_tbls so the

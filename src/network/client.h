@@ -56,6 +56,19 @@ public:
                                            const std::string& field_name);
     util::Result<std::uint32_t> record_count(std::uint32_t id);
     util::Result<bool>          at_eof(std::uint32_t id);
+    // M12.14 — remote field metadata + extended cursor state.
+    struct FieldDesc {
+        std::string   name;
+        std::uint16_t type     = 0;     // ADS_* code
+        std::uint32_t length   = 0;
+        std::uint16_t decimals = 0;
+    };
+    util::Result<std::vector<FieldDesc>>
+                                describe_table(std::uint32_t id);
+    util::Result<bool>          at_bof(std::uint32_t id);
+    util::Result<std::uint32_t> get_record_num(std::uint32_t id);
+    util::Result<bool>          is_record_deleted(std::uint32_t id);
+    util::Result<void>          goto_bottom(std::uint32_t id);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
@@ -92,6 +105,11 @@ private:
 struct RemoteTable {
     RemoteConnection* conn = nullptr;
     std::uint32_t     id   = 0;
+    // M12.14 — schema cache populated lazily on first
+    // AdsGetNumFields / AdsGetFieldName / ... call so rddads'
+    // adsOpen field-iteration loop stays at one wire round-trip.
+    std::vector<RemoteConnection::FieldDesc> fields;
+    bool fields_cached = false;
 };
 
 // Parse `tcp://host:port/<data_dir>` into its parts. Returns

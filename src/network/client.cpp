@@ -21,6 +21,18 @@ inline std::uint32_t read_u32_le(const std::uint8_t* p) {
            (static_cast<std::uint32_t>(p[3]) << 24);
 }
 
+inline void write_u16_le(std::uint16_t v,
+                         std::vector<std::uint8_t>& out) {
+    out.push_back(static_cast<std::uint8_t>( v        & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >>  8) & 0xFFu));
+}
+
+inline std::uint16_t read_u16_le(const std::uint8_t* p) {
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(p[0]) |
+        (static_cast<std::uint16_t>(p[1]) << 8));
+}
+
 } // namespace
 
 namespace {
@@ -428,6 +440,107 @@ RemoteConnection::execute_sql(const std::string& sql) {
                            sql.substr(0, 200)};
     }
     return read_u32_le(rep.value().payload.data());
+}
+
+// =====================================================================
+// M12.14 — remote field metadata + extended cursor state.
+// =====================================================================
+
+util::Result<std::vector<RemoteConnection::FieldDesc>>
+RemoteConnection::describe_table(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::DescribeTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::DescribeTableAck) {
+        return util::Error{5000, 0,
+            "DescribeTable: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    if (pl.size() < 2) {
+        return util::Error{5000, 0,
+            "DescribeTable: short payload", ""};
+    }
+    std::vector<FieldDesc> out;
+    std::size_t pos = 0;
+    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
+    out.reserve(n);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (pos >= pl.size()) {
+            return util::Error{5000, 0,
+                "DescribeTable: truncated field record", ""};
+        }
+        std::uint8_t name_len = pl[pos++];
+        if (pos + name_len + 8 > pl.size()) {
+            return util::Error{5000, 0,
+                "DescribeTable: truncated field record", ""};
+        }
+        FieldDesc f;
+        f.name.assign(pl.begin() + static_cast<std::ptrdiff_t>(pos),
+                      pl.begin() + static_cast<std::ptrdiff_t>(pos + name_len));
+        pos += name_len;
+        f.type     = read_u16_le(&pl[pos]); pos += 2;
+        f.length   = read_u32_le(&pl[pos]); pos += 4;
+        f.decimals = read_u16_le(&pl[pos]); pos += 2;
+        out.push_back(std::move(f));
+    }
+    return out;
+}
+
+util::Result<bool> RemoteConnection::at_bof(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::AtBOF;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::AtBOFAck ||
+        rep.value().payload.empty()) {
+        return util::Error{5000, 0, "AtBOF: server error", ""};
+    }
+    return rep.value().payload[0] != 0;
+}
+
+util::Result<std::uint32_t>
+RemoteConnection::get_record_num(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::GetRecordNum;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetRecordNumAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0,
+            "GetRecordNum: server error", ""};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
+util::Result<bool>
+RemoteConnection::is_record_deleted(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::IsRecordDeleted;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::IsRecordDeletedAck ||
+        rep.value().payload.empty()) {
+        return util::Error{5000, 0,
+            "IsRecordDeleted: server error", ""};
+    }
+    return rep.value().payload[0] != 0;
+}
+
+util::Result<void> RemoteConnection::goto_bottom(std::uint32_t id) {
+    Frame req;
+    req.opcode = Opcode::GotoBottom;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GotoBottomAck) {
+        return util::Error{5000, 0, "GotoBottom: server error", ""};
+    }
+    return {};
 }
 
 } // namespace openads::network

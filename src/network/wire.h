@@ -46,6 +46,20 @@ enum class Opcode : std::uint8_t {
     GetRecordCountAck  = 0x47,
     AtEOF              = 0x48,
     AtEOFAck           = 0x49,
+    // M12.14 — remote field metadata + extended cursor state.
+    // DescribeTable returns the full per-column schema in one
+    // round-trip so rddads' adsOpen path doesn't need 5 × num_fields
+    // hops to populate AdsGetFieldName/Type/Length/Decimals.
+    DescribeTable      = 0x4A,
+    DescribeTableAck   = 0x4B,
+    AtBOF              = 0x4C,
+    AtBOFAck           = 0x4D,
+    GetRecordNum       = 0x4E,
+    GetRecordNumAck    = 0x4F,
+    IsRecordDeleted    = 0x62,
+    IsRecordDeletedAck = 0x63,
+    GotoBottom         = 0x64,
+    GotoBottomAck      = 0x65,
     // M12.6 — remote write surface.
     AppendBlank        = 0x50,
     AppendBlankAck     = 0x51,

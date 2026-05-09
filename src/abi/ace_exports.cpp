@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <limits>
 #include <thread>
 
 #include <cctype>
@@ -1141,6 +1142,11 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->goto_bottom(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_bottom();
@@ -1177,15 +1183,33 @@ UNSIGNED32 AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
 }
 
 UNSIGNED32 AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
+    if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->at_bof(rt->id);
+        if (!r) return fail(r.error());
+        *pbAtBegin = r.value() ? 1 : 0;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbAtBegin = t->bof() ? 1 : 0;
     return ok();
 }
 
 UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
+    if (pusFields == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        if (!rt->fields_cached) {
+            auto r = rt->conn->describe_table(rt->id);
+            if (!r) return fail(r.error());
+            rt->fields = std::move(r).value();
+            rt->fields_cached = true;
+        }
+        *pusFields = static_cast<UNSIGNED16>(rt->fields.size());
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusFields == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* p = projection_for(hTable); p != nullptr) {
         *pusFields = static_cast<UNSIGNED16>(p->size());
     } else {
@@ -1196,6 +1220,20 @@ UNSIGNED32 AdsGetNumFields(ADSHANDLE hTable, UNSIGNED16* pusFields) {
 
 UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
                            UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
+    if (auto* rt = get_remote_table(hTable)) {
+        if (!rt->fields_cached) {
+            auto r = rt->conn->describe_table(rt->id);
+            if (!r) return fail(r.error());
+            rt->fields = std::move(r).value();
+            rt->fields_cached = true;
+        }
+        if (usFieldNum == 0 || usFieldNum > rt->fields.size()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        openads::abi::copy_to_caller(pucBuf, pusLen,
+            rt->fields[usFieldNum - 1].name);
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto* p = projection_for(hTable);
@@ -1216,10 +1254,51 @@ UNSIGNED32 AdsGetFieldName(ADSHANDLE hTable, UNSIGNED16 usFieldNum,
     return ok();
 }
 
+// Cache the remote schema on `rt` if not already; return index of
+// the field whose name (case-insensitive) matches `pucField`, or
+// SIZE_MAX when not found. Used by the three remote field-by-name
+// metadata bridges below.
+namespace {
+
+std::size_t remote_field_index(openads::network::RemoteTable* rt,
+                                UNSIGNED8* pucField) {
+    if (!rt->fields_cached) {
+        auto r = rt->conn->describe_table(rt->id);
+        if (!r) return std::numeric_limits<std::size_t>::max();
+        rt->fields = std::move(r).value();
+        rt->fields_cached = true;
+    }
+    std::string want = openads::abi::to_internal(pucField, 0);
+    for (auto& c : want) {
+        c = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c)));
+    }
+    for (std::size_t i = 0; i < rt->fields.size(); ++i) {
+        std::string have = rt->fields[i].name;
+        for (auto& c : have) {
+            c = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (have == want) return i;
+    }
+    return std::numeric_limits<std::size_t>::max();
+}
+
+} // namespace
+
 UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16* pusType) {
+    if (pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        *pusType = rt->fields[i].type;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -1230,8 +1309,17 @@ UNSIGNED32 AdsGetFieldType(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                              UNSIGNED32* pulLen) {
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        *pulLen = rt->fields[i].length;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -1242,8 +1330,17 @@ UNSIGNED32 AdsGetFieldLength(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
                                UNSIGNED16* pusDec) {
+    if (pusDec == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto i = remote_field_index(rt, pucField);
+        if (i == std::numeric_limits<std::size_t>::max()) {
+            return fail(openads::AE_COLUMN_NOT_FOUND, "");
+        }
+        *pusDec = rt->fields[i].decimals;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusDec == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -1320,8 +1417,15 @@ UNSIGNED32 AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate)
 
 UNSIGNED32 AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOption*/,
                            UNSIGNED32* pulRecordNum) {
+    if (pulRecordNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_record_num(rt->id);
+        if (!r) return fail(r.error());
+        *pulRecordNum = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pulRecordNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pulRecordNum = t->recno();
     return ok();
 }
@@ -1503,8 +1607,15 @@ UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted) {
+    if (pbDeleted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->is_record_deleted(rt->id);
+        if (!r) return fail(r.error());
+        *pbDeleted = r.value() ? 1 : 0;
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pbDeleted == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     *pbDeleted = t->is_deleted() ? 1 : 0;
     return ok();
 }
