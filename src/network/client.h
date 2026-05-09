@@ -69,6 +69,24 @@ public:
     util::Result<std::uint32_t> get_record_num(std::uint32_t id);
     util::Result<bool>          is_record_deleted(std::uint32_t id);
     util::Result<void>          goto_bottom(std::uint32_t id);
+    // M12.15 — remote info / lock / maintenance / AOF.
+    util::Result<bool>          is_found(std::uint32_t id);
+    util::Result<void>          refresh_record(std::uint32_t id);
+    util::Result<std::uint16_t> get_table_type(std::uint32_t id);
+    util::Result<std::uint32_t> get_record_length(std::uint32_t id);
+    util::Result<std::uint16_t> get_num_indexes(std::uint32_t id);
+    util::Result<std::uint32_t> get_last_autoinc(std::uint32_t id);
+    util::Result<void>          lock_record(std::uint32_t id, std::uint32_t recno);
+    util::Result<void>          unlock_record(std::uint32_t id, std::uint32_t recno);
+    util::Result<void>          lock_table(std::uint32_t id);
+    util::Result<void>          unlock_table(std::uint32_t id);
+    util::Result<void>          pack_table(std::uint32_t id);
+    util::Result<void>          zap_table(std::uint32_t id);
+    util::Result<void>          flush_file_buffers(std::uint32_t id);
+    util::Result<void>          close_all_indexes(std::uint32_t id);
+    util::Result<void>          set_aof(std::uint32_t id, const std::string& cond);
+    util::Result<void>          clear_aof(std::uint32_t id);
+    util::Result<std::uint16_t> get_aof_opt_level(std::uint32_t id);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,

@@ -1,11 +1,14 @@
 #include "network/server.h"
 
+#include "engine/aof_eval.h"
+#include "engine/aof_expr.h"
 #include "engine/table.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "session/connection.h"
 
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -757,6 +760,294 @@ void Server::session_loop(Socket s) {
                     break;
                 }
                 reply.opcode = Opcode::GotoBottomAck;
+                break;
+            }
+            // M12.15 — info / lock / maintenance / AOF.
+            //
+            // All these handlers share the same shape:
+            //   payload[0..3]  = table id (client-side)
+            //   reply payload  = answer (or empty for void)
+            // For the local-table branch (sess_conn-owned engine
+            // Tables) the call lands on Table::* methods directly.
+            // Cursor handles (from ExecuteSQL) route through the
+            // matching ABI entry point, preserving the wire/ABI
+            // symmetry.
+            case Opcode::IsFound: {
+                if (f.payload.size() < 4) { reply = err("IsFound: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsIsFound(cit->second, &v);
+                    reply.opcode = Opcode::IsFoundAck;
+                    reply.payload.push_back(v != 0 ? 1 : 0);
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("IsFound: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("IsFound: lookup failed"); break; }
+                reply.opcode = Opcode::IsFoundAck;
+                reply.payload.push_back(tbl->last_seek_found() ? 1 : 0);
+                break;
+            }
+            case Opcode::RefreshRecord: {
+                if (f.payload.size() < 4) { reply = err("RefreshRecord: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    AdsRefreshRecord(cit->second);
+                    reply.opcode = Opcode::RefreshRecordAck;
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("RefreshRecord: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("RefreshRecord: lookup failed"); break; }
+                // Force a re-load from disk by re-positioning to the
+                // current recno.
+                auto rb = tbl->goto_record(tbl->recno());
+                if (!rb) { reply = err("RefreshRecord: " + rb.error().message); break; }
+                reply.opcode = Opcode::RefreshRecordAck;
+                break;
+            }
+            case Opcode::GetTableType: {
+                if (f.payload.size() < 4) { reply = err("GetTableType: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsGetTableType(cit->second, &v);
+                    reply.opcode = Opcode::GetTableTypeAck;
+                    reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+                    reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetTableType: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetTableType: lookup failed"); break; }
+                std::uint16_t v = ADS_CDX;
+                std::filesystem::path p(tbl->path());
+                std::string ext = p.extension().string();
+                for (auto& c : ext) c = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(c)));
+                if      (ext == ".adt") v = ADS_ADT;
+                reply.opcode = Opcode::GetTableTypeAck;
+                reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+                break;
+            }
+            case Opcode::GetRecordLength: {
+                if (f.payload.size() < 4) { reply = err("GetRecordLength: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED32 v = 0;
+                    AdsGetRecordLength(cit->second, &v);
+                    reply.opcode = Opcode::GetRecordLengthAck;
+                    write_u32_le(v, reply.payload);
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetRecordLength: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetRecordLength: lookup failed"); break; }
+                std::uint32_t rl = tbl->driver()
+                    ? tbl->driver()->record_length() : 0;
+                reply.opcode = Opcode::GetRecordLengthAck;
+                write_u32_le(rl, reply.payload);
+                break;
+            }
+            case Opcode::GetNumIndexes: {
+                if (f.payload.size() < 4) { reply = err("GetNumIndexes: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 v = 0;
+                    AdsGetNumIndexes(cit->second, &v);
+                    reply.opcode = Opcode::GetNumIndexesAck;
+                    reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+                    reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("GetNumIndexes: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("GetNumIndexes: lookup failed"); break; }
+                std::uint16_t n = static_cast<std::uint16_t>(
+                    tbl->all_indexes().size());
+                reply.opcode = Opcode::GetNumIndexesAck;
+                reply.payload.push_back(static_cast<std::uint8_t>( n       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((n >> 8) & 0xFFu));
+                break;
+            }
+            case Opcode::GetLastAutoinc: {
+                if (f.payload.size() < 4) { reply = err("GetLastAutoinc: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint32_t v = 0;
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    AdsGetLastAutoinc(cit->second, &v);
+                }
+                // Local-table path: not exposed at engine level;
+                // return 0. Same as the local AdsGetLastAutoinc
+                // fallback when the column isn't autoinc.
+                reply.opcode = Opcode::GetLastAutoincAck;
+                write_u32_le(v, reply.payload);
+                break;
+            }
+            // Locking is currently no-op at the engine level for
+            // our LocalServer fallback path; the cursor branch
+            // routes through real ABI locks. Both ack with success
+            // so rddads' shared-mode opens don't fail mid-flight.
+            case Opcode::LockRecord:
+            case Opcode::UnlockRecord: {
+                if (f.payload.size() < 8) { reply = err("Lock: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint32_t rn = read_u32_le(f.payload.data() + 4);
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    if (f.opcode == Opcode::LockRecord) {
+                        AdsLockRecord(cit->second, rn);
+                    } else {
+                        AdsUnlockRecord(cit->second, rn);
+                    }
+                }
+                reply.opcode = (f.opcode == Opcode::LockRecord)
+                    ? Opcode::LockRecordAck
+                    : Opcode::UnlockRecordAck;
+                break;
+            }
+            case Opcode::LockTable:
+            case Opcode::UnlockTable: {
+                if (f.payload.size() < 4) { reply = err("Lock: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    if (f.opcode == Opcode::LockTable) {
+                        AdsLockTable(cit->second);
+                    } else {
+                        AdsUnlockTable(cit->second);
+                    }
+                }
+                reply.opcode = (f.opcode == Opcode::LockTable)
+                    ? Opcode::LockTableAck
+                    : Opcode::UnlockTableAck;
+                break;
+            }
+            case Opcode::PackTable:
+            case Opcode::ZapTable:
+            case Opcode::FlushFileBuffers:
+            case Opcode::CloseAllIndexes: {
+                if (f.payload.size() < 4) { reply = err("Maintenance: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                Opcode ack_op =
+                      (f.opcode == Opcode::PackTable)        ? Opcode::PackTableAck
+                    : (f.opcode == Opcode::ZapTable)         ? Opcode::ZapTableAck
+                    : (f.opcode == Opcode::FlushFileBuffers) ? Opcode::FlushFileBuffersAck
+                    :                                          Opcode::CloseAllIndexesAck;
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    if      (f.opcode == Opcode::PackTable)        AdsPackTable(cit->second);
+                    else if (f.opcode == Opcode::ZapTable)         AdsZapTable(cit->second);
+                    else if (f.opcode == Opcode::FlushFileBuffers) AdsFlushFileBuffers(cit->second);
+                    else                                            AdsCloseAllIndexes(cit->second);
+                    reply.opcode = ack_op;
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("Maintenance: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("Maintenance: lookup failed"); break; }
+                util::Result<void> rb = util::Result<void>{};
+                if      (f.opcode == Opcode::PackTable)        rb = tbl->pack();
+                else if (f.opcode == Opcode::ZapTable)         rb = tbl->zap();
+                else if (f.opcode == Opcode::FlushFileBuffers) rb = tbl->flush();
+                else {
+                    // CloseAllIndexes: drop both active order +
+                    // every parked extra view in lockstep.
+                    tbl->clear_order();
+                    tbl->clear_extra_index_views();
+                }
+                if (!rb) { reply = err("Maintenance: " + rb.error().message); break; }
+                reply.opcode = ack_op;
+                break;
+            }
+            case Opcode::SetAOF: {
+                if (f.payload.size() < 4) { reply = err("SetAOF: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::string cond(reinterpret_cast<const char*>(
+                                     f.payload.data() + 4),
+                                 f.payload.size() - 4);
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    std::vector<UNSIGNED8> b(cond.size() + 1);
+                    std::memcpy(b.data(), cond.data(), cond.size());
+                    UNSIGNED32 rrc = AdsSetAOF(cit->second, b.data(), 0);
+                    if (rrc != 0) { reply = err("SetAOF: parse failed", rrc); break; }
+                    reply.opcode = Opcode::SetAOFAck;
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("SetAOF: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("SetAOF: lookup failed"); break; }
+                auto ast = openads::engine::aof::parse(cond);
+                if (!ast) { reply = err("SetAOF: " + ast.error().message); break; }
+                auto rep = openads::engine::aof::evaluate_optimised(*ast.value(), *tbl);
+                if (!rep) { reply = err("SetAOF: " + rep.error().message); break; }
+                tbl->install_aof_bitmap(std::move(rep.value().bm));
+                int lvl = ADS_OPTIMIZED_NONE;
+                switch (rep.value().level) {
+                    case openads::engine::aof::OptLevel::None: lvl = ADS_OPTIMIZED_NONE; break;
+                    case openads::engine::aof::OptLevel::Part: lvl = ADS_OPTIMIZED_PART; break;
+                    case openads::engine::aof::OptLevel::Full: lvl = ADS_OPTIMIZED_FULL; break;
+                }
+                tbl->set_aof_opt_level(lvl);
+                reply.opcode = Opcode::SetAOFAck;
+                break;
+            }
+            case Opcode::ClearAOFRemote: {
+                if (f.payload.size() < 4) { reply = err("ClearAOF: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    AdsClearAOF(cit->second);
+                    reply.opcode = Opcode::ClearAOFRemoteAck;
+                    break;
+                }
+                auto it = tbls.find(id);
+                if (it == tbls.end() || !sess_conn) {
+                    reply = err("ClearAOF: bad table id"); break;
+                }
+                auto* tbl = sess_conn->lookup_table(it->second);
+                if (!tbl) { reply = err("ClearAOF: lookup failed"); break; }
+                tbl->clear_filter();
+                reply.opcode = Opcode::ClearAOFRemoteAck;
+                break;
+            }
+            case Opcode::GetAOFOptLevel: {
+                if (f.payload.size() < 4) { reply = err("GetAOFOptLevel: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint16_t v = ADS_OPTIMIZED_NONE;
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    UNSIGNED16 lvl = 0; UNSIGNED16 buflen = 0;
+                    AdsGetAOFOptLevel(cit->second, &lvl, nullptr, &buflen);
+                    v = lvl;
+                } else if (auto it = tbls.find(id); it != tbls.end() && sess_conn) {
+                    if (auto* tbl = sess_conn->lookup_table(it->second)) {
+                        if (tbl->aof_active()) {
+                            v = static_cast<std::uint16_t>(tbl->aof_opt_level());
+                        }
+                    }
+                }
+                reply.opcode = Opcode::GetAOFOptLevelAck;
+                reply.payload.push_back(static_cast<std::uint8_t>( v       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
                 break;
             }
             // M12.7 — remote SQL exec. Lazy-creates a parallel ABI

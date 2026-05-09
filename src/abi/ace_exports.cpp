@@ -469,8 +469,15 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
 }
 
 UNSIGNED32 AdsGetTableType(ADSHANDLE hTable, UNSIGNED16* pusType) {
+    if (pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_table_type(rt->id);
+        if (!r) return fail(r.error());
+        *pusType = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pusType == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     // Map our internal TableType back to ACE constants. We only own
     // CDX and NTX today; the rest are out of scope for phase 1.
     namespace fs = std::filesystem;
@@ -500,8 +507,15 @@ UNSIGNED32 AdsGetTableFilename(ADSHANDLE hTable, UNSIGNED16 /*usOption*/,
 }
 
 UNSIGNED32 AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_record_length(rt->id);
+        if (!r) return fail(r.error());
+        *pulLen = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     if (t->driver() == nullptr) { *pulLen = 0; return ok(); }
     *pulLen = t->driver()->record_length();
     return ok();
@@ -1006,6 +1020,11 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 }
 
 UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->refresh_record(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     if (t->eof() || t->bof() || t->recno() == 0) return ok();
@@ -2001,6 +2020,11 @@ UNSIGNED32 AdsGetLockRetryCount(ADSHANDLE /*hConnect*/, UNSIGNED16* pusRetryCoun
 }
 
 UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->lock_record(rt->id, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t, ulRecord]() {
@@ -2009,6 +2033,11 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
 }
 
 UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->unlock_record(rt->id, ulRecord);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->unlock_record(ulRecord);
@@ -2017,12 +2046,22 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
 }
 
 UNSIGNED32 AdsLockTable(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->lock_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() { return t->try_lock_table_excl(); });
 }
 
 UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->unlock_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->unlock_table();
@@ -2031,6 +2070,11 @@ UNSIGNED32 AdsUnlockTable(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsFlushFileBuffers(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->flush_file_buffers(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->flush();
@@ -2362,6 +2406,11 @@ UNSIGNED32 AdsCloseIndex(ADSHANDLE hIndex) {
 }
 
 UNSIGNED32 AdsCloseAllIndexes(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->close_all_indexes(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto& m = index_bindings();
@@ -3199,6 +3248,13 @@ UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
 }
 
 UNSIGNED32 AdsGetNumIndexes(ADSHANDLE hTable, UNSIGNED16* pusCount) {
+    if (pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_num_indexes(rt->id);
+        if (!r) return fail(r.error());
+        *pusCount = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pusCount == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
@@ -3363,6 +3419,13 @@ UNSIGNED32 AdsSetIndexDirection(ADSHANDLE hIndex, UNSIGNED16 usDir) {
 // decide whether Found() should report .T. — return the flag the
 // engine set inside seek_key.
 UNSIGNED32 AdsIsFound(ADSHANDLE hTable, UNSIGNED16* pbFound) {
+    if (pbFound == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->is_found(rt->id);
+        if (!r) return fail(r.error());
+        *pbFound = r.value() ? 1 : 0;
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     if (pbFound != nullptr) *pbFound = t->last_seek_found() ? 1 : 0;
@@ -3498,6 +3561,11 @@ UNSIGNED32 AdsGetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
 }
 
 UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->pack_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->pack();
@@ -3506,6 +3574,11 @@ UNSIGNED32 AdsPackTable(ADSHANDLE hTable) {
 }
 
 UNSIGNED32 AdsZapTable(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->zap_table(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->zap();
@@ -3670,6 +3743,15 @@ UNSIGNED32 AdsZapTable_DEFERRED(ADSHANDLE /*hTable*/) {
 // AdsSetFilter and AdsSetAOF distinct.
 UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
                      UNSIGNED16 /*usResolve*/) {
+    if (pucCondition == nullptr) {
+        return fail(openads::AE_INTERNAL_ERROR, "AdsSetAOF: NULL condition");
+    }
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string cond = openads::abi::to_internal(pucCondition, 0);
+        auto r = rt->conn->set_aof(rt->id, cond);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (pucCondition == nullptr) {
@@ -3706,6 +3788,12 @@ UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
 
 UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
                              UNSIGNED8* /*pucBuf*/, UNSIGNED16* /*pusLen*/) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_aof_opt_level(rt->id);
+        if (!r) return fail(r.error());
+        if (pusLevel != nullptr) *pusLevel = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
     int lvl = ADS_OPTIMIZED_NONE;
     if (t != nullptr && t->aof_active()) {
@@ -3719,6 +3807,11 @@ UNSIGNED32 AdsGetAOFOptLevel(ADSHANDLE hTable, UNSIGNED16* pusLevel,
 }
 
 UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->clear_aof(rt->id);
+        if (!r) return fail(r.error());
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     t->clear_filter();
@@ -3963,6 +4056,13 @@ UNSIGNED32 AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
 }
 
 UNSIGNED32 AdsGetLastAutoinc(ADSHANDLE hTable, UNSIGNED32* pulValue) {
+    if (pulValue == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        auto r = rt->conn->get_last_autoinc(rt->id);
+        if (!r) return fail(r.error());
+        *pulValue = r.value();
+        return ok();
+    }
     Table* t = get_table(hTable);
     if (!t || pulValue == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");

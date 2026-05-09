@@ -543,4 +543,219 @@ util::Result<void> RemoteConnection::goto_bottom(std::uint32_t id) {
     return {};
 }
 
+// =====================================================================
+// M12.15 — info / lock / maintenance / AOF.
+//
+// Pattern: every op carries a u32 server table id in the request
+// payload; the ack carries the answer (bool / u16 / u32) or is
+// empty for void. The server-side handlers in network/server.cpp
+// match the same wire layout.
+// =====================================================================
+
+util::Result<bool> RemoteConnection::is_found(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::IsFound;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::IsFoundAck ||
+        rep.value().payload.empty()) {
+        return util::Error{5000, 0, "IsFound: server error", ""};
+    }
+    return rep.value().payload[0] != 0;
+}
+
+util::Result<void> RemoteConnection::refresh_record(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::RefreshRecord;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::RefreshRecordAck) {
+        return util::Error{5000, 0, "RefreshRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<std::uint16_t>
+RemoteConnection::get_table_type(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetTableType;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetTableTypeAck ||
+        rep.value().payload.size() < 2) {
+        return util::Error{5000, 0, "GetTableType: server error", ""};
+    }
+    return read_u16_le(rep.value().payload.data());
+}
+
+util::Result<std::uint32_t>
+RemoteConnection::get_record_length(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetRecordLength;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetRecordLengthAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "GetRecordLength: server error", ""};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
+util::Result<std::uint16_t>
+RemoteConnection::get_num_indexes(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetNumIndexes;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetNumIndexesAck ||
+        rep.value().payload.size() < 2) {
+        return util::Error{5000, 0, "GetNumIndexes: server error", ""};
+    }
+    return read_u16_le(rep.value().payload.data());
+}
+
+util::Result<std::uint32_t>
+RemoteConnection::get_last_autoinc(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetLastAutoinc;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetLastAutoincAck ||
+        rep.value().payload.size() < 4) {
+        return util::Error{5000, 0, "GetLastAutoinc: server error", ""};
+    }
+    return read_u32_le(rep.value().payload.data());
+}
+
+util::Result<void> RemoteConnection::lock_record(std::uint32_t id,
+                                                  std::uint32_t recno) {
+    Frame req; req.opcode = Opcode::LockRecord;
+    write_u32_le(id, req.payload);
+    write_u32_le(recno, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::LockRecordAck) {
+        return util::Error{5000, 0, "LockRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::unlock_record(std::uint32_t id,
+                                                    std::uint32_t recno) {
+    Frame req; req.opcode = Opcode::UnlockRecord;
+    write_u32_le(id, req.payload);
+    write_u32_le(recno, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::UnlockRecordAck) {
+        return util::Error{5000, 0, "UnlockRecord: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::lock_table(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::LockTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::LockTableAck) {
+        return util::Error{5000, 0, "LockTable: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::unlock_table(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::UnlockTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::UnlockTableAck) {
+        return util::Error{5000, 0, "UnlockTable: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::pack_table(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::PackTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::PackTableAck) {
+        return util::Error{5000, 0, "PackTable: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::zap_table(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::ZapTable;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::ZapTableAck) {
+        return util::Error{5000, 0, "ZapTable: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::flush_file_buffers(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::FlushFileBuffers;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FlushFileBuffersAck) {
+        return util::Error{5000, 0, "FlushFileBuffers: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::close_all_indexes(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::CloseAllIndexes;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::CloseAllIndexesAck) {
+        return util::Error{5000, 0, "CloseAllIndexes: server error", ""};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::set_aof(std::uint32_t id,
+                                              const std::string& cond) {
+    Frame req; req.opcode = Opcode::SetAOF;
+    write_u32_le(id, req.payload);
+    req.payload.insert(req.payload.end(), cond.begin(), cond.end());
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::SetAOFAck) {
+        return util::Error{5000, 0, "SetAOF: server error",
+                           cond.substr(0, 200)};
+    }
+    return {};
+}
+
+util::Result<void> RemoteConnection::clear_aof(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::ClearAOFRemote;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::ClearAOFRemoteAck) {
+        return util::Error{5000, 0, "ClearAOF: server error", ""};
+    }
+    return {};
+}
+
+util::Result<std::uint16_t>
+RemoteConnection::get_aof_opt_level(std::uint32_t id) {
+    Frame req; req.opcode = Opcode::GetAOFOptLevel;
+    write_u32_le(id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::GetAOFOptLevelAck ||
+        rep.value().payload.size() < 2) {
+        return util::Error{5000, 0,
+            "GetAOFOptLevel: server error", ""};
+    }
+    return read_u16_le(rep.value().payload.data());
+}
+
 } // namespace openads::network
