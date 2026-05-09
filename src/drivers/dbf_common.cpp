@@ -72,6 +72,7 @@ DbfFieldType classify_field(char raw) {
         case 'B': return DbfFieldType::Double;
         case 'V': return DbfFieldType::Varchar;     // M11.1
         case 'Q': return DbfFieldType::Varbinary;   // M11.1
+        case '+': return DbfFieldType::Integer;     // VFP autoincrement
         default:  return DbfFieldType::Unknown;
     }
 }
