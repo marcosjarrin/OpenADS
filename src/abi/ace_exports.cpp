@@ -1350,8 +1350,19 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
 }
 
 UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
+    if (plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        // Reuse the existing GetField wire op — typed reads parse
+        // the returned string client-side. Saves a new opcode.
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto v = rt->conn->get_field(rt->id, fname);
+        if (!v) return fail(v.error());
+        try { *plVal = static_cast<SIGNED32>(std::stol(v.value())); }
+        catch (...) { *plVal = 0; }
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -1363,8 +1374,17 @@ UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
 }
 
 UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
+    if (pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto v = rt->conn->get_field(rt->id, fname);
+        if (!v) return fail(v.error());
+        try { *pdVal = std::stod(v.value()); }
+        catch (...) { *pdVal = 0.0; }
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -1393,8 +1413,27 @@ SIGNED32 to_julian(int y, int m, int d) {
 } // namespace
 
 UNSIGNED32 AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plDate) {
+    if (plDate == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto decode_date = [](const std::string& s) -> SIGNED32 {
+        if (s.size() < 8) return 0;
+        int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100
+              + (s[2] - '0') * 10   + (s[3] - '0');
+        int m = (s[4] - '0') * 10   + (s[5] - '0');
+        int d = (s[6] - '0') * 10   + (s[7] - '0');
+        if (y > 0 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+            return to_julian(y, m, d);
+        }
+        return 0;
+    };
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto v = rt->conn->get_field(rt->id, fname);
+        if (!v) return fail(v.error());
+        *plDate = decode_date(v.value());
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || plDate == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
