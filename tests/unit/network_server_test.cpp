@@ -334,6 +334,124 @@ TEST_CASE("M12.5 dual-mode AdsConnect60 with tcp:// URI routes ABI calls to serv
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("M12.14/15 remote field metadata + cursor + info + AOF round-trip") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_m12_14_15";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hT = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hT) == 0);
+
+    SUBCASE("M12.14 field metadata bridges (no per-field round-trip)") {
+        UNSIGNED16 nf = 0;
+        REQUIRE(AdsGetNumFields(hT, &nf) == 0);
+        CHECK(nf == 1);
+
+        UNSIGNED8  nm[32]  = {0};
+        UNSIGNED16 nlen    = sizeof(nm);
+        REQUIRE(AdsGetFieldName(hT, 1, nm, &nlen) == 0);
+        std::string fname((char*)nm, nlen);
+        CHECK(fname == "TAG");
+
+        UNSIGNED16 ftype = 0;
+        REQUIRE(AdsGetFieldType(hT, (UNSIGNED8*)"TAG", &ftype) == 0);
+        CHECK(ftype == ADS_STRING);
+
+        UNSIGNED32 flen = 0;
+        REQUIRE(AdsGetFieldLength(hT, (UNSIGNED8*)"TAG", &flen) == 0);
+        CHECK(flen == 4);
+
+        UNSIGNED16 fdec = 99;
+        REQUIRE(AdsGetFieldDecimals(hT, (UNSIGNED8*)"TAG", &fdec) == 0);
+        CHECK(fdec == 0);
+    }
+
+    SUBCASE("M12.14 cursor state bridges") {
+        REQUIRE(AdsGotoTop(hT) == 0);
+
+        UNSIGNED16 atbof = 99;
+        REQUIRE(AdsAtBOF(hT, &atbof) == 0);
+        CHECK(atbof == 0);
+
+        UNSIGNED32 rn = 0;
+        REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+        CHECK(rn == 1);
+
+        UNSIGNED16 del = 99;
+        REQUIRE(AdsIsRecordDeleted(hT, &del) == 0);
+        CHECK(del == 0);
+
+        REQUIRE(AdsGotoBottom(hT) == 0);
+        REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+        CHECK(rn == 3);
+    }
+
+    SUBCASE("M12.15 info bridges") {
+        UNSIGNED16 ttype = 0;
+        REQUIRE(AdsGetTableType(hT, &ttype) == 0);
+        CHECK(ttype == ADS_CDX);
+
+        UNSIGNED32 rl = 0;
+        REQUIRE(AdsGetRecordLength(hT, &rl) == 0);
+        CHECK(rl == 5);  // 1 (delete byte) + 4 (TAG)
+
+        UNSIGNED16 ni = 99;
+        REQUIRE(AdsGetNumIndexes(hT, &ni) == 0);
+        CHECK(ni == 0);
+    }
+
+    SUBCASE("M12.15 lock + maintenance bridges (no-op success)") {
+        REQUIRE(AdsLockTable(hT) == 0);
+        REQUIRE(AdsUnlockTable(hT) == 0);
+        REQUIRE(AdsLockRecord(hT, 1) == 0);
+        REQUIRE(AdsUnlockRecord(hT, 1) == 0);
+        REQUIRE(AdsRefreshRecord(hT) == 0);
+        REQUIRE(AdsFlushFileBuffers(hT) == 0);
+    }
+
+    SUBCASE("M12.15 AOF over the wire") {
+        UNSIGNED8 cond[32] = "TAG = 'BBBB'";
+        REQUIRE(AdsSetAOF(hT, cond, 0) == 0);
+        UNSIGNED16 lvl = 99;
+        REQUIRE(AdsGetAOFOptLevel(hT, &lvl, nullptr, nullptr) == 0);
+        CHECK((lvl == ADS_OPTIMIZED_NONE ||
+               lvl == ADS_OPTIMIZED_FULL ||
+               lvl == ADS_OPTIMIZED_PART));
+        REQUIRE(AdsGotoTop(hT) == 0);
+        UNSIGNED32 rn = 0;
+        REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+        CHECK(rn == 2);  // BBBB row only, AAAA / CCCC filtered out
+        REQUIRE(AdsClearAOF(hT) == 0);
+        REQUIRE(AdsGotoTop(hT) == 0);
+        REQUIRE(AdsGetRecordNum(hT, 0, &rn) == 0);
+        CHECK(rn == 1);
+    }
+
+    REQUIRE(AdsCloseTable(hT) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("M12.6 remote append + set_field + delete + recall + flush round-trip") {
     namespace fs = std::filesystem;
     auto dir = fs::temp_directory_path() / "openads_m12_6";
