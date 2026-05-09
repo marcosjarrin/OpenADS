@@ -119,6 +119,12 @@ public:
                                           const std::string& key);
     util::Result<void>          clear_scope(std::uint32_t index_id,
                                             std::uint16_t which);
+    // M12.17 — single-frame whole-record read.
+    struct RowSnapshot {
+        bool                     has_row = false;
+        std::vector<std::string> fields;     // order matches FieldDesc cache
+    };
+    util::Result<RowSnapshot>   fetch_current_row(std::uint32_t table_id);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
@@ -160,6 +166,14 @@ struct RemoteTable {
     // adsOpen field-iteration loop stays at one wire round-trip.
     std::vector<RemoteConnection::FieldDesc> fields;
     bool fields_cached = false;
+    // M12.17 — current-record buffer cache. Populated lazily on the
+    // first AdsGetField after a nav op; invalidated by AdsSkip /
+    // AdsGotoTop / AdsGotoBottom / AdsGotoRecord / AdsAppendRecord
+    // / AdsWriteRecord / AdsDeleteRecord / AdsRecallRecord. xbrowse
+    // re-paints therefore cost one extra RTT per row (the fetch),
+    // not one per cell.
+    std::vector<std::string> current_row;
+    bool                     row_valid = false;
 };
 
 // M12.16 — per-handle wrapper for a remote index. Each tag
@@ -169,6 +183,10 @@ struct RemoteIndex {
     RemoteConnection* conn  = nullptr;
     std::uint32_t     id    = 0;     // server-side index id
     std::uint32_t     tbl_id = 0;    // server-side table id this binds to
+    // M12.17 — back-pointer so AdsSeek / AdsSeekLast / AdsSkipUnique
+    // can invalidate the parent table's row cache after the cursor
+    // moves on the server side.
+    RemoteTable*      parent = nullptr;
 };
 
 // Parse `tcp://host:port/<data_dir>` into its parts. Returns

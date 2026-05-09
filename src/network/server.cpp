@@ -1350,6 +1350,92 @@ void Server::session_loop(Socket s) {
                 reply.opcode = Opcode::ClearScopeAck;
                 break;
             }
+            // M12.17 — single-frame whole-record read. The server
+            // walks every column once with AdsGetField against a
+            // suitably-sized buffer (memo lengths queried up-front)
+            // and packs each value into the ack so the client can
+            // serve subsequent FieldGet calls from cache without
+            // another RTT per cell.
+            case Opcode::FetchCurrentRow: {
+                if (f.payload.size() < 4) { reply = err("FetchCurrentRow: bad payload"); break; }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                reply.opcode = Opcode::FetchCurrentRowAck;
+                // Prefer the engine cursor when the table is still
+                // sess_conn-managed: that cursor is the one all the
+                // nav handlers (GotoTop / Skip / GotoRecord / …)
+                // move, so its current recno matches what the
+                // client just navigated to. Falling back through a
+                // lazy-promoted ABI cursor (tbls_h) would drift —
+                // the parallel ABI conn opens at recno=1 and
+                // doesn't track engine-side moves.
+                ADSHANDLE h_abi = 0;
+                if (auto cit = cursor_tbls.find(id); cit != cursor_tbls.end()) {
+                    h_abi = cit->second;
+                } else if (auto eit = tbls.find(id); eit != tbls.end() && sess_conn) {
+                    auto* tbl = sess_conn->lookup_table(eit->second);
+                    if (!tbl) {
+                        reply = err("FetchCurrentRow: lookup failed"); break;
+                    }
+                    if (tbl->eof() || tbl->bof() || tbl->recno() == 0) {
+                        reply.payload.push_back(0); break;
+                    }
+                    auto nf = static_cast<std::uint16_t>(tbl->field_count());
+                    reply.payload.push_back(1);
+                    reply.payload.push_back(static_cast<std::uint8_t>( nf       & 0xFFu));
+                    reply.payload.push_back(static_cast<std::uint8_t>((nf >> 8) & 0xFFu));
+                    for (std::uint16_t i = 0; i < nf; ++i) {
+                        auto v = tbl->read_field(i);
+                        std::string vv = v ? v.value().as_string : std::string();
+                        write_u32_le(static_cast<std::uint32_t>(vv.size()),
+                                     reply.payload);
+                        reply.payload.insert(reply.payload.end(),
+                            vv.begin(), vv.end());
+                    }
+                    break;
+                } else if (auto hit = tbls_h.find(id); hit != tbls_h.end()) {
+                    h_abi = hit->second;
+                } else {
+                    reply = err("FetchCurrentRow: bad table id"); break;
+                }
+                // ABI-handle path (cursor_tbls or already-promoted
+                // tbls_h that took ownership). Walk via AdsGet*.
+                UNSIGNED16 atend = 0;
+                AdsAtEOF(h_abi, &atend);
+                if (atend) { reply.payload.push_back(0); break; }
+                UNSIGNED16 nf = 0;
+                AdsGetNumFields(h_abi, &nf);
+                reply.payload.push_back(1);
+                reply.payload.push_back(static_cast<std::uint8_t>( nf       & 0xFFu));
+                reply.payload.push_back(static_cast<std::uint8_t>((nf >> 8) & 0xFFu));
+                for (UNSIGNED16 i = 1; i <= nf; ++i) {
+                    UNSIGNED8  nm[64] = {0};
+                    UNSIGNED16 cap = sizeof(nm);
+                    AdsGetFieldName(h_abi, i, nm, &cap);
+                    std::vector<UNSIGNED8> nbuf(cap + 1, 0);
+                    std::memcpy(nbuf.data(), nm, cap);
+                    UNSIGNED16 ftype = 0;
+                    AdsGetFieldType(h_abi, nbuf.data(), &ftype);
+                    bool is_memo = (ftype == ADS_MEMO ||
+                                    ftype == ADS_BINARY ||
+                                    ftype == ADS_IMAGE);
+                    UNSIGNED32 vcap = 4096;
+                    if (is_memo) {
+                        UNSIGNED32 mlen = 0;
+                        if (AdsGetMemoLength(h_abi, nbuf.data(), &mlen) != 0) mlen = 0;
+                        vcap = mlen + 1;
+                    }
+                    std::vector<UNSIGNED8> vbuf(vcap, 0);
+                    if (AdsGetField(h_abi, nbuf.data(), vbuf.data(), &vcap, 0) != 0) {
+                        vcap = 0;
+                    }
+                    write_u32_le(vcap, reply.payload);
+                    if (vcap > 0) {
+                        reply.payload.insert(reply.payload.end(),
+                            vbuf.data(), vbuf.data() + vcap);
+                    }
+                }
+                break;
+            }
             // M12.7 — remote SQL exec. Lazy-creates a parallel ABI
             // connection on the server side; cursor handles returned
             // by AdsExecuteSQLDirect get wrapped in cursor_tbls so the

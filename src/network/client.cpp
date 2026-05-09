@@ -898,6 +898,45 @@ RemoteConnection::set_scope(std::uint32_t index_id,
     return {};
 }
 
+util::Result<RemoteConnection::RowSnapshot>
+RemoteConnection::fetch_current_row(std::uint32_t table_id) {
+    Frame req; req.opcode = Opcode::FetchCurrentRow;
+    write_u32_le(table_id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FetchCurrentRowAck ||
+        rep.value().payload.empty()) {
+        return util::Error{5000, 0,
+            "FetchCurrentRow: server error", ""};
+    }
+    const auto& pl = rep.value().payload;
+    RowSnapshot snap;
+    std::size_t pos = 0;
+    snap.has_row = pl[pos++] != 0;
+    if (!snap.has_row) return snap;
+    if (pos + 2 > pl.size()) {
+        return util::Error{5000, 0,
+            "FetchCurrentRow: truncated header", ""};
+    }
+    std::uint16_t n = read_u16_le(&pl[pos]); pos += 2;
+    snap.fields.reserve(n);
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (pos + 4 > pl.size()) {
+            return util::Error{5000, 0,
+                "FetchCurrentRow: truncated field len", ""};
+        }
+        std::uint32_t vlen = read_u32_le(&pl[pos]); pos += 4;
+        if (pos + vlen > pl.size()) {
+            return util::Error{5000, 0,
+                "FetchCurrentRow: truncated field value", ""};
+        }
+        snap.fields.emplace_back(
+            reinterpret_cast<const char*>(pl.data() + pos), vlen);
+        pos += vlen;
+    }
+    return snap;
+}
+
 util::Result<void>
 RemoteConnection::clear_scope(std::uint32_t index_id,
                                std::uint16_t which) {

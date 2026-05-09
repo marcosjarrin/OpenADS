@@ -1029,6 +1029,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 
 UNSIGNED32 AdsRefreshRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->refresh_record(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1057,6 +1058,7 @@ UNSIGNED32 AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 
 UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->goto_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
         return ok();
@@ -1157,6 +1159,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->goto_top(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1170,6 +1173,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->goto_bottom(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1184,6 +1188,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
 UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->skip(rt->id, lRows);
         if (!r) return fail(r.error());
         return ok();
@@ -1379,12 +1384,27 @@ UNSIGNED32 AdsGetFieldDecimals(ADSHANDLE hTable, UNSIGNED8* pucField,
 UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
     if (plVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
-        // Reuse the existing GetField wire op — typed reads parse
-        // the returned string client-side. Saves a new opcode.
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        auto v = rt->conn->get_field(rt->id, fname);
-        if (!v) return fail(v.error());
-        try { *plVal = static_cast<SIGNED32>(std::stol(v.value())); }
+        // M12.17 — typed reads also hit the row cache.
+        if (!rt->row_valid) {
+            auto rs = rt->conn->fetch_current_row(rt->id);
+            if (!rs) return fail(rs.error());
+            rt->current_row = std::move(rs.value().fields);
+            rt->row_valid   = rs.value().has_row;
+        }
+        std::string vstr;
+        if (rt->row_valid) {
+            auto i = remote_field_index(rt, pucField);
+            if (i == std::numeric_limits<std::size_t>::max()) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, "");
+            }
+            vstr = rt->current_row[i];
+        } else {
+            std::string fname = openads::abi::to_internal(pucField, 0);
+            auto v = rt->conn->get_field(rt->id, fname);
+            if (!v) return fail(v.error());
+            vstr = std::move(v).value();
+        }
+        try { *plVal = static_cast<SIGNED32>(std::stol(vstr)); }
         catch (...) { *plVal = 0; }
         return ok();
     }
@@ -1403,10 +1423,26 @@ UNSIGNED32 AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32* plVal) {
 UNSIGNED32 AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double* pdVal) {
     if (pdVal == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
-        std::string fname = openads::abi::to_internal(pucField, 0);
-        auto v = rt->conn->get_field(rt->id, fname);
-        if (!v) return fail(v.error());
-        try { *pdVal = std::stod(v.value()); }
+        if (!rt->row_valid) {
+            auto rs = rt->conn->fetch_current_row(rt->id);
+            if (!rs) return fail(rs.error());
+            rt->current_row = std::move(rs.value().fields);
+            rt->row_valid   = rs.value().has_row;
+        }
+        std::string vstr;
+        if (rt->row_valid) {
+            auto i = remote_field_index(rt, pucField);
+            if (i == std::numeric_limits<std::size_t>::max()) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, "");
+            }
+            vstr = rt->current_row[i];
+        } else {
+            std::string fname = openads::abi::to_internal(pucField, 0);
+            auto v = rt->conn->get_field(rt->id, fname);
+            if (!v) return fail(v.error());
+            vstr = std::move(v).value();
+        }
+        try { *pdVal = std::stod(vstr); }
         catch (...) { *pdVal = 0.0; }
         return ok();
     }
@@ -1538,6 +1574,27 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
                        UNSIGNED16 /*usOption*/) {
     if (auto* rt = get_remote_table(hTable)) {
         if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+        // M12.17 — serve from row cache when possible. The cache
+        // is invalidated by every nav / write bridge so a stale
+        // row never leaks. xbrowse-style repaints (W cols × H
+        // rows) collapse from W*H wire calls to H wire calls.
+        if (!rt->row_valid) {
+            auto rs = rt->conn->fetch_current_row(rt->id);
+            if (!rs) return fail(rs.error());
+            rt->current_row = std::move(rs.value().fields);
+            rt->row_valid   = rs.value().has_row;
+        }
+        if (rt->row_valid) {
+            auto i = remote_field_index(rt, pucField);
+            if (i == std::numeric_limits<std::size_t>::max()) {
+                return fail(openads::AE_COLUMN_NOT_FOUND, "");
+            }
+            openads::abi::copy_to_caller(pucBuf, pulLen, rt->current_row[i]);
+            return ok();
+        }
+        // EoF / no row — fall through to a plain GetField round-
+        // trip; preserves the prior behaviour for callers that
+        // probe past the end of the table.
         auto fname = openads::abi::to_internal(pucField, 0);
         auto r = rt->conn->get_field(rt->id, fname);
         if (!r) return fail(r.error());
@@ -1622,6 +1679,7 @@ UNSIGNED32 AdsGetServerTime(ADSHANDLE  /*hConnect*/,
 
 UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->append_blank(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1635,6 +1693,7 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->flush_table(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1648,6 +1707,7 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->delete_record(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1661,6 +1721,7 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsRecallRecord(ADSHANDLE hTable) {
     if (auto* rt = get_remote_table(hTable)) {
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->recall_record(rt->id);
         if (!r) return fail(r.error());
         return ok();
@@ -1695,6 +1756,7 @@ UNSIGNED32 AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucValue != nullptr && ulLen > 0) {
             val.assign(reinterpret_cast<const char*>(pucValue), ulLen);
         }
+        rt->row_valid = false;                      // M12.17 cache invalidation
         auto r = rt->conn->set_field(rt->id, fname, val);
         if (!r) return fail(r.error());
         return ok();
@@ -2319,6 +2381,7 @@ UNSIGNED32 AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             ri->conn   = rt->conn;
             ri->id     = ids[i];
             ri->tbl_id = rt->id;
+            ri->parent = rt;
             Handle gh = s.registry.register_object(
                 HandleKind::RemoteIndex, ri.get());
             ahIndex[i] = gh;
@@ -2518,6 +2581,7 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
         ri->conn   = rt->conn;
         ri->id     = r.value();
         ri->tbl_id = rt->id;
+        ri->parent = rt;
         Handle gh = s.registry.register_object(
             HandleKind::RemoteIndex, ri.get());
         *phIndex = gh;
@@ -3094,6 +3158,7 @@ UNSIGNED32 AdsSetIndexOrderByHandle(ADSHANDLE hTable, ADSHANDLE hIndex) {
 
 UNSIGNED32 AdsSkipUnique(ADSHANDLE hIndex, SIGNED32 lDirection) {
     if (auto* ri = get_remote_index(hIndex)) {
+        if (ri->parent) ri->parent->row_valid = false;   // M12.17
         auto r = ri->conn->skip_unique(ri->id, lDirection);
         if (!r) return fail(r.error());
         return ok();
@@ -3611,6 +3676,7 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     if (auto* ri = get_remote_index(hIndex)) {
         std::string key(reinterpret_cast<const char*>(pucKey),
                         u16KeyLen);
+        if (ri->parent) ri->parent->row_valid = false;   // M12.17
         auto r = ri->conn->seek(ri->id, key,
             static_cast<std::uint8_t>(u16SeekType),
             /*last=*/0);
@@ -3707,6 +3773,7 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
     if (auto* ri = get_remote_index(hIndex)) {
         std::string key(reinterpret_cast<const char*>(pucKey),
                         u16KeyLen);
+        if (ri->parent) ri->parent->row_valid = false;   // M12.17
         auto r = ri->conn->seek(ri->id, key,
             /*soft=*/0,
             /*last=*/1);
@@ -9125,6 +9192,18 @@ UNSIGNED32 AdsGetRecord(ADSHANDLE, UNSIGNED8*, UNSIGNED32* p)
 UNSIGNED32 AdsGetRelKeyPos(ADSHANDLE h, double* p) {
     if (p == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     *p = 0.0;
+    if (auto* rt = get_remote_table(h)) {
+        auto rcr = rt->conn->record_count(rt->id);
+        if (!rcr) return fail(rcr.error());
+        auto rnr = rt->conn->get_record_num(rt->id);
+        if (!rnr) return fail(rnr.error());
+        std::uint32_t rc = rcr.value();
+        std::uint32_t rn = rnr.value();
+        if (rc <= 1 || rn == 0) { *p = 0.0; return ok(); }
+        if (rn > rc) rn = rc;
+        *p = static_cast<double>(rn - 1) / static_cast<double>(rc - 1);
+        return ok();
+    }
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     std::uint32_t rc = t->record_count();

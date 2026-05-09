@@ -116,6 +116,15 @@ enum class Opcode : std::uint8_t {
     SetScopeAck        = 0x99,
     ClearScope         = 0x9A,
     ClearScopeAck      = 0x9B,
+    // M12.17 — single-frame whole-record read. xbrowse-style
+    // viewers paint W cols × H rows = W*H FieldGet calls per
+    // repaint; without this op every cell costs one TCP RTT
+    // (~5-15 ms LAN), so a 20×12 grid stalls 1-4 s. With this op
+    // RemoteTable caches the full row server-side and one
+    // FetchCurrentRow RTT serves every subsequent FieldGet on
+    // the same record.
+    FetchCurrentRow    = 0x9C,
+    FetchCurrentRowAck = 0x9D,
     // M12.6 — remote write surface.
     AppendBlank        = 0x50,
     AppendBlankAck     = 0x51,
