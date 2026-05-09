@@ -1761,8 +1761,18 @@ void julian_to_ymd(SIGNED32 jd, int& y, int& m, int& d) {
 // the attached IMemoStore, and answer in kind.
 UNSIGNED32 AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
                             UNSIGNED32* pulLen) {
+    if (pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (auto* rt = get_remote_table(hTable)) {
+        // Reuse the existing GetField wire op — the returned string
+        // is the full memo content; size() is the memo length.
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto v = rt->conn->get_field(rt->id, fname);
+        if (!v) return fail(v.error());
+        *pulLen = static_cast<UNSIGNED32>(v.value().size());
+        return ok();
+    }
     Table* t = get_table(hTable);
-    if (!t || pulLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -3822,32 +3832,38 @@ UNSIGNED32 AdsClearAOF(ADSHANDLE hTable) {
 
 UNSIGNED32 AdsBinaryToFile(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED8* pucPath) {
-    Table* t = get_table(hTable);
-    if (!t || pucPath == nullptr) {
+    if (pucPath == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "");
     }
+    auto write_path = [&](const std::string& payload) -> UNSIGNED32 {
+        auto path = openads::abi::to_internal(pucPath, 0);
+        auto fres = openads::platform::File::open(
+            path, openads::platform::OpenMode::CreateRW);
+        if (!fres) return fail(fres.error());
+        auto file = std::move(fres).value();
+        auto wrote = file.write_at(0, payload.data(), payload.size());
+        if (!wrote) return fail(wrote.error());
+        return ok();
+    };
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto v = rt->conn->get_field(rt->id, fname);
+        if (!v) return fail(v.error());
+        return write_path(v.value());
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     auto name = openads::abi::to_internal(pucField, 0);
     std::int32_t idx = t->field_index(name);
     if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
     auto v = t->read_field(static_cast<std::uint16_t>(idx));
     if (!v) return fail(v.error());
-    auto path = openads::abi::to_internal(pucPath, 0);
-    auto fres = openads::platform::File::open(
-        path, openads::platform::OpenMode::CreateRW);
-    if (!fres) return fail(fres.error());
-    auto file = std::move(fres).value();
-    const auto& payload = v.value().as_string;
-    auto wrote = file.write_at(0, payload.data(), payload.size());
-    if (!wrote) return fail(wrote.error());
-    return ok();
+    return write_path(v.value().as_string);
 }
 
 UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
                            UNSIGNED16 /*usType*/, UNSIGNED8* pucPath) {
-    Table* t = get_table(hTable);
-    if (!t || pucPath == nullptr) {
-        return fail(openads::AE_INTERNAL_ERROR, "");
-    }
+    if (pucPath == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     auto path = openads::abi::to_internal(pucPath, 0);
     auto fres = openads::platform::File::open(
         path, openads::platform::OpenMode::ReadOnly);
@@ -3861,6 +3877,14 @@ UNSIGNED32 AdsFileToBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
         auto rd = file.read_at(0, payload.data(), payload.size());
         if (!rd) return fail(rd.error());
     }
+    if (auto* rt = get_remote_table(hTable)) {
+        std::string fname = openads::abi::to_internal(pucField, 0);
+        auto r = rt->conn->set_field(rt->id, fname, payload);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "");
     auto name = openads::abi::to_internal(pucField, 0);
     std::int32_t idx = t->field_index(name);
     if (idx < 0) return fail(openads::AE_COLUMN_NOT_FOUND, name.c_str());
