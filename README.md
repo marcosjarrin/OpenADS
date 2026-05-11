@@ -129,7 +129,7 @@ fields**, **creates tables / indexes dynamically**, **packs and
 zaps tables**, **reindexes from a compound key expression**, and
 reopens to verify durability — every call lands on OpenADS'
 `ace64.dll` with no Harbour rebuild. See
-`tests/harbour_smoke/README.md` for the captured output of every
+`tests/smoke/harbour/README.md` for the captured output of every
 M8.x / M9.x milestone.
 
 ```
@@ -547,7 +547,7 @@ follow-ups merge.
 ### 0.1.x — drop-in for the Harbour read/write path (DONE)
 
 Validated against `c:\harbour\contrib\rddads.lib` end-to-end through
-`tests/harbour_smoke/smoke.prg`.
+`tests/smoke/harbour/smoke.prg`.
 
 | Tag | Milestone |
 |-----|-----------|
@@ -946,10 +946,9 @@ OpenADS/
 │   │   ├── tx_log_test.cpp
 │   │   ├── sql_parser_test.cpp
 │   │   └── ...
-│   ├── integration/            # full ABI roundtrip
-│   │   ├── harbour_smoke.prg   # runs against rddads
-│   │   ├── byte_compat/        # diff vs reference ACE-produced files
-│   │   └── conformance/        # ACE entry-point matrix
+│   ├── smoke/                  # third-party RDD harnesses (opt-in)
+│   │   ├── harbour/            # smoke.prg linked against rddads + OpenADS DLL
+│   │   └── xsharp/             # AdsSmoke.prg through X#'s AXDBFCDX RDD
 │   └── fixtures/               # canonical .adt / .dbf / .cdx samples
 │
 ├── tools/
@@ -1668,7 +1667,8 @@ Three levels controlled by env:
 | Unit | doctest, run on every commit | ≥ 85 % per module (engine, drivers, sql, lock, tx) |
 | Integration (in-process) | doctest, real files | Full driver matrix (ADT / CDX / NTX / VFP) × open / write / index / memo / tx |
 | ABI conformance | C harness invoking L1 entry points | All ~230 ACE entry points exercised at least once |
-| Harbour smoke | `harbour_smoke.prg` linked against `rddads` and OpenADS DLL | `tests/datad.prg`, `tests/manage.prg` from `c:\harbour\contrib\rddads\tests\` plus custom xBase scenarios |
+| Harbour smoke | `tests/smoke/harbour/smoke.prg` linked against `rddads` and OpenADS DLL | `tests/datad.prg`, `tests/manage.prg` from `c:\harbour\contrib\rddads\tests\` plus custom xBase scenarios |
+| X# smoke | `tests/smoke/xsharp/AdsSmoke.prg` through X#'s `AXDBFCDX` RDD against OpenADS DLL | `DbCreate` / `OrdCreate` / `DbAppend` / `DbSeek` / navigation; exercises the versioned overloads the X# RDD calls |
 | Byte compatibility | `tools/adt-dump`, `tools/cdx-dump` diff vs ACE-produced fixtures | All write paths produce byte-identical output |
 | Multi-process | Two OpenADS plus optional original ACE on shared files | No corruption, lock semantics match |
 | Fuzzing | libFuzzer over lexer / parser / log replay / driver readers | Zero crashes / UB after N hours |
@@ -1725,7 +1725,7 @@ Phase 1 is broken into nine independently shippable milestones (`M0`–`M8`). Ea
 - **Persistent WAL with crash recovery** is byte-identical for OpenADS-produced files.
 - **Live tags:** `m0-done`, `m1-done`, `m2-done`, `m3-done`, `m3.5-done`, `m3.6-partial`, `m3.7-partial`, `m3.7-closed`, `m3.8-partial`, `m3.9-partial`, `m3.10-partial`, `m4-partial`, `m5-partial`, `m5.1-partial`, `m5.2-partial`, `m5.3-partial`, `m5.4-partial`, `m5.5-partial`, `m6-partial`, `m7.1-partial`, `m7.2-partial`, `m7.3-partial`, `m7.4-partial`, `m7.5-partial`, `m8.0-partial`, `m8.1-partial`, `m8.2-done`, `m8.3-done`, `m8.4-done`, `m8.5-done`, `m8.6-done`, `m8.7-partial`, `m8.8-done`, `m8.9-done`, `m8.10-done`, `m8.11-done`, `0.1.0-rc1`, `0.1.0`.
 - **Drop-in DLL:** `ace64.dll` (Win x64) and `ace32.dll` (Win x86) build from the `openads_ace` SHARED target, exporting **226 `Ads*` entry points** plus 6 legacy MSVC2013-era CRT shims (`_dclass`, `_dsign`, `_wfsopen`, `_getch`, `_kbhit`, `_eof`) referenced by Harbour's prebuilt `msvc64` libs. 80 of the `Ads*` are real implementations (M0–M7); the rest are M8.1 stubs that return `AE_FUNCTION_NOT_AVAILABLE` (5004).
-- **End-to-end Harbour validation (M8.3–M8.11):** `tests/harbour_smoke/smoke.prg` exercises the full read + write + index + multi-tag focus + transactions + memo path through `rddads.lib` and OpenADS' `ace64.dll`. See `tests/harbour_smoke/README.md` for captured outputs.
+- **End-to-end Harbour validation (M8.3–M8.11):** `tests/smoke/harbour/smoke.prg` exercises the full read + write + index + multi-tag focus + transactions + memo path through `rddads.lib` and OpenADS' `ace64.dll`. See `tests/smoke/harbour/README.md` for captured outputs.
 
 ### Working on a milestone
 

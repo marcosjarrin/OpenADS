@@ -24,6 +24,7 @@
 #include "drivers/ntx/ntx_index.h"
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/cdx/cdx_index.h"
+#include "drivers/fpt/fpt_memo.h"
 #include "platform/time.h"
 #include "sql/parser.h"
 
@@ -691,7 +692,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                           UNSIGNED16    /*usCharType*/,
                           UNSIGNED16    /*usLockType*/,
                           UNSIGNED16    /*usCheckRights*/,
-                          UNSIGNED16    /*usMemoBlockSize*/,
+                          UNSIGNED16    usMemoBlockSize,
                           UNSIGNED8*    pucFields,
                           ADSHANDLE*    phTable) {
     if (pucName == nullptr || pucFields == nullptr || phTable == nullptr) {
@@ -765,6 +766,25 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                   static_cast<std::streamsize>(file.size()));
         if (!out) return fail(openads::AE_INTERNAL_ERROR,
                               "AdsCreateTable: write failed");
+    }
+
+    // If the field list declares any memo (M) field, stage an empty
+    // .fpt next to the .dbf — Connection::open_table auto-attaches it,
+    // and without it any write to the M field fails "memo store not
+    // attached" (e.g. X#'s ADSRDD on FieldPut to a memo column).
+    {
+        bool has_memo = false;
+        for (auto& f : fields) {
+            if (f.type == 'M' || f.type == 'm') { has_memo = true; break; }
+        }
+        if (has_memo) {
+            fs::path fpt = full;
+            fpt.replace_extension(".fpt");
+            { std::error_code ec; fs::remove(fpt, ec); }
+            std::uint16_t bs = usMemoBlockSize != 0 ? usMemoBlockSize : 64;
+            auto mr = openads::drivers::fpt::FptMemo::create(fpt.string(), bs);
+            if (!mr) return fail(mr.error());
+        }
     }
 
     // Open the freshly-created table through the regular path so the
@@ -1714,6 +1734,12 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->append_record();
     if (!r) return fail(r.error());
+    // ACE semantics: a freshly-appended record in a non-exclusive table
+    // is automatically locked. X#'s ADSRDD relies on this — its GoHot
+    // refuses to write a record it sees as unlocked. Best-effort: the
+    // lock layer no-ops in read/exclusive modes, and a lock contention
+    // here doesn't invalidate the append itself.
+    (void)t->try_lock_record_excl(t->recno());
     return ok();
 }
 
@@ -2140,8 +2166,12 @@ UNSIGNED32 AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    return lock_with_retry([t, ulRecord]() {
-        return t->try_lock_record_excl(ulRecord);
+    // ulRecord == 0 → the current record (ACE convention). Resolving it
+    // also keeps the CDX record-lock byte (FILE_BASE - recno) clear of
+    // the file/table lock byte (FILE_BASE) when recno would be 0.
+    std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
+    return lock_with_retry([t, rec]() {
+        return t->try_lock_record_excl(rec);
     });
 }
 
@@ -2153,7 +2183,8 @@ UNSIGNED32 AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
-    auto r = t->unlock_record(ulRecord);
+    std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
+    auto r = t->unlock_record(rec);
     if (!r) return fail(r.error());
     return ok();
 }
@@ -2642,8 +2673,14 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     if (!p.has_extension()) p.replace_extension(".cdx");
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
 
+    // ACE AdsCreateIndex* option bits: ADS_UNIQUE=1, ADS_COMPOUND=2,
+    // ADS_CUSTOM=4, ADS_DESCENDING=8. ADS_COMPOUND is redundant here
+    // (compound-ness comes from the .cdx extension), so it's ignored —
+    // it must NOT be misread as "descending", or X#'s ADSRDD (which
+    // always sets ADS_COMPOUND for CDX) would build every order
+    // descending and AdsGotoTop would land on the last key.
     bool unique  = (ulOptions & 0x01u) != 0;
-    bool descend = (ulOptions & 0x02u) != 0;
+    bool descend = (ulOptions & 0x08u) != 0;
 
     // Determine key length by evaluating the expression against the
     // first live record. Empty tables get a 32-char default.
@@ -9343,8 +9380,22 @@ UNSIGNED32 AdsIsNull(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsIsRecordInAOF(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsIsRecordLocked(ADSHANDLE, UNSIGNED32, UNSIGNED16* p)
-    { if (p) *p = 0; return openads::AE_SUCCESS; }
+// ulRecord == 0 means "the current record" (ACE convention). Reports
+// whether *this* connection holds an exclusive lock on it. Remote
+// handles aren't introspected yet — they report 0.
+UNSIGNED32 AdsIsRecordLocked(ADSHANDLE hTable, UNSIGNED32 ulRecord,
+                             UNSIGNED16* pbLocked) {
+    if (pbLocked == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pbLocked = 0;
+    if (get_remote_table(hTable) != nullptr) return ok();
+    Table* t = get_table(hTable);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
+    for (std::uint32_t held : t->held_record_locks()) {
+        if (held == rec) { *pbLocked = 1; break; }
+    }
+    return ok();
+}
 UNSIGNED32 AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)
     { if (p) *p = 1; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsIsTableLocked(ADSHANDLE, UNSIGNED16* p)
@@ -9482,6 +9533,361 @@ UNSIGNED32 AdsMgResetCommStats(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 // Get/SetDatabaseProperty, GetUserProperty, ModifyLink,
 // RemoveIndexFile, RemoveRefIntegrity, RemoveUserFromGroup) are
 // already defined earlier in this file.
+
+// ---------------------------------------------------------------------------
+// M12.22 — versioned ACE overloads the X# RDD (xsharp.eu) binds by name.
+// Most are thin forwards to the base signature already implemented above,
+// dropping the parameters newer ACE builds added (charset/collation tags,
+// page sizes, RI error strings). The handful with no OpenADS base get a
+// minimal implementation. Parameter lists mirror XSharp.Rdd/ACE/ACE.prg.
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsConnect26(UNSIGNED8* pucServer, UNSIGNED16 usServerType,
+                        ADSHANDLE* phConnect) {
+    return AdsConnect60(pucServer, usServerType, nullptr, nullptr, 0,
+                        phConnect);
+}
+
+UNSIGNED32 AdsCreateTable71(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                            UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
+                            UNSIGNED16 usCharType, UNSIGNED16 usLockType,
+                            UNSIGNED16 usCheckRights, UNSIGNED16 usMemoSize,
+                            UNSIGNED8* pucFields, UNSIGNED32 /*ulOptions*/,
+                            ADSHANDLE* phTable) {
+    return AdsCreateTable(hConnect, pucName, pucAlias, usTableType, usCharType,
+                          usLockType, usCheckRights, usMemoSize, pucFields,
+                          phTable);
+}
+
+UNSIGNED32 AdsCreateTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                            UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
+                            UNSIGNED16 usCharType, UNSIGNED16 usLockType,
+                            UNSIGNED16 usCheckRights, UNSIGNED16 usMemoSize,
+                            UNSIGNED8* pucFields, UNSIGNED32 /*ulOptions*/,
+                            UNSIGNED8* /*pucCollation*/, ADSHANDLE* phTable) {
+    return AdsCreateTable(hConnect, pucName, pucAlias, usTableType, usCharType,
+                          usLockType, usCheckRights, usMemoSize, pucFields,
+                          phTable);
+}
+
+UNSIGNED32 AdsOpenTable90(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                          UNSIGNED8* pucAlias, UNSIGNED16 usTableType,
+                          UNSIGNED16 usCharType, UNSIGNED16 usLockType,
+                          UNSIGNED16 usCheckRights, UNSIGNED32 ulOptions,
+                          UNSIGNED8* /*pucCollation*/, ADSHANDLE* phTable) {
+    return AdsOpenTable(hConnect, pucName, pucAlias, usTableType, usCharType,
+                        usLockType, usCheckRights,
+                        static_cast<UNSIGNED16>(ulOptions), phTable);
+}
+
+UNSIGNED32 AdsCreateIndex90(ADSHANDLE hObj, UNSIGNED8* pucFileName,
+                            UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
+                            UNSIGNED8* pucCondition, UNSIGNED8* pucWhile,
+                            UNSIGNED32 ulOptions, UNSIGNED32 ulPageSize,
+                            UNSIGNED8* /*pucCollation*/, ADSHANDLE* phIndex) {
+    return AdsCreateIndex61(hObj, pucFileName, pucTag, pucExpr, pucCondition,
+                            pucWhile, ulOptions,
+                            static_cast<UNSIGNED16>(ulPageSize), phIndex);
+}
+
+UNSIGNED32 AdsDDAddTable90(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+                           UNSIGNED8* pucTablePath, UNSIGNED16 usTableType,
+                           UNSIGNED16 usCharType, UNSIGNED8* pucIndexPath,
+                           UNSIGNED8* pucComment, UNSIGNED8* /*pucCollation*/) {
+    return AdsDDAddTable(hConnect, pucAlias, pucTablePath, usTableType,
+                         usCharType, pucIndexPath, pucComment);
+}
+
+UNSIGNED32 AdsDDCreateRefIntegrity62(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                     UNSIGNED8* pucFail, UNSIGNED8* pucParent,
+                                     UNSIGNED8* pucParentTag, UNSIGNED8* pucChild,
+                                     UNSIGNED8* pucChildTag, UNSIGNED16 usUpdate,
+                                     UNSIGNED16 usDelete,
+                                     UNSIGNED8* /*pucNoPrimaryError*/,
+                                     UNSIGNED8* /*pucCascadeError*/) {
+    return AdsDDCreateRefIntegrity(hConnect, pucName, pucFail, pucParent,
+                                   pucParentTag, pucChild, pucChildTag,
+                                   usUpdate, usDelete);
+}
+
+UNSIGNED32 AdsFindFirstTable62(ADSHANDLE hConnect, UNSIGNED8* pucFileMask,
+                               UNSIGNED8* pucFirstDD, UNSIGNED16* pusDDLen,
+                               UNSIGNED8* pucFirstFile, UNSIGNED16* pusFileLen,
+                               ADSHANDLE* phFind) {
+    // OpenADS doesn't track a data-dictionary name alongside the file
+    // name, so report an empty DD name and forward to the base API.
+    if (pusDDLen) {
+        if (pucFirstDD && *pusDDLen > 0) pucFirstDD[0] = 0;
+        *pusDDLen = 0;
+    }
+    return AdsFindFirstTable(hConnect, pucFileMask, pucFirstFile, pusFileLen,
+                             phFind);
+}
+
+UNSIGNED32 AdsFindNextTable62(ADSHANDLE hConnect, ADSHANDLE hFind,
+                              UNSIGNED8* pucDDName, UNSIGNED16* pusDDLen,
+                              UNSIGNED8* pucFileName, UNSIGNED16* pusFileLen) {
+    if (pusDDLen) {
+        if (pucDDName && *pusDDLen > 0) pucDDName[0] = 0;
+        *pusDDLen = 0;
+    }
+    return AdsFindNextTable(hConnect, hFind, pucFileName, pusFileLen);
+}
+
+UNSIGNED32 AdsGetDateFormat60(ADSHANDLE /*hConnect*/, UNSIGNED8* pucBuf,
+                              UNSIGNED16* pusLen) {
+    return AdsGetDateFormat(pucBuf, pusLen);
+}
+
+UNSIGNED32 AdsGetExact22(ADSHANDLE /*hObj*/, UNSIGNED16* pbExact) {
+    return AdsGetExact(pbExact);
+}
+
+UNSIGNED32 AdsReindex61(ADSHANDLE hObject, UNSIGNED32 /*ulPageSize*/) {
+    return AdsReindex(hObject);
+}
+
+UNSIGNED32 AdsRestructureTable90(ADSHANDLE hConnect, UNSIGNED8* pucTableName,
+                                 UNSIGNED8* /*pucPassword*/,
+                                 UNSIGNED16 usTableType, UNSIGNED16 usCharType,
+                                 UNSIGNED16 usLockType, UNSIGNED16 usCheckRights,
+                                 UNSIGNED8* pucAddFields,
+                                 UNSIGNED8* pucDeleteFields,
+                                 UNSIGNED8* pucChangeFields,
+                                 UNSIGNED8* /*pucCollation*/) {
+    return AdsRestructureTable(hConnect, pucTableName, nullptr, usTableType,
+                               usCharType, usLockType, usCheckRights,
+                               pucAddFields, pucDeleteFields, pucChangeFields);
+}
+
+// --- no OpenADS base function: minimal implementations ---
+
+// X# calls these on row-edit cancel / connection-property tuning.
+// OpenADS has no deferred-write row buffer and treats ACE properties
+// as no-ops, so acknowledge success rather than break the caller flow.
+UNSIGNED32 AdsCancelUpdate90(ADSHANDLE /*hTable*/, UNSIGNED32 /*ulOptions*/) {
+    return ok();
+}
+UNSIGNED32 AdsSetProperty90(ADSHANDLE /*hObj*/, UNSIGNED32 /*ulOperation*/,
+                            UNSIGNED64* /*puqValue*/) {
+    return ok();
+}
+
+// OpenADS keys connections/tables by handle, not by path/name, so
+// report "not found" — X# then opens a fresh connection/table.
+UNSIGNED32 AdsFindConnection25(UNSIGNED8* /*pucFullPath*/,
+                               ADSHANDLE* phConnect) {
+    if (phConnect) *phConnect = 0;
+    return fail(openads::AE_NO_CONNECTION, "no connection for path");
+}
+UNSIGNED32 AdsGetTableHandle25(ADSHANDLE /*hConnect*/, UNSIGNED8* /*pucName*/,
+                               ADSHANDLE* phTable) {
+    if (phTable) *phTable = 0;
+    return fail(openads::AE_TABLE_NOT_FOUND, "no open table for name");
+}
+
+// The SAP "60" bookmark API hands back an opaque blob the app later
+// replays. OpenADS encodes it as the 4-byte little-endian recno —
+// stable for the table's lifetime, enough for navigate-and-return.
+UNSIGNED32 AdsGetBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+                            UNSIGNED32* pulLength) {
+    if (pulLength == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    if (pucBookmark == nullptr || *pulLength < 4) {
+        *pulLength = 4;
+        return fail(openads::AE_INTERNAL_ERROR, "bookmark buffer too small");
+    }
+    UNSIGNED32 recno = 0;
+    UNSIGNED32 rc = AdsGetRecordNum(hObj, 0, &recno);
+    if (rc != openads::AE_SUCCESS) return rc;
+    pucBookmark[0] = static_cast<UNSIGNED8>(recno & 0xFF);
+    pucBookmark[1] = static_cast<UNSIGNED8>((recno >> 8) & 0xFF);
+    pucBookmark[2] = static_cast<UNSIGNED8>((recno >> 16) & 0xFF);
+    pucBookmark[3] = static_cast<UNSIGNED8>((recno >> 24) & 0xFF);
+    *pulLength = 4;
+    return ok();
+}
+UNSIGNED32 AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark) {
+    if (pucBookmark == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    UNSIGNED32 recno = static_cast<UNSIGNED32>(pucBookmark[0])
+                     | (static_cast<UNSIGNED32>(pucBookmark[1]) << 8)
+                     | (static_cast<UNSIGNED32>(pucBookmark[2]) << 16)
+                     | (static_cast<UNSIGNED32>(pucBookmark[3]) << 24);
+    return AdsGotoRecord(hObj, recno);
+}
+
+// X#'s ADSRDD calls this during table OPEN to size its memo buffers.
+// Report the attached memo store's block size; for a table with no
+// memo (or a remote handle — no memo introspection over the wire yet)
+// hand back the xBase FPT default so the RDD has a usable value.
+UNSIGNED32 AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize) {
+    if (pusBlockSize == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pusBlockSize = 64;
+    if (get_remote_table(hObj) != nullptr) return ok();
+    Table* t = get_table(hObj);
+    if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (auto* m = t->memo(); m != nullptr && m->block_size() != 0) {
+        *pusBlockSize = static_cast<UNSIGNED16>(m->block_size());
+    }
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
+// M12.23 — close the export gap the X# Advantage RDD (XSharp.Rdd) relies on.
+// ADSRDD.prg references ~45 entry points OpenADS didn't yet export. Most are
+// accept-and-ignore (session toggles, statement helpers) or thin forwards;
+// the field-setter family uses the ACE "field NAME or 1-based ordinal cast to
+// a pointer" idiom. Genuinely-unimplemented ones return
+// AE_FUNCTION_NOT_AVAILABLE so the X# runtime falls back to its own
+// client-side path. Signatures mirror XSharp.Rdd/ACE/ACE32.prg.
+// ---------------------------------------------------------------------------
+
+// ACE field-identifier idiom: a small integer in the "field name" pointer
+// slot is a 1-based field ordinal; a real pointer is the name string.
+static const char* resolve_field_id(ADSHANDLE hTable, UNSIGNED8* pId,
+                                    UNSIGNED8* scratch, UNSIGNED16 scratchLen) {
+    if (reinterpret_cast<uintptr_t>(pId) >= 0x10000u) {
+        return reinterpret_cast<const char*>(pId);
+    }
+    if (scratch == nullptr || scratchLen == 0) return "";
+    scratch[0] = 0;
+    UNSIGNED16 ord = static_cast<UNSIGNED16>(reinterpret_cast<uintptr_t>(pId));
+    UNSIGNED16 len = scratchLen;
+    if (AdsGetFieldName(hTable, ord, scratch, &len) != openads::AE_SUCCESS) {
+        return "";
+    }
+    return reinterpret_cast<const char*>(scratch);
+}
+static UNSIGNED8* as_field(const char* s) {
+    return const_cast<UNSIGNED8*>(reinterpret_cast<const UNSIGNED8*>(s));
+}
+
+UNSIGNED32 AdsGetTableOpenOptions(ADSHANDLE /*hTable*/, UNSIGNED32* pulOptions) {
+    if (pulOptions) *pulOptions = 0;
+    return ok();
+}
+UNSIGNED32 AdsGetBookmark(ADSHANDLE hTable, ADSHANDLE* phBookmark) {
+    if (phBookmark == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    UNSIGNED32 rec = 0;
+    UNSIGNED32 rc = AdsGetRecordNum(hTable, 0, &rec);
+    if (rc != openads::AE_SUCCESS) return rc;
+    *phBookmark = rec;            // recno-as-token; pairs with AdsGotoRecord
+    return ok();
+}
+UNSIGNED32 AdsCancelUpdate(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 AdsClearAllScopes(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 AdsClearDefault(void) { return ok(); }
+UNSIGNED32 AdsResetConnection(ADSHANDLE /*hConnect*/) { return ok(); }
+UNSIGNED32 AdsThreadExit(void) { return ok(); }
+UNSIGNED32 AdsDisableLocalConnections(void) { return ok(); }
+UNSIGNED32 AdsEnableRI(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsDisableRI(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsEnableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsDisableUniqueEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsEnableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsDisableAutoIncEnforcement(ADSHANDLE /*hConn*/) { return ok(); }
+UNSIGNED32 AdsRecallAllRecords(ADSHANDLE /*hTable*/) { return ok(); }
+UNSIGNED32 AdsIsRecordVisible(ADSHANDLE /*hObj*/, UNSIGNED16* pbVisible) {
+    if (pbVisible) *pbVisible = 1;
+    return ok();
+}
+UNSIGNED32 AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
+                          UNSIGNED32* pulCount) {
+    if (pulCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    *pulCount = 0;
+    if (Table* t = get_table(hIndex)) *pulCount = t->record_count();
+    return ok();
+}
+UNSIGNED32 AdsContinue(ADSHANDLE /*hTable*/, UNSIGNED16* pbFound) {
+    if (pbFound) *pbFound = 0;
+    return openads::AE_FUNCTION_NOT_AVAILABLE;   // X# runs LOCATE/CONTINUE itself
+}
+UNSIGNED32 AdsEvalTestExpr(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucExpr*/,
+                           UNSIGNED16* pusType) {
+    if (pusType) *pusType = 0;
+    return ok();                                 // treat any expr as syntactically valid
+}
+UNSIGNED32 AdsEvalLogicalExpr(ADSHANDLE, UNSIGNED8*, UNSIGNED16* p)
+    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsEvalNumericExpr(ADSHANDLE, UNSIGNED8*, double* p)
+    { if (p) *p = 0.0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsEvalStringExpr(ADSHANDLE, UNSIGNED8* /*expr*/, UNSIGNED8* p,
+                             UNSIGNED16* l)
+    { if (l) { if (p && *l > 0) p[0] = 0; *l = 0; }
+      return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
+    if (phConnect) *phConnect = 0;
+    return fail(openads::AE_NO_CONNECTION, "no connection for path");
+}
+UNSIGNED32 AdsGetAllIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
+    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
+    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetAllTables(ADSHANDLE* /*ah*/, UNSIGNED16* pus)
+    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsCloneTable(ADSHANDLE, ADSHANDLE* p)
+    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsCopyTableStructure(ADSHANDLE, UNSIGNED8*)
+    { return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetRecordCRC(ADSHANDLE, UNSIGNED32* p, UNSIGNED32)
+    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsInitRawKey(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsClearSQLAbortFunc(void) { return ok(); }
+UNSIGNED32 AdsClearSQLParams(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsStmtDisableEncryption(ADSHANDLE) { return ok(); }
+UNSIGNED32 AdsStmtSetTableCharType(ADSHANDLE, UNSIGNED16) { return ok(); }
+UNSIGNED32 AdsStmtSetTableCollation(ADSHANDLE, UNSIGNED8*) { return ok(); }
+UNSIGNED32 AdsStmtSetTableRights(ADSHANDLE, UNSIGNED16) { return ok(); }
+
+// --- field-identifier-aware setters/getters (name OR ordinal-as-pointer) ---
+UNSIGNED32 AdsSetField(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+                       UNSIGNED32 ulLen) {
+    UNSIGNED8 nm[64];
+    return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        pucBuf, ulLen);
+}
+UNSIGNED32 AdsSetEmpty(ADSHANDLE hObj, UNSIGNED8* pId) {
+    UNSIGNED8 nm[64];
+    UNSIGNED8 blank = 0;
+    return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        &blank, 0);
+}
+UNSIGNED32 AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
+    return AdsSetEmpty(hObj, pId);     // DBF has no SQL NULL — store empty
+}
+UNSIGNED32 AdsSetShort(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED32 sValue) {
+    UNSIGNED8 nm[64];
+    return AdsSetDouble(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        static_cast<double>(sValue));
+}
+UNSIGNED32 AdsSetMoney(ADSHANDLE hObj, UNSIGNED8* pId, SIGNED64 qValue) {
+    UNSIGNED8 nm[64];
+    return AdsSetDouble(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        static_cast<double>(qValue) / 10000.0);   // ACE money scale
+}
+UNSIGNED32 AdsSetTime(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucValue,
+                      UNSIGNED16 usLen) {
+    UNSIGNED8 nm[64];
+    return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        pucValue, usLen);
+}
+UNSIGNED32 AdsSetTimeStamp(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+                           UNSIGNED32 ulLen) {
+    UNSIGNED8 nm[64];
+    return AdsSetString(hObj, as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                        pucBuf, ulLen);
+}
+UNSIGNED32 AdsGetDate(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
+                      UNSIGNED16* pusLen) {
+    UNSIGNED8 nm[64];
+    UNSIGNED32 cap = pusLen ? *pusLen : 0;
+    UNSIGNED32 rc = AdsGetField(hObj,
+                                as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))),
+                                pucBuf, &cap, 0);
+    if (pusLen) *pusLen = static_cast<UNSIGNED16>(cap);
+    return rc;
+}
 
 } // extern "C"
 

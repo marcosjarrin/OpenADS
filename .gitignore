@@ -22,21 +22,28 @@ Makefile
 # Claude Code local
 .claude/
 
-# Harbour smoke build artefacts
-tests/harbour_smoke/smoke.exe
-tests/harbour_smoke/smoke_out.txt
-tests/harbour_smoke/stubs.log
-tests/harbour_smoke/hb_out.log
-tests/harbour_smoke/data.dbf
-tests/harbour_smoke/data.cdx
-tests/harbour_smoke/data.fpt
-tests/harbour_smoke/trace.log
-tests/harbour_smoke/openads.txlog
-tests/harbour_smoke/openads.lsnmap*
-tests/harbour_smoke/sync.log
-tests/harbour_smoke/*.obj
-tests/harbour_smoke/*.c
-tests/harbour_smoke/*.pdb
+# Smoke-test build artefacts (third-party RDD harnesses)
+tests/smoke/harbour/smoke.exe
+tests/smoke/harbour/smoke_out.txt
+tests/smoke/harbour/stubs.log
+tests/smoke/harbour/hb_out.log
+tests/smoke/harbour/data.dbf
+tests/smoke/harbour/data.cdx
+tests/smoke/harbour/data.fpt
+tests/smoke/harbour/trace.log
+tests/smoke/harbour/openads.txlog
+tests/smoke/harbour/openads.lsnmap*
+tests/smoke/harbour/sync.log
+tests/smoke/harbour/*.obj
+tests/smoke/harbour/*.c
+tests/smoke/harbour/*.pdb
+tests/smoke/xsharp/*.exe
+tests/smoke/xsharp/*.pdb
+tests/smoke/xsharp/ace32.dll
+tests/smoke/xsharp/ace64.dll
+tests/smoke/xsharp/openads.*
+tests/smoke/xsharp/VOERROR.LOG
+tests/smoke/xsharp/*.LOG
 
 # OS
 .DS_Store

@@ -52,3 +52,46 @@ TEST_CASE("M9.5 AdsCreateTable: parse field defs + write DBF + open") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M12.23 AdsCreateTable with an M field stages an empty .fpt; memo writes work") {
+    const auto dir = fs::temp_directory_path() / "openads_m1223_creatememo";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+
+    UNSIGNED8 name[64]    = "withmemo";
+    UNSIGNED8 alias[64]   = "withmemo";
+    UNSIGNED8 fields[128] = "ID,Numeric,4,0;NOTE,Memo,10";
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsCreateTable(hConn, name, alias, ADS_CDX, 0, 0, 0, 64,
+                           fields, &hTable) == 0);
+    REQUIRE(AdsCloseTable(hTable) == 0);
+
+    // The .fpt must exist next to the .dbf.
+    CHECK(fs::exists(dir / "withmemo.dbf"));
+    CHECK(fs::exists(dir / "withmemo.fpt"));
+
+    hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, name, alias, ADS_CDX, 0, 0, 0, 0, &hTable) == 0);
+    REQUIRE(AdsAppendRecord(hTable) == 0);
+    UNSIGNED8 fNOTE[8] = "NOTE";
+    UNSIGNED8 payload[] = "hello memo from OpenADS";
+    REQUIRE(AdsSetString(hTable, fNOTE, payload,
+                         static_cast<UNSIGNED32>(std::strlen(
+                             reinterpret_cast<const char*>(payload)))) == 0);
+    REQUIRE(AdsWriteRecord(hTable) == 0);
+
+    UNSIGNED8 buf[64] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, fNOTE, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(buf), cap) == "hello memo from OpenADS");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}

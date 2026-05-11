@@ -1,0 +1,16 @@
+# OpenADS examples
+
+GUI / application-level showcases that point an existing xBase stack at
+OpenADS' ACE DLL (`ace64.dll` / `ace32.dll`). Unlike `tests/smoke/`,
+these are **not** meant to run headless in CI — they're "swap your
+`ace64.dll`, run your app, see it work" demos.
+
+| Subdir | Stack | Notes |
+|--------|-------|-------|
+| `fivewin/` | FiveWin (FWH) + Harbour | Commercial GUI lib — not vendored; install your own FWH. |
+| `xsharp-winforms/` | X# + WinForms | X# runtime not vendored; install from xsharp.eu. |
+
+Rules: only first-party source here; never check in third-party
+runtimes/libraries (FWH, X#, Harbour) or SAP-shipped binaries. Each
+subdir's `README.md` says exactly how to point the app at OpenADS'
+DLL.

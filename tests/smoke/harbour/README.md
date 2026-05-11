@@ -246,7 +246,7 @@ seek-hit state.
 ### M8.6 fixes
 
 - New `make_cdx.exe` CMake target writes a CDX from
-  `tests/harbour_smoke/make_cdx.cpp` using OpenADS' `CdxIndex::create`.
+  `tests/smoke/harbour/make_cdx.cpp` using OpenADS' `CdxIndex::create`.
   `run_build.bat` invokes it after the DBF fixture so each smoke run
   starts from clean disk state.
 - `Table::path()` accessor lets the ABI layer resolve relative index
@@ -411,7 +411,7 @@ with the OpenADS-built versions. After that, `hbmk2 -comp=msvc64
 ```cmd
 :: From the OpenADS root:
 cmake --build build\default --config Release
-cd tests\harbour_smoke
+cd tests\smoke\harbour
 run_build.bat
 ```
 

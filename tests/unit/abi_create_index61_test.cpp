@@ -161,3 +161,45 @@ TEST_CASE("M9.7 AdsCreateIndex61 supports compound expressions (UPPER)") {
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("M12.23 AdsCreateIndex61 option bits: ADS_COMPOUND is not ADS_DESCENDING") {
+    // X#'s ADSRDD always passes ADS_COMPOUND (2) when creating a CDX
+    // order. That bit must be ignored, not treated as ADS_DESCENDING
+    // (8) — otherwise every X# order is built descending and DbGoTop
+    // lands on the last key. Fixture records: BBBB(1), AAAA(2), CCCC(3).
+    constexpr UNSIGNED32 ADS_COMPOUND_   = 2;
+    constexpr UNSIGNED32 ADS_DESCENDING_ = 8;
+
+    auto dir = fs::temp_directory_path() / "openads_m1223_ci_opts";
+    std::error_code ec;
+
+    auto run = [&](UNSIGNED32 opts, UNSIGNED32 expectTopRecno) {
+        fs::remove_all(dir, ec);
+        stage_dbf(dir);
+        UNSIGNED8 srv[256];
+        std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn) == 0);
+        ADSHANDLE hTable = 0;
+        UNSIGNED8 name[16] = "data";
+        REQUIRE(AdsOpenTable(hConn, name, name, ADS_CDX, 1, 1, 0, 1, &hTable) == 0);
+        UNSIGNED8 idxfile[16] = "data";
+        UNSIGNED8 idxname[16] = "TAG";
+        UNSIGNED8 expr[16]    = "TAG";
+        ADSHANDLE hIdx = 0;
+        REQUIRE(AdsCreateIndex61(hTable, idxfile, idxname, expr,
+                                 nullptr, nullptr, opts, 512, &hIdx) == 0);
+        REQUIRE(AdsGotoTop(hTable) == 0);
+        UNSIGNED32 recno = 0;
+        REQUIRE(AdsGetRecordNum(hTable, 0, &recno) == 0);
+        CHECK(recno == expectTopRecno);
+        REQUIRE(AdsCloseIndex(hIdx) == 0);
+        REQUIRE(AdsCloseTable(hTable) == 0);
+        REQUIRE(AdsDisconnect(hConn) == 0);
+    };
+
+    run(ADS_COMPOUND_, 2u);                       // ascending → AAAA (rec 2)
+    run(ADS_COMPOUND_ | ADS_DESCENDING_, 3u);     // descending → CCCC (rec 3)
+    run(ADS_DESCENDING_, 3u);                     // descending → CCCC (rec 3)
+    fs::remove_all(dir, ec);
+}

@@ -271,3 +271,76 @@ EXPORTS
     AdsSetIndexOrder
     AdsSetIndexOrderByHandle
 
+    ; M12.22 — versioned ACE overloads bound by name from the X# RDD.
+    ; Forwards to the base signatures (extra charset/collation/page-size
+    ; params dropped); bookmark / property / find-by-name get a minimal
+    ; implementation. See ace_exports.cpp.
+    AdsConnect26
+    AdsCreateTable71
+    AdsCreateTable90
+    AdsOpenTable90
+    AdsCreateIndex90
+    AdsCancelUpdate90
+    AdsDDAddTable90
+    AdsDDCreateRefIntegrity62
+    AdsFindConnection25
+    AdsFindFirstTable62
+    AdsFindNextTable62
+    AdsGetBookmark60
+    AdsGetDateFormat60
+    AdsGetExact22
+    AdsGetTableHandle25
+    AdsGotoBookmark60
+    AdsReindex61
+    AdsRestructureTable90
+    AdsSetProperty90
+    AdsGetMemoBlockSize
+
+    ; M12.23 — further entry points the X# Advantage RDD binds by name.
+    AdsGetTableOpenOptions
+    AdsGetBookmark
+    AdsCancelUpdate
+    AdsClearAllScopes
+    AdsClearDefault
+    AdsResetConnection
+    AdsThreadExit
+    AdsDisableLocalConnections
+    AdsEnableRI
+    AdsDisableRI
+    AdsEnableUniqueEnforcement
+    AdsDisableUniqueEnforcement
+    AdsEnableAutoIncEnforcement
+    AdsDisableAutoIncEnforcement
+    AdsRecallAllRecords
+    AdsIsRecordVisible
+    AdsGetKeyCount
+    AdsContinue
+    AdsEvalTestExpr
+    AdsEvalLogicalExpr
+    AdsEvalNumericExpr
+    AdsEvalStringExpr
+    AdsFindConnection
+    AdsGetAllIndexes
+    AdsGetFTSIndexes
+    AdsGetAllTables
+    AdsCloneTable
+    AdsCopyTableStructure
+    AdsGetRecordCRC
+    AdsInitRawKey
+    AdsMgDumpInternalTables
+    AdsClearSQLAbortFunc
+    AdsClearSQLParams
+    AdsStmtClearTablePasswords
+    AdsStmtDisableEncryption
+    AdsStmtSetTableCharType
+    AdsStmtSetTableCollation
+    AdsStmtSetTableRights
+    AdsSetField
+    AdsSetEmpty
+    AdsSetNull
+    AdsSetShort
+    AdsSetMoney
+    AdsSetTime
+    AdsSetTimeStamp
+    AdsGetDate
+

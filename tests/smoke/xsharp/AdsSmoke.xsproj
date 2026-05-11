@@ -1,0 +1,30 @@
+<!-- X# project for the AXDBFCDX smoke test.
+
+     SDK-style projects need a recent X# (XSharp.Sdk). On an older X#,
+     replace this with the classic MSBuild form that <Import>s
+     XSharp.Default.props / XSharp.targets, or just build AdsSmoke.prg
+     from the command line with `xsc` (see README.md).
+
+     Run against OpenADS' ace64.dll / ace32.dll — put its directory
+     first on PATH before launching the produced exe.  -->
+<Project Sdk="XSharp.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <Dialect>Core</Dialect>
+    <NoStandardDefs>false</NoStandardDefs>
+    <RootNamespace>OpenADS.Smoke.XSharp</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="AdsSmoke.prg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="XSharp.Core" />
+    <Reference Include="XSharp.RT" />
+    <Reference Include="XSharp.RDD" />
+  </ItemGroup>
+
+</Project>

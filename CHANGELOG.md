@@ -11,6 +11,58 @@ Post-v1.0.0-rc6 work, all rddads-compat deepening so a real Harbour
 `rddads` `.prg` drives OpenADS through the same edge cases Clipper
 exposes against original ACE.
 
+- **M12.22 — versioned ACE overloads for the X# RDD.** Exports the
+  `Ads*NN` entry-point names X# binds by name (`AdsConnect26`,
+  `AdsCreateTable71` / `90`, `AdsOpenTable90`, `AdsCreateIndex90`,
+  `AdsDDAddTable90`, `AdsDDCreateRefIntegrity62`, `AdsFindFirstTable62`
+  / `AdsFindNextTable62`, `AdsGetDateFormat60`, `AdsGetExact22`,
+  `AdsReindex61`, `AdsRestructureTable90`). Most forward to the base
+  signature (dropping the charset / collation / page-size params newer
+  ACE builds added); `AdsGetBookmark60` / `AdsGotoBookmark60`
+  round-trip the recno as a 4-byte blob; `AdsCancelUpdate90` /
+  `AdsSetProperty90` are accepted no-ops; `AdsFindConnection25` /
+  `AdsGetTableHandle25` report not-found (OpenADS keys by handle, not
+  path / name).
+- **M12.23 — close the export gap the X# Advantage RDD relies on.**
+  A live run of X#'s `AXDBFCDX` RDD against OpenADS' `ace64.dll`
+  surfaced ~45 more entry points `ADSRDD.prg` binds by name
+  (`AdsGetMemoBlockSize`, `AdsGetTableOpenOptions`, `AdsGetBookmark`,
+  `AdsCancelUpdate`, `AdsSetField`/`AdsSetEmpty`/`AdsSetNull`/
+  `AdsSetShort`/`AdsSetMoney`/`AdsSetTime`/`AdsSetTimeStamp`,
+  `AdsGetDate`, `AdsContinue`, `AdsEval*Expr`, the RI / unique /
+  autoinc enforcement toggles, `AdsStmt*` helpers, …). Added: forwards
+  where one fits, accept-and-ignore for session/statement toggles,
+  `AE_FUNCTION_NOT_AVAILABLE` for the genuinely-unimplemented (so the
+  X# runtime falls back to its own client path). The field-setter
+  family handles the ACE "field name *or* 1-based ordinal cast to a
+  pointer" idiom. **`AdsAppendRecord` now auto-locks the new record**
+  (ACE semantics for non-exclusive tables — X#'s `GoHot` refuses to
+  write a record it sees as unlocked), and **`AdsIsRecordLocked` /
+  `AdsLockRecord` / `AdsUnlockRecord` honour `recno == 0` = current
+  record** and report the real lock state instead of stubbing 0.
+  **`AdsCreateIndex61` / `AdsCreateIndex90` option-bit fix:** the
+  "descending" flag is `ADS_DESCENDING` (`0x08`), not `0x02` — `0x02`
+  is `ADS_COMPOUND`, which X#'s ADSRDD always sets for CDX orders, so
+  the old mask built every X# order descending and `DbGoTop` landed on
+  the last key. **`AdsCreateTable` / `AdsCreateTable90` now stage an
+  empty `.fpt` next to the `.dbf` when the field list has an `M` field**
+  (using `usMemoBlockSize`, default 64) — without it `Connection::
+  open_table` can't attach a memo store and any memo write fails
+  "memo store not attached". With these fixes the full X# `AXDBFCDX`
+  smoke (`tests/smoke/xsharp/AdsSmoke.prg`) passes end-to-end against
+  OpenADS' `ace64.dll`: `DbCreate` (incl. an M field) → `DbUseArea` →
+  `OrdCreate` ×2 → `DbAppend`+`FieldPut` ×4 → `DbCommit` → NAME-order
+  `GoTop`/`Skip ±`/`GoBottom`/`Eof` → `DbSeek` hit + miss → memo
+  round-trip → `DbDelete`/`DbRecall` → replace a key field + re-read
+  through the CITY order → `DbCloseArea`.
+- **Test layout.** Third-party RDD smoke harnesses moved under
+  `tests/smoke/` — `tests/smoke/harbour/` (was `tests/harbour_smoke/`)
+  plus a new `tests/smoke/xsharp/` (`AdsSmoke.prg` driving OpenADS' DLL
+  through X#'s `AXDBFCDX` RDD). GUI showcases (FiveWin, X# WinForms)
+  get an `examples/` tree. All opt-in — none run in the default `ctest`
+  pass. Added doctest coverage `abi_versioned_overloads_test.cpp` (local)
+  + `abi_remote_overloads_test.cpp` (over the wire, gated on
+  `OPENADS_TEST_REMOTE`).
 - **Clipper-convention empty / past-end / Limbo states.**
   `goto_record(0)` is no-op + Eof (not error 5000); empty table
   reports BOF / EOF + `RecNo() = LastRec()+1`; GO past-end enters

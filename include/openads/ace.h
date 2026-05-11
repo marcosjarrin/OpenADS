@@ -1103,6 +1103,172 @@ UNSIGNED32 ENTRYPOINT AdsStudioStop (void);
 // picked.
 UNSIGNED32 ENTRYPOINT AdsStudioPort (UNSIGNED16* pusPort);
 
+// ---- Versioned ACE overloads (X# RDD compat, M12.22) ----
+// Thin forwards to the base signatures above, dropping the params
+// newer ACE builds added (charset/collation tags, page sizes, RI
+// error strings); the bookmark / property / find-by-name entries
+// get a minimal implementation. Names mirror the SAP ACE SDK.
+UNSIGNED32 ENTRYPOINT AdsConnect26       (UNSIGNED8* pucServer,
+                                          UNSIGNED16 usServerType,
+                                          ADSHANDLE* phConnect);
+UNSIGNED32 ENTRYPOINT AdsCreateTable71   (ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                          UNSIGNED8* pucAlias,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED16 usLockType,
+                                          UNSIGNED16 usCheckRights,
+                                          UNSIGNED16 usMemoSize,
+                                          UNSIGNED8* pucFields,
+                                          UNSIGNED32 ulOptions,
+                                          ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsCreateTable90   (ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                          UNSIGNED8* pucAlias,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED16 usLockType,
+                                          UNSIGNED16 usCheckRights,
+                                          UNSIGNED16 usMemoSize,
+                                          UNSIGNED8* pucFields,
+                                          UNSIGNED32 ulOptions,
+                                          UNSIGNED8* pucCollation,
+                                          ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsOpenTable90     (ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                          UNSIGNED8* pucAlias,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED16 usLockType,
+                                          UNSIGNED16 usCheckRights,
+                                          UNSIGNED32 ulOptions,
+                                          UNSIGNED8* pucCollation,
+                                          ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsCreateIndex90   (ADSHANDLE hObj, UNSIGNED8* pucFileName,
+                                          UNSIGNED8* pucTag, UNSIGNED8* pucExpr,
+                                          UNSIGNED8* pucCondition,
+                                          UNSIGNED8* pucWhile,
+                                          UNSIGNED32 ulOptions,
+                                          UNSIGNED32 ulPageSize,
+                                          UNSIGNED8* pucCollation,
+                                          ADSHANDLE* phIndex);
+UNSIGNED32 ENTRYPOINT AdsDDAddTable90    (ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+                                          UNSIGNED8* pucTablePath,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED8* pucIndexPath,
+                                          UNSIGNED8* pucComment,
+                                          UNSIGNED8* pucCollation);
+UNSIGNED32 ENTRYPOINT AdsDDCreateRefIntegrity62(ADSHANDLE hConnect,
+                                          UNSIGNED8* pucName, UNSIGNED8* pucFail,
+                                          UNSIGNED8* pucParent,
+                                          UNSIGNED8* pucParentTag,
+                                          UNSIGNED8* pucChild,
+                                          UNSIGNED8* pucChildTag,
+                                          UNSIGNED16 usUpdate,
+                                          UNSIGNED16 usDelete,
+                                          UNSIGNED8* pucNoPrimaryError,
+                                          UNSIGNED8* pucCascadeError);
+UNSIGNED32 ENTRYPOINT AdsFindFirstTable62(ADSHANDLE hConnect,
+                                          UNSIGNED8* pucFileMask,
+                                          UNSIGNED8* pucFirstDD,
+                                          UNSIGNED16* pusDDLen,
+                                          UNSIGNED8* pucFirstFile,
+                                          UNSIGNED16* pusFileLen,
+                                          ADSHANDLE* phFind);
+UNSIGNED32 ENTRYPOINT AdsFindNextTable62 (ADSHANDLE hConnect, ADSHANDLE hFind,
+                                          UNSIGNED8* pucDDName,
+                                          UNSIGNED16* pusDDLen,
+                                          UNSIGNED8* pucFileName,
+                                          UNSIGNED16* pusFileLen);
+UNSIGNED32 ENTRYPOINT AdsGetDateFormat60 (ADSHANDLE hConnect, UNSIGNED8* pucBuf,
+                                          UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsGetExact22      (ADSHANDLE hObj, UNSIGNED16* pbExact);
+UNSIGNED32 ENTRYPOINT AdsReindex61       (ADSHANDLE hObject,
+                                          UNSIGNED32 ulPageSize);
+UNSIGNED32 ENTRYPOINT AdsRestructureTable90(ADSHANDLE hConnect,
+                                          UNSIGNED8* pucTableName,
+                                          UNSIGNED8* pucPassword,
+                                          UNSIGNED16 usTableType,
+                                          UNSIGNED16 usCharType,
+                                          UNSIGNED16 usLockType,
+                                          UNSIGNED16 usCheckRights,
+                                          UNSIGNED8* pucAddFields,
+                                          UNSIGNED8* pucDeleteFields,
+                                          UNSIGNED8* pucChangeFields,
+                                          UNSIGNED8* pucCollation);
+UNSIGNED32 ENTRYPOINT AdsCancelUpdate90  (ADSHANDLE hTable, UNSIGNED32 ulOptions);
+UNSIGNED32 ENTRYPOINT AdsSetProperty90   (ADSHANDLE hObj, UNSIGNED32 ulOperation,
+                                          UNSIGNED64* puqValue);
+UNSIGNED32 ENTRYPOINT AdsFindConnection25(UNSIGNED8* pucFullPath,
+                                          ADSHANDLE* phConnect);
+UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                                          ADSHANDLE* phTable);
+UNSIGNED32 ENTRYPOINT AdsGetBookmark60   (ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+                                          UNSIGNED32* pulLength);
+UNSIGNED32 ENTRYPOINT AdsGotoBookmark60  (ADSHANDLE hObj, UNSIGNED8* pucBookmark);
+UNSIGNED32 ENTRYPOINT AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize);
+
+// ---- Further X# Advantage RDD entry points (M12.23) ----
+// Accept-and-ignore session/statement helpers, thin forwards, and
+// AE_FUNCTION_NOT_AVAILABLE stubs. Field setters take the ACE "field
+// name OR 1-based ordinal cast to a pointer" idiom (UNSIGNED8* pId).
+UNSIGNED32 ENTRYPOINT AdsGetTableOpenOptions(ADSHANDLE hTable, UNSIGNED32* pulOptions);
+UNSIGNED32 ENTRYPOINT AdsGetBookmark      (ADSHANDLE hTable, ADSHANDLE* phBookmark);
+UNSIGNED32 ENTRYPOINT AdsCancelUpdate     (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsClearAllScopes   (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsClearDefault     (void);
+UNSIGNED32 ENTRYPOINT AdsResetConnection  (ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsThreadExit       (void);
+UNSIGNED32 ENTRYPOINT AdsDisableLocalConnections(void);
+UNSIGNED32 ENTRYPOINT AdsEnableRI         (ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsDisableRI        (ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsEnableUniqueEnforcement (ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsDisableUniqueEnforcement(ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsEnableAutoIncEnforcement (ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsDisableAutoIncEnforcement(ADSHANDLE hConnect);
+UNSIGNED32 ENTRYPOINT AdsRecallAllRecords (ADSHANDLE hTable);
+UNSIGNED32 ENTRYPOINT AdsIsRecordVisible  (ADSHANDLE hObj, UNSIGNED16* pbVisible);
+UNSIGNED32 ENTRYPOINT AdsGetKeyCount      (ADSHANDLE hIndex, UNSIGNED16 usFilterOption,
+                                           UNSIGNED32* pulCount);
+UNSIGNED32 ENTRYPOINT AdsContinue         (ADSHANDLE hTable, UNSIGNED16* pbFound);
+UNSIGNED32 ENTRYPOINT AdsEvalTestExpr     (ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                                           UNSIGNED16* pusType);
+UNSIGNED32 ENTRYPOINT AdsEvalLogicalExpr  (ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                                           UNSIGNED16* pbResult);
+UNSIGNED32 ENTRYPOINT AdsEvalNumericExpr  (ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                                           double* pdResult);
+UNSIGNED32 ENTRYPOINT AdsEvalStringExpr   (ADSHANDLE hTable, UNSIGNED8* pucExpr,
+                                           UNSIGNED8* pucResult, UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsFindConnection   (UNSIGNED8* pucServerName, ADSHANDLE* phConnect);
+UNSIGNED32 ENTRYPOINT AdsGetAllIndexes    (ADSHANDLE hTable, ADSHANDLE* ahIndex,
+                                           UNSIGNED16* pusArrayLen);
+UNSIGNED32 ENTRYPOINT AdsGetFTSIndexes    (ADSHANDLE hTable, ADSHANDLE* ahIndex,
+                                           UNSIGNED16* pusArrayLen);
+UNSIGNED32 ENTRYPOINT AdsGetAllTables     (ADSHANDLE* ahTable, UNSIGNED16* pusArrayLen);
+UNSIGNED32 ENTRYPOINT AdsCloneTable       (ADSHANDLE hTable, ADSHANDLE* phClone);
+UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile);
+UNSIGNED32 ENTRYPOINT AdsGetRecordCRC     (ADSHANDLE hTable, UNSIGNED32* pulCRC,
+                                           UNSIGNED32 ulOptions);
+UNSIGNED32 ENTRYPOINT AdsInitRawKey       (ADSHANDLE hIndex);
+UNSIGNED32 ENTRYPOINT AdsMgDumpInternalTables(ADSHANDLE hMgmtHandle);
+UNSIGNED32 ENTRYPOINT AdsClearSQLAbortFunc(void);
+UNSIGNED32 ENTRYPOINT AdsClearSQLParams   (ADSHANDLE hStatement);
+UNSIGNED32 ENTRYPOINT AdsStmtClearTablePasswords(ADSHANDLE hStatement);
+UNSIGNED32 ENTRYPOINT AdsStmtDisableEncryption  (ADSHANDLE hStatement);
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableCharType   (ADSHANDLE hStatement, UNSIGNED16 usCharType);
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableCollation  (ADSHANDLE hStatement, UNSIGNED8* pucCollation);
+UNSIGNED32 ENTRYPOINT AdsStmtSetTableRights     (ADSHANDLE hStatement, UNSIGNED16 usCheckRights);
+UNSIGNED32 ENTRYPOINT AdsSetField         (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
+UNSIGNED32 ENTRYPOINT AdsSetEmpty         (ADSHANDLE hObj, UNSIGNED8* pucFldId);
+UNSIGNED32 ENTRYPOINT AdsSetNull          (ADSHANDLE hTable, UNSIGNED8* pucFldId);
+UNSIGNED32 ENTRYPOINT AdsSetShort         (ADSHANDLE hObj, UNSIGNED8* pucFldId, SIGNED32 sValue);
+UNSIGNED32 ENTRYPOINT AdsSetMoney         (ADSHANDLE hObj, UNSIGNED8* pucFldId, SIGNED64 qValue);
+UNSIGNED32 ENTRYPOINT AdsSetTime          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED8* pucValue, UNSIGNED16 usLen);
+UNSIGNED32 ENTRYPOINT AdsSetTimeStamp     (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED8* pucBuf, UNSIGNED32 ulLen);
+UNSIGNED32 ENTRYPOINT AdsGetDate          (ADSHANDLE hObj, UNSIGNED8* pucFldId,
+                                           UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
+
 #ifdef __cplusplus
 }
 #endif
