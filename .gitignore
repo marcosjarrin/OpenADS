@@ -45,6 +45,23 @@ tests/smoke/xsharp/openads.*
 tests/smoke/xsharp/VOERROR.LOG
 tests/smoke/xsharp/*.LOG
 
+# FiveWin example build artefacts
+examples/fivewin/*.exe
+examples/fivewin/*.obj
+examples/fivewin/*.map
+examples/fivewin/*.tmp
+examples/fivewin/*.bc
+examples/fivewin/*.res
+examples/fivewin/xbrowse_ads.c
+examples/fivewin/ace32.dll
+examples/fivewin/ace64.dll
+examples/fivewin/comp.log
+examples/fivewin/warnings.log
+examples/fivewin/*.ppo
+examples/fivewin/*.txlog
+examples/fivewin/out.txt
+examples/fivewin/err.txt
+
 # OS
 .DS_Store
 Thumbs.db
