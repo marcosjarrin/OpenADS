@@ -71,6 +71,18 @@ exposes against original ACE.
   reports `ADS_OPTIMIZED_NONE`, and returns success, letting the client
   RDD apply the filter itself (same for the server-side `SetAOF`
   handler).
+- **M12.25 — `AdsCreateTable` stamps the header last-update date.**
+  Follow-up to M12.24 (Robert van der Hulst): a freshly created+opened
+  table reported `AdsGetLastTableUpdate()` = `1900-00-00` until the
+  first `DbAppend` rewrote the DBF header. ACE writes the create date
+  into header bytes 1..3 up front, so OpenADS now does too — in
+  `AdsCreateTable` and every other path that lays down a fresh DBF
+  (`AdsRestructureTable`/convert, SQL `INTO`/`SELECT` result cursors,
+  GROUP BY / aggregate scratch tables). New `stamp_dbf_header_today`
+  helper uses the same UTC clock as `CdxDriver::rewrite_header_`, so
+  the create stamp and the first-append stamp agree. Doctest
+  `abi_aof_test.cpp` gains an `AdsCreateTable` → `AdsGetLastTableUpdate`
+  == today's date case.
 - **X# RDD against a remote OpenADS server.** Three more fixes so X#'s
   ADSRDD drives `openads_serverd` over the wire (`AdsConnect60(tcp://
   host:port/<datadir>, ADS_REMOTE_SERVER) → AX_SetConnectionHandle →

@@ -9,7 +9,9 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -194,6 +196,56 @@ TEST_CASE("AdsGetLastTableUpdate: returns the DBF header date string") {
         UNSIGNED16 len = sizeof(buf);
         CHECK(AdsGetLastTableUpdate(hT, buf, &len) == 0);
         CHECK(std::string(reinterpret_cast<char*>(buf)) == "2024-01-31");
+        CHECK(len == 10);
+
+        AdsCloseTable(hT);
+        AdsDisconnect(hConn);
+    }
+    fs::remove(p);
+}
+
+TEST_CASE("AdsCreateTable: stamps the header last-update with today's date") {
+    // Robert van der Hulst report: a freshly created+opened table
+    // reported "1900-00-00" until the first DbAppend rewrote the
+    // header. AdsCreateTable must stamp the DBF header on creation,
+    // matching what a real ADS server does.
+    auto p   = fs::temp_directory_path() / "openads_aof_abi_newtbl.dbf";
+    fs::remove(p);
+    auto dir  = p.parent_path().string();
+    auto base = p.filename().string();
+
+    // Expected stamp: today's UTC date — same clock the create path uses.
+    std::time_t now = std::time(nullptr);
+    std::tm tm_utc{};
+#ifdef _WIN32
+    gmtime_s(&tm_utc, &now);
+#else
+    gmtime_r(&now, &tm_utc);
+#endif
+    char expected[16] = {0};
+    std::snprintf(expected, sizeof(expected), "%04d-%02d-%02d",
+                  tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday);
+
+    {
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(dir.data()),
+                             ADS_LOCAL_SERVER, nullptr, nullptr,
+                             ADS_DEFAULT, &hConn) == 0);
+
+        ADSHANDLE hT = 0;
+        UNSIGNED8 fields[] = "NAME,Character,10;AGE,Numeric,3,0";
+        REQUIRE(AdsCreateTable(hConn,
+                               reinterpret_cast<UNSIGNED8*>(base.data()),
+                               nullptr, ADS_CDX, ADS_ANSI, 0, 0,
+                               0, fields, &hT) == 0);
+
+        UNSIGNED8 fmt[] = "CCYY-MM-DD";
+        CHECK(AdsSetDateFormat(fmt) == 0);
+
+        UNSIGNED8  buf[32] = {0};
+        UNSIGNED16 len = sizeof(buf);
+        CHECK(AdsGetLastTableUpdate(hT, buf, &len) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(buf)) == expected);
         CHECK(len == 10);
 
         AdsCloseTable(hT);

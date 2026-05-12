@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -89,6 +90,26 @@ openads::engine::TableType map_type(UNSIGNED16 t) {
         case ADS_VFP: return openads::engine::TableType::Vfp;
         default:      return openads::engine::TableType::Cdx;
     }
+}
+
+// Stamp DBF header bytes [1..3] (YY MM DD, year as offset from 1900)
+// with today's UTC date — what a real ADS server records when it
+// creates or modifies a table. Without this a freshly-created table
+// reports a "1900-00-00" last-update stamp until its first record
+// write triggers CdxDriver::rewrite_header_(). UTC keeps the two paths
+// consistent. `hdr` must point at the start of the 32-byte header.
+void stamp_dbf_header_today(std::uint8_t* hdr) {
+    std::time_t secs = static_cast<std::time_t>(
+        openads::platform::utc_unix_micros() / 1'000'000);
+    std::tm tm_utc{};
+#ifdef _WIN32
+    gmtime_s(&tm_utc, &secs);
+#else
+    gmtime_r(&secs, &tm_utc);
+#endif
+    hdr[1] = static_cast<std::uint8_t>(tm_utc.tm_year);
+    hdr[2] = static_cast<std::uint8_t>(tm_utc.tm_mon + 1);
+    hdr[3] = static_cast<std::uint8_t>(tm_utc.tm_mday);
 }
 
 UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
@@ -744,6 +765,7 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
 
     std::vector<std::uint8_t> hdr(32, 0);
     hdr[0]  = 0x03;                                            // dBASE III
+    stamp_dbf_header_today(hdr.data());                        // last-update
     hdr[4]  = 0; hdr[5] = 0; hdr[6] = 0; hdr[7] = 0;           // 0 records
     hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
     hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
@@ -981,6 +1003,7 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
 
         std::vector<std::uint8_t> hdr(32, 0);
         hdr[0]  = 0x03;
+        stamp_dbf_header_today(hdr.data());
         std::uint32_t rcount = t.record_count();
         hdr[4]  = static_cast<std::uint8_t>( rcount        & 0xFFu);
         hdr[5]  = static_cast<std::uint8_t>((rcount >> 8)  & 0xFFu);
@@ -3988,6 +4011,7 @@ UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
     std::vector<std::uint8_t> file;
     std::vector<std::uint8_t> hdr(32, 0);
     hdr[0]  = 0x03;
+    stamp_dbf_header_today(hdr.data());
     hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
     hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
     hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
@@ -5273,6 +5297,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::vector<std::uint8_t> file;
         std::array<std::uint8_t, 32> hdr{};
         hdr[0] = 0x03;
+        stamp_dbf_header_today(hdr.data());
         hdr[4] = 1;
         std::uint16_t hl = 32 + 32 + 1;
         std::uint16_t rl = 1 + 255;
@@ -5895,6 +5920,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::vector<std::uint8_t> file;
             std::array<std::uint8_t, 32> hdr{};
             hdr[0] = 0x03;
+            stamp_dbf_header_today(hdr.data());
             std::uint16_t header_len = static_cast<std::uint16_t>(
                 32 + 32 * nfields + 1);
             hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
@@ -6109,6 +6135,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::vector<std::uint8_t> file;
         std::array<std::uint8_t, 32> hdr{};
         hdr[0] = 0x03;
+        stamp_dbf_header_today(hdr.data());
         hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
         hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
         hdr[10] = static_cast<std::uint8_t>( merged_rec       & 0xFFu);
@@ -6620,6 +6647,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::vector<std::uint8_t> jg_file;
             std::array<std::uint8_t, 32> jg_hdr{};
             jg_hdr[0] = 0x03;
+            stamp_dbf_header_today(jg_hdr.data());
             std::uint16_t jg_hlen = static_cast<std::uint16_t>(
                 32 + 32 * (gbs.size() + slots.size()) + 1);
             std::uint32_t jg_rlen = 1;
@@ -6791,6 +6819,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::vector<std::uint8_t> agg_file;
             std::array<std::uint8_t, 32> agg_hdr{};
             agg_hdr[0] = 0x03;
+            stamp_dbf_header_today(agg_hdr.data());
             agg_hdr[4] = 1;
             std::uint16_t agg_hlen = static_cast<std::uint16_t>(
                 32 + 32 * slots.size() + 1);
@@ -7179,6 +7208,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::vector<std::uint8_t> file;
             std::array<std::uint8_t, 32> hdr{};
             hdr[0] = 0x03;
+            stamp_dbf_header_today(hdr.data());
             std::uint16_t header_len = static_cast<std::uint16_t>(
                 32 + 32 * (gbs.size() + slots.size()) + 1);
             std::uint32_t rec_len = 1;
@@ -7441,6 +7471,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::vector<std::uint8_t> file;
         std::array<std::uint8_t, 32> hdr{};
         hdr[0] = 0x03;
+        stamp_dbf_header_today(hdr.data());
         hdr[4] = 1;
         std::uint16_t header_len = static_cast<std::uint16_t>(
             32 + 32 * slots.size() + 1);
@@ -8838,6 +8869,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         std::vector<std::uint8_t> file;
         std::array<std::uint8_t, 32> hdr{};
         hdr[0] = 0x03;
+        stamp_dbf_header_today(hdr.data());
         std::uint16_t hl = static_cast<std::uint16_t>(
             32 + 32 * outs.size() + 1);
         std::uint32_t rl = 1;
