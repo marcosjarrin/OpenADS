@@ -1,0 +1,50 @@
+<style>
+  #page-toc {
+    position: fixed;
+    top: 4rem;
+    right: 0;
+    width: 240px;
+    max-height: calc(100vh - 5rem);
+    overflow-y: auto;
+    padding: 1rem 1rem 1rem 1.25rem;
+    border-left: 1px solid rgba(127, 127, 127, 0.25);
+    font-size: 0.85rem;
+    line-height: 1.35;
+    z-index: 90;
+  }
+  #page-toc h4 {
+    margin: 0 0 .5rem 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: .7;
+  }
+  #page-toc ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  #page-toc li { margin: .2rem 0; }
+  #page-toc li.toc-h3 { padding-left: 0.9rem; }
+  #page-toc li.toc-h4 { padding-left: 1.8rem; font-size: 0.8rem; opacity: .85; }
+  #page-toc a {
+    text-decoration: none;
+    color: inherit;
+    opacity: .8;
+    border-left: 2px solid transparent;
+    padding-left: .5rem;
+    display: block;
+  }
+  #page-toc a:hover { opacity: 1; }
+  #page-toc a.active {
+    opacity: 1;
+    border-left-color: currentColor;
+    font-weight: 600;
+  }
+  @media (min-width: 1200px) {
+    .main-content-wrap { padding-right: 260px !important; }
+  }
+  @media (max-width: 1199px) {
+    #page-toc { display: none; }
+  }
+</style>

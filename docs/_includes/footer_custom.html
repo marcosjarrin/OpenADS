@@ -1,0 +1,53 @@
+<script>
+(function () {
+  var content = document.querySelector('.main-content');
+  if (!content) return;
+  var headings = content.querySelectorAll('h2[id], h3[id], h4[id]');
+  if (headings.length < 2) return;
+
+  var path = location.pathname;
+  var label = path.indexOf('/es/') !== -1 ? 'En esta página'
+            : path.indexOf('/pt/') !== -1 ? 'Nesta página'
+            : 'On this page';
+
+  var toc = document.createElement('nav');
+  toc.id = 'page-toc';
+  toc.setAttribute('aria-label', label);
+
+  var title = document.createElement('h4');
+  title.textContent = label;
+  toc.appendChild(title);
+
+  var ul = document.createElement('ul');
+  var links = [];
+  headings.forEach(function (h) {
+    var li = document.createElement('li');
+    li.className = 'toc-' + h.tagName.toLowerCase();
+    var a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = (h.textContent || '').replace(/[¶#]\s*$/, '').trim();
+    a.dataset.target = h.id;
+    li.appendChild(a);
+    ul.appendChild(li);
+    links.push(a);
+  });
+  toc.appendChild(ul);
+  document.body.appendChild(toc);
+
+  if ('IntersectionObserver' in window) {
+    var byId = {};
+    links.forEach(function (a) { byId[a.dataset.target] = a; });
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        var a = byId[e.target.id];
+        if (!a) return;
+        if (e.isIntersecting) {
+          links.forEach(function (l) { l.classList.remove('active'); });
+          a.classList.add('active');
+        }
+      });
+    }, { rootMargin: '0px 0px -70% 0px', threshold: 0 });
+    headings.forEach(function (h) { observer.observe(h); });
+  }
+})();
+</script>
