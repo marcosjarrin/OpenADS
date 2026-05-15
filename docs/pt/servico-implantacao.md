@@ -126,7 +126,7 @@ launchctl load ~/Library/LaunchAgents/com.openads.serverd.plist
 
 ```sh
 curl http://localhost:6263/api/health
-# {"status":"ok","mode":"remote-server","version":"1.0.0-rc22", ... }
+# {"status":"ok","mode":"remote-server","version":"1.0.0-rc23", ... }
 ```
 
 O campo `mode` é o que o badge de modo do Studio usa (rc10).

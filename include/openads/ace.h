@@ -70,7 +70,8 @@ UNSIGNED32 AdsRefreshRecord (ADSHANDLE hTable);
 UNSIGNED32 AdsReindex       (ADSHANDLE hTable);
 UNSIGNED32 AdsCopyTable     (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
                               UNSIGNED8* pucFile);
-UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst);
+UNSIGNED32 ENTRYPOINT AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
+                              UNSIGNED16 usFilterOption);
 UNSIGNED32 AdsConvertTable  (ADSHANDLE  hHandle, UNSIGNED16 usFilterOption,
                               UNSIGNED8* pucFile, UNSIGNED16 usTargetType);
 UNSIGNED32 AdsFTSSearch     (ADSHANDLE   hConnect,
@@ -155,8 +156,11 @@ UNSIGNED32 AdsGetRecordCount(ADSHANDLE  hTable, UNSIGNED16 bFilterOption,
 UNSIGNED32 AdsGetLastError  (UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
                               UNSIGNED16* pusBufLen);
 
-UNSIGNED32 AdsGetVersion    (UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
-                              UNSIGNED32* pulLetter, UNSIGNED32* pulDesc);
+UNSIGNED32 ENTRYPOINT AdsGetVersion (UNSIGNED32* pulMajor,
+                              UNSIGNED32* pulMinor,
+                              UNSIGNED8*  pucLetter,
+                              UNSIGNED8*  pucDesc,
+                              UNSIGNED16* pusDescLen);
 
 UNSIGNED32 AdsGetServerName (ADSHANDLE   hConnect,
                               UNSIGNED8*  pucBuf, UNSIGNED16* pusLen);
@@ -173,12 +177,20 @@ UNSIGNED32 AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted);
 
 UNSIGNED32 AdsSetString     (ADSHANDLE hTable, UNSIGNED8* pucField,
                               UNSIGNED8* pucValue, UNSIGNED32 ulLen);
-UNSIGNED32 AdsSetStringW    (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 ENTRYPOINT AdsGetString (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              UNSIGNED8* pucBuf, UNSIGNED32* pulLen,
+                              UNSIGNED16 usOption);
+UNSIGNED32 ENTRYPOINT AdsGetLong   (ADSHANDLE hTable, UNSIGNED8* pucField,
+                              SIGNED32* plVal);
+// SAP ACE W-variants keep field names as ASCII (UNSIGNED8*); only
+// the data buffer (pucValueW / pucBufW) is wide-char UTF-16LE.
+// Harbour's ads1.c passes ADSFIELD(n) (UNSIGNED8*) — matching SAP.
+UNSIGNED32 AdsSetStringW    (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pucValueW, UNSIGNED32 ulLen);
-UNSIGNED32 AdsGetStringW    (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 AdsGetStringW    (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                               UNSIGNED16 usOption);
-UNSIGNED32 AdsGetFieldW     (ADSHANDLE  hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 AdsGetFieldW     (ADSHANDLE  hTable, UNSIGNED8* pucField,
                               UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                               UNSIGNED16 usOption);
 UNSIGNED32 AdsSetLogical    (ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -226,8 +238,9 @@ UNSIGNED32 AdsSeekLast      (ADSHANDLE hIndex, UNSIGNED8* pucKey,
                               UNSIGNED16 usKeyLen, UNSIGNED16 usKeyType,
                               UNSIGNED16* pbFound);
 
-UNSIGNED32 AdsSetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,
-                              UNSIGNED8* pucKey);
+UNSIGNED32 ENTRYPOINT AdsSetScope (ADSHANDLE hIndex, UNSIGNED16 usScope,
+                              UNSIGNED8* pucScope, UNSIGNED16 usLen,
+                              UNSIGNED16 usDataType);
 UNSIGNED32 AdsClearScope    (ADSHANDLE hIndex, UNSIGNED16 usScope);
 UNSIGNED32 AdsGetScope      (ADSHANDLE hIndex, UNSIGNED16 usScope,
                               UNSIGNED8* pucBuf, UNSIGNED16* pusLen);
@@ -275,13 +288,15 @@ UNSIGNED32 AdsCommitTransaction  (ADSHANDLE hConnect);
 UNSIGNED32 AdsRollbackTransaction(ADSHANDLE hConnect);
 UNSIGNED32 AdsInTransaction      (ADSHANDLE hConnect, UNSIGNED16* pbInTx);
 
-UNSIGNED32 AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName);
-UNSIGNED32 AdsReleaseSavepoint   (ADSHANDLE hConnect, UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsCreateSavepoint    (ADSHANDLE hConnect, UNSIGNED8* pucName,
+                              UNSIGNED32 ulOptions);
+UNSIGNED32 ENTRYPOINT AdsReleaseSavepoint   (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect, UNSIGNED8* pucPassword);
 UNSIGNED32 AdsSetCollation       (ADSHANDLE hConnect, UNSIGNED8* pucName);
 UNSIGNED32 AdsConvertOemToAnsi   (UNSIGNED8* pucBuf, UNSIGNED32* pulLen);
 UNSIGNED32 AdsConvertAnsiToOem   (UNSIGNED8* pucBuf, UNSIGNED32* pulLen);
-UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint);
+UNSIGNED32 ENTRYPOINT AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint,
+                              UNSIGNED32 ulOptions);
 
 UNSIGNED32 AdsFindFirstTable     (ADSHANDLE   hConnect,
                                   UNSIGNED8*  pucMask,
@@ -521,7 +536,11 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_MAX_TABLE_NAME       255
 #define ADS_MAX_TAG_NAME          10
 #define ADS_MAX_KEY_LENGTH       240
-#define ADS_MAX_PARAMDEF_LEN     256
+// Guarded so callers (Harbour's adsfunc.c bumps to 2048) can
+// pre-define a larger ceiling without -Wmacro-redefined noise.
+#ifndef ADS_MAX_PARAMDEF_LEN
+#  define ADS_MAX_PARAMDEF_LEN     256
+#endif
 #define ADS_MAX_ERROR_LEN        320
 
 // Data Dictionary string-property keys.
@@ -765,13 +784,13 @@ UNSIGNED32 ENTRYPOINT AdsData              (UNSIGNED16 usFlag,
                                              void* pvData);
 UNSIGNED32 ENTRYPOINT AdsEvalAOF           (ADSHANDLE hTable,
                                              UNSIGNED8* pucExpr,
-                                             UNSIGNED32* pulRecords);
+                                             UNSIGNED16* pusOptLevel);
 UNSIGNED32 ENTRYPOINT AdsFilterOption      (ADSHANDLE hTable,
                                              UNSIGNED16 usOption,
                                              UNSIGNED16* pusValue);
 UNSIGNED32 ENTRYPOINT AdsGetAOF            (ADSHANDLE hTable,
-                                             UNSIGNED32* pulRecords,
-                                             UNSIGNED32* pulCount);
+                                             UNSIGNED8* pucFilter,
+                                             UNSIGNED16* pusLen);
 UNSIGNED32 ENTRYPOINT AdsGetConnectionType (ADSHANDLE hConnect,
                                              UNSIGNED16* pusType);
 UNSIGNED32 ENTRYPOINT AdsGetDateFormat     (UNSIGNED8* pucBuf,
@@ -1204,7 +1223,8 @@ UNSIGNED32 ENTRYPOINT AdsGetTableHandle25(ADSHANDLE hConnect, UNSIGNED8* pucName
                                           ADSHANDLE* phTable);
 UNSIGNED32 ENTRYPOINT AdsGetBookmark60   (ADSHANDLE hObj, UNSIGNED8* pucBookmark,
                                           UNSIGNED32* pulLength);
-UNSIGNED32 ENTRYPOINT AdsGotoBookmark60  (ADSHANDLE hObj, UNSIGNED8* pucBookmark);
+UNSIGNED32 ENTRYPOINT AdsGotoBookmark60  (ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+                              UNSIGNED32 ulLength);
 UNSIGNED32 ENTRYPOINT AdsGetMemoBlockSize(ADSHANDLE hObj, UNSIGNED16* pusBlockSize);
 
 // ---- Further X# Advantage RDD entry points (M12.23) ----
@@ -1243,7 +1263,8 @@ UNSIGNED32 ENTRYPOINT AdsGetAllIndexes    (ADSHANDLE hTable, ADSHANDLE* ahIndex,
                                            UNSIGNED16* pusArrayLen);
 UNSIGNED32 ENTRYPOINT AdsGetFTSIndexes    (ADSHANDLE hTable, ADSHANDLE* ahIndex,
                                            UNSIGNED16* pusArrayLen);
-UNSIGNED32 ENTRYPOINT AdsGetAllTables     (ADSHANDLE* ahTable, UNSIGNED16* pusArrayLen);
+UNSIGNED32 ENTRYPOINT AdsGetAllTables     (ADSHANDLE hConnect, ADSHANDLE* ahTable,
+                              UNSIGNED16* pusArrayLen);
 UNSIGNED32 ENTRYPOINT AdsCloneTable       (ADSHANDLE hTable, ADSHANDLE* phClone);
 UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile);
 UNSIGNED32 ENTRYPOINT AdsGetRecordCRC     (ADSHANDLE hTable, UNSIGNED32* pulCRC,

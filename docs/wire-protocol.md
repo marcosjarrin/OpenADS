@@ -6,7 +6,7 @@ nav_order: 4
 permalink: /en/wire-protocol/
 ---
 
-# OpenADS Wire Protocol — v1.0.0-rc22
+# OpenADS Wire Protocol — v1.0.0-rc23
 
 This document specifies the OpenADS-native wire protocol spoken
 between an OpenADS client (`ace64.dll` opened with a
@@ -191,7 +191,7 @@ Notation:
 
 ### 5.1 Hello / HelloAck
 - Hello: empty.
-- HelloAck: `bytes` — server banner, e.g. `openads/1.0.0-rc22`.
+- HelloAck: `bytes` — server banner, e.g. `openads/1.0.0-rc23`.
   Since v1.0.0-rc13 the banner is driven from `git describe`, so
   it always reflects the actual build.
 
@@ -333,7 +333,7 @@ Notation:
 
 ## 6. Versioning
 
-- This spec covers OpenADS **v1.0.0-rc22**. Bumps append new
+- This spec covers OpenADS **v1.0.0-rc23**. Bumps append new
   opcodes and document them here without breaking existing ones.
 - Clients can probe the server version via `Hello` → the banner
   string is `openads/<semver>`.

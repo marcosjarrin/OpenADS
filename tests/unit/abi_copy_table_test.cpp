@@ -124,7 +124,7 @@ TEST_CASE("M9.11 AdsCopyTableContents appends src rows into dst") {
     REQUIRE(AdsOpenTable(hConn, src_name, src_name,
                          ADS_CDX, 1, 1, 0, 1, &hSrc) == 0);
 
-    REQUIRE(AdsCopyTableContents(hSrc, hDst) == 0);
+    REQUIRE(AdsCopyTableContents(hSrc, hDst, ADS_IGNOREFILTERS) == 0);
 
     UNSIGNED32 cnt = 0;
     REQUIRE(AdsGetRecordCount(hDst, 0, &cnt) == 0);

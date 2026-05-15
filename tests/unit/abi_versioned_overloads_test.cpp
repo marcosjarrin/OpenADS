@@ -68,7 +68,7 @@ TEST_CASE("M12.22 versioned ACE overloads") {
         REQUIRE(AdsGetRecordNum(hTable, 0, &recBottom) == openads::AE_SUCCESS);
         CHECK(recBottom != rec1);
 
-        REQUIRE(AdsGotoBookmark60(hTable, bm.data()) == openads::AE_SUCCESS);
+        REQUIRE(AdsGotoBookmark60(hTable, bm.data(), bmlen) == openads::AE_SUCCESS);
         UNSIGNED32 recBack = 0;
         REQUIRE(AdsGetRecordNum(hTable, 0, &recBack) == openads::AE_SUCCESS);
         CHECK(recBack == rec1);

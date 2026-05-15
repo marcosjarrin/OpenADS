@@ -6,7 +6,7 @@ nav_order: 9
 
 # Known issues — current
 
-Status as of **v1.0.0-rc22** (2026-05-13). The historical M3-era
+Status as of **v1.0.0-rc23** (2026-05-15). The historical M3-era
 compat-breaking CDX / NTX list that lived here is closed and now
 only survives in `git log`.
 

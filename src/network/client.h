@@ -123,7 +123,8 @@ public:
                                             std::int32_t  direction);
     util::Result<void>          set_scope(std::uint32_t index_id,
                                           std::uint16_t which,
-                                          const std::string& key);
+                                          const std::string& key,
+                                          std::uint16_t data_type);
     util::Result<void>          clear_scope(std::uint32_t index_id,
                                             std::uint16_t which);
     // M12.17 — single-frame whole-record read.

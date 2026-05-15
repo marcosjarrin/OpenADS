@@ -101,15 +101,15 @@ TEST_CASE("M9.17 AdsSetStringW + AdsGetStringW round-trip non-ASCII") {
     auto value_w = u16(cps, n);
     value_w.pop_back();
 
-    // Field name "TXT" as UTF-16.
-    UNSIGNED16 fld_w[] = {'T', 'X', 'T', 0};
-    REQUIRE(AdsSetStringW(hTable, fld_w,
+    // Field name is ASCII even on the W variants (SAP convention).
+    UNSIGNED8 fld[] = "TXT";
+    REQUIRE(AdsSetStringW(hTable, fld,
                           value_w.data(),
                           static_cast<UNSIGNED32>(value_w.size())) == 0);
 
     UNSIGNED16 buf_w[64] = {0};
     UNSIGNED32 cap = 64;
-    REQUIRE(AdsGetStringW(hTable, fld_w, buf_w, &cap, 0) == 0);
+    REQUIRE(AdsGetStringW(hTable, fld, buf_w, &cap, 0) == 0);
 
     std::string read_utf8 = openads::abi::utf16le_to_utf8(buf_w, cap);
     std::string in_utf8   = openads::abi::utf16le_to_utf8(value_w.data(),
@@ -141,13 +141,13 @@ TEST_CASE("M9.17 AdsGetFieldW = AdsGetStringW alias") {
                          1, 1, 0, 1, &hTable) == 0);
     REQUIRE(AdsAppendRecord(hTable) == 0);
 
-    UNSIGNED16 fld_w[] = {'T', 'X', 'T', 0};
+    UNSIGNED8  fld[]  = "TXT";
     UNSIGNED16 val_w[] = {'A', 'B', 'C', 0};
-    REQUIRE(AdsSetStringW(hTable, fld_w, val_w, 3) == 0);
+    REQUIRE(AdsSetStringW(hTable, fld, val_w, 3) == 0);
 
     UNSIGNED16 buf_w[64] = {0};
     UNSIGNED32 cap = 64;
-    REQUIRE(AdsGetFieldW(hTable, fld_w, buf_w, &cap, 0) == 0);
+    REQUIRE(AdsGetFieldW(hTable, fld, buf_w, &cap, 0) == 0);
     CHECK(buf_w[0] == 'A');
     CHECK(buf_w[1] == 'B');
     CHECK(buf_w[2] == 'C');
@@ -174,9 +174,10 @@ TEST_CASE("M9.17 W variants honour ADSFIELD-style numeric field index") {
                          1, 1, 0, 1, &hTable) == 0);
     REQUIRE(AdsAppendRecord(hTable) == 0);
 
-    // Field 1 = "TXT". Pass numeric 1 cast to UNSIGNED16*.
-    UNSIGNED16* fld_numeric =
-        reinterpret_cast<UNSIGNED16*>(static_cast<std::uintptr_t>(1));
+    // Field 1 = "TXT". Pass numeric 1 cast to UNSIGNED8* — same
+    // ADSFIELD(n) convention as the ANSI variants.
+    UNSIGNED8* fld_numeric =
+        reinterpret_cast<UNSIGNED8*>(static_cast<std::uintptr_t>(1));
     UNSIGNED16 val_w[] = {'X', 0};
     REQUIRE(AdsSetStringW(hTable, fld_numeric, val_w, 1) == 0);
 

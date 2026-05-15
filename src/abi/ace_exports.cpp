@@ -1716,12 +1716,31 @@ UNSIGNED32 AdsGetLastError(UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
     return openads::AE_SUCCESS;
 }
 
+// SAP / rddads signature: 5 args.
+//   AdsGetVersion(&ulMajor, &ulMinor, &ucLetter, ucDesc, &usDescLen)
+//
+// pucLetter : single ASCII letter (NOT a UNSIGNED32 codepoint) —
+//             writing 4 bytes into a 1-byte slot was undefined.
+// pucDesc / pusDescLen : caller-allocated description buffer +
+//             in/out length. We write the OpenADS version string
+//             and truncate to the caller's capacity.
 UNSIGNED32 AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
-                         UNSIGNED32* pulLetter, UNSIGNED32* pulDesc) {
-    if (pulMajor != nullptr)  *pulMajor  = 0;
-    if (pulMinor != nullptr)  *pulMinor  = 0;
-    if (pulLetter != nullptr) *pulLetter = 'a';
-    if (pulDesc != nullptr)   *pulDesc   = 1;
+                         UNSIGNED8*  pucLetter, UNSIGNED8* pucDesc,
+                         UNSIGNED16* pusDescLen) {
+    if (pulMajor  != nullptr) *pulMajor  = 0;
+    if (pulMinor  != nullptr) *pulMinor  = 0;
+    if (pucLetter != nullptr) *pucLetter = 'a';
+    static const char kDesc[] = "OpenADS ACE-compatible engine";
+    if (pucDesc != nullptr && pusDescLen != nullptr) {
+        UNSIGNED16 cap = *pusDescLen;
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            sizeof(kDesc) - 1 < cap ? sizeof(kDesc) - 1 : cap);
+        if (n > 0) std::memcpy(pucDesc, kDesc, n);
+        if (cap > n) pucDesc[n] = '\0';
+        *pusDescLen = n;
+    } else if (pusDescLen != nullptr) {
+        *pusDescLen = sizeof(kDesc) - 1;
+    }
     return openads::AE_SUCCESS;
 }
 
@@ -2019,15 +2038,16 @@ UNSIGNED32 AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
 
 namespace {
 
-// Resolve a UTF-16 / numeric `pucFieldW` to a 0-based field index.
-// Mirrors `resolve_field_index` for the ASCII path: small pointer
-// values are interpreted as a 1-based field number (rddads' ADSFIELD
-// macro), otherwise the value is a UTF-16LE NUL-terminated field
-// name that is transcoded to UTF-8 before the name lookup.
-bool resolve_field_index_w(Table* tbl, UNSIGNED16* pucFieldW,
+// Resolve an ASCII / numeric `pucField` to a 0-based field index
+// for the W-variant entry points. SAP keeps field names ASCII
+// (UNSIGNED8*) even on the W variants; only the value buffer is
+// wide. Small pointer values are interpreted as a 1-based field
+// number (rddads' ADSFIELD macro), otherwise the value is a NUL-
+// terminated ASCII field name.
+bool resolve_field_index_w(Table* tbl, UNSIGNED8* pucField,
                            std::uint16_t* out) {
     if (tbl == nullptr || out == nullptr) return false;
-    auto p = reinterpret_cast<std::uintptr_t>(pucFieldW);
+    auto p = reinterpret_cast<std::uintptr_t>(pucField);
     if (p != 0 && p < 0x10000u) {
         std::uint16_t one_based = static_cast<std::uint16_t>(p);
         if (one_based >= 1 && one_based <= tbl->field_count()) {
@@ -2036,11 +2056,8 @@ bool resolve_field_index_w(Table* tbl, UNSIGNED16* pucFieldW,
         }
         return false;
     }
-    if (pucFieldW == nullptr) return false;
-    std::size_t n = 0;
-    while (pucFieldW[n] != 0) ++n;
-    auto name = openads::abi::utf16le_to_utf8(
-        reinterpret_cast<const std::uint16_t*>(pucFieldW), n);
+    if (pucField == nullptr) return false;
+    auto name = openads::abi::to_internal(pucField, 0);
     for (std::uint16_t i = 0; i < tbl->field_count(); ++i) {
         if (tbl->field_descriptor(i).name == name) { *out = i; return true; }
     }
@@ -2069,12 +2086,12 @@ UNSIGNED32 emit_utf16(UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
 
 }  // namespace
 
-UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucValueW, UNSIGNED32 ulLen) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     std::uint16_t idx = 0;
-    if (!resolve_field_index_w(t, pucFieldW, &idx)) {
+    if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     std::size_t units = ulLen;
@@ -2088,13 +2105,13 @@ UNSIGNED32 AdsSetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
     return ok();
 }
 
-UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
                          UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                          UNSIGNED16 /*usOption*/) {
     Table* t = get_table(hTable);
     if (!t || pulLenW == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     std::uint16_t idx = 0;
-    if (!resolve_field_index_w(t, pucFieldW, &idx)) {
+    if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     auto v = t->read_field(idx);
@@ -2102,10 +2119,10 @@ UNSIGNED32 AdsGetStringW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
     return emit_utf16(pucBufW, pulLenW, v.value().as_string);
 }
 
-UNSIGNED32 AdsGetFieldW(ADSHANDLE hTable, UNSIGNED16* pucFieldW,
+UNSIGNED32 AdsGetFieldW(ADSHANDLE hTable, UNSIGNED8* pucField,
                         UNSIGNED16* pucBufW, UNSIGNED32* pulLenW,
                         UNSIGNED16 /*usOption*/) {
-    return AdsGetStringW(hTable, pucFieldW, pucBufW, pulLenW, 0);
+    return AdsGetStringW(hTable, pucField, pucBufW, pulLenW, 0);
 }
 
 UNSIGNED32 AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
@@ -3909,18 +3926,63 @@ UNSIGNED32 AdsSeekLast(ADSHANDLE hIndex,
     return rc;
 }
 
+// SAP / rddads signature: 5 args.
+//   AdsSetScope(hIndex, usScope, pucScope, usLen, usDataType)
+//
+// usLen       : explicit scope-key length. Required because typed
+//               keys (ADS_DOUBLEKEY, ADS_RAWKEY) legally contain
+//               embedded NULs that strlen() would truncate.
+// usDataType  : ADS_STRINGKEY / ADS_RAWKEY / ADS_DOUBLEKEY / ... —
+//               matches AdsSeek's u16KeyType. We mirror AdsSeek's
+//               ADS_DOUBLEKEY -> ASCII-padded conversion so a scope
+//               set with a double compares apples-to-apples against
+//               the index's stored key bytes.
 UNSIGNED32 AdsSetScope(ADSHANDLE hIndex, UNSIGNED16 usScope,
-                       UNSIGNED8* pucKey) {
+                       UNSIGNED8* pucScope, UNSIGNED16 usLen,
+                       UNSIGNED16 usDataType) {
     if (auto* ri = get_remote_index(hIndex)) {
-        std::string key = pucKey
-            ? openads::abi::to_internal(pucKey, 0) : std::string();
-        auto r = ri->conn->set_scope(ri->id, usScope, key);
+        std::string key = pucScope
+            ? openads::abi::to_internal(pucScope, usLen) : std::string();
+        auto r = ri->conn->set_scope(ri->id, usScope, key,
+                                     usDataType);
         if (!r) return fail(r.error());
         return ok();
     }
     Table* t = table_for_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
-    auto key = openads::abi::to_internal(pucKey, 0);
+    std::string key;
+    if (usDataType == ADS_DOUBLEKEY && usLen == sizeof(double) &&
+        pucScope != nullptr &&
+        t->order() != nullptr && t->order()->index() != nullptr) {
+        double dv = 0;
+        std::memcpy(&dv, pucScope, sizeof(double));
+        auto* idx = t->order()->index();
+        std::uint16_t klen = idx->key_length();
+        std::uint16_t fmt_w = klen;
+        std::uint16_t dec = 0;
+        std::int32_t fidx = t->field_index(idx->expression());
+        if (fidx >= 0) {
+            const auto& fd = t->field_descriptor(
+                static_cast<std::uint16_t>(fidx));
+            dec = static_cast<std::uint16_t>(fd.decimals);
+            if (fd.length > 0)
+                fmt_w = static_cast<std::uint16_t>(fd.length);
+        }
+        char buf[64];
+        if (dec > 0) {
+            std::snprintf(buf, sizeof(buf), "%*.*f",
+                          static_cast<int>(fmt_w),
+                          static_cast<int>(dec), dv);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%*.0f",
+                          static_cast<int>(fmt_w), dv);
+        }
+        key.assign(buf, fmt_w);
+        if (key.size() < klen) key.append(klen - key.size(), ' ');
+    } else {
+        key = pucScope
+            ? openads::abi::to_internal(pucScope, usLen) : std::string();
+    }
     auto r = t->set_scope(usScope == ADS_TOP, key);
     if (!r) return fail(r.error());
     return ok();
@@ -4063,7 +4125,17 @@ UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
     return ok();
 }
 
-UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst) {
+// SAP / rddads signature: 3 args.
+//   AdsCopyTableContents(hSrc, hDst, usFilterOption)
+//
+// usFilterOption : ADS_IGNOREFILTERS (0) / ADS_RESPECTFILTERS (1).
+// We iterate raw records and skip the DBF tombstone byte — that
+// matches IGNOREFILTERS (the default Harbour passes). RESPECT
+// will land alongside AOF-aware copy in a follow-up; until then
+// the param is accepted for signature parity and noted.
+UNSIGNED32 AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
+                                UNSIGNED16 usFilterOption) {
+    (void)usFilterOption;
     Table* src = get_table(hSrc);
     Table* dst = get_table(hDst);
     if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
@@ -4681,7 +4753,11 @@ UNSIGNED32 AdsSetEncryptionPassword(ADSHANDLE hConnect,
     return ok();
 }
 
-UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
+// SAP / rddads signature: 3 args. ulOptions is reserved on the
+// real ACE (must be ADS_DEFAULT); accept and ignore.
+UNSIGNED32 AdsCreateSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName,
+                              UNSIGNED32 ulOptions) {
+    (void)ulOptions;
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
@@ -4709,7 +4785,11 @@ UNSIGNED32 AdsReleaseSavepoint(ADSHANDLE hConnect, UNSIGNED8* pucName) {
     return ok();
 }
 
-UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint) {
+// SAP / rddads signature: 3 args. ulOptions is reserved on real
+// ACE; accept and ignore. Null pucSavepoint => full rollback.
+UNSIGNED32 AdsRollbackTransaction80(ADSHANDLE hConnect, UNSIGNED8* pucSavepoint,
+                                    UNSIGNED32 ulOptions) {
+    (void)ulOptions;
     auto& s = state();
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* c = s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
@@ -9319,12 +9399,28 @@ UNSIGNED32 AdsCopyTableContent(ADSHANDLE, ADSHANDLE)
 UNSIGNED32 AdsCustomizeAOF(ADSHANDLE, UNSIGNED32, UNSIGNED32*, UNSIGNED16)
     { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsEvalAOF(ADSHANDLE, UNSIGNED8*, UNSIGNED32*)
-    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+// SAP / rddads signature: AdsEvalAOF(hTable, pucExpr, *pusOptLevel).
+// Returns the optimisation level (ADS_OPTIMIZED_NONE / PART / FULL)
+// the engine would use to evaluate the filter. Currently a stub —
+// caller's *pusOptLevel is zeroed (= ADS_OPTIMIZED_NONE).
+UNSIGNED32 AdsEvalAOF(ADSHANDLE, UNSIGNED8*, UNSIGNED16* pusOptLevel)
+    { if (pusOptLevel) *pusOptLevel = 0;
+      return openads::AE_SUCCESS; }
 UNSIGNED32 AdsFilterOption(ADSHANDLE, UNSIGNED16, UNSIGNED16* p)
     { if (p) *p = 0; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsGetAOF(ADSHANDLE, UNSIGNED32*, UNSIGNED32* c)
-    { if (c) *c = 0; return openads::AE_SUCCESS; }
+// SAP / rddads signature: AdsGetAOF(hTable, pucFilter, *pusLen).
+// pucFilter is a caller-allocated buffer; pusLen is in/out (capacity
+// in, actual filter length out). We don't track per-table AOF source
+// strings yet (only the evaluated bitmap), so return an empty filter
+// — Harbour's ADSGETAOF treats that as "no AOF" and returns "".
+UNSIGNED32 AdsGetAOF(ADSHANDLE, UNSIGNED8* pucFilter, UNSIGNED16* pusLen)
+    {
+        if (pusLen != nullptr) {
+            if (pucFilter != nullptr && *pusLen > 0) pucFilter[0] = '\0';
+            *pusLen = 0;
+        }
+        return openads::AE_SUCCESS;
+    }
 UNSIGNED32 AdsGetConnectionType(ADSHANDLE, UNSIGNED16* p)
     { if (p) *p = ADS_LOCAL_SERVER; return openads::AE_SUCCESS; }
 UNSIGNED32 AdsGetDateFormat(UNSIGNED8* pucBuf, UNSIGNED16* pusLen) {
@@ -9899,8 +9995,17 @@ UNSIGNED32 AdsGetBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
     *pulLength = 4;
     return ok();
 }
-UNSIGNED32 AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark) {
-    if (pucBookmark == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+// SAP / rddads signature: 3 args. AdsGetBookmark60 returns
+// (pucBookmark + *pulLength); the caller hands that exact length
+// back into AdsGotoBookmark60 to replay the bookmark — needed
+// because real ACE supports variable-length bookmarks (the size
+// depends on the index/order). OpenADS encodes everything as a
+// 4-byte recno today, so any ulLength < 4 is a malformed call.
+UNSIGNED32 AdsGotoBookmark60(ADSHANDLE hObj, UNSIGNED8* pucBookmark,
+                             UNSIGNED32 ulLength) {
+    if (pucBookmark == nullptr || ulLength < 4) {
+        return fail(openads::AE_INTERNAL_ERROR, "");
+    }
     UNSIGNED32 recno = static_cast<UNSIGNED32>(pucBookmark[0])
                      | (static_cast<UNSIGNED32>(pucBookmark[1]) << 8)
                      | (static_cast<UNSIGNED32>(pucBookmark[2]) << 16)
@@ -10015,7 +10120,7 @@ UNSIGNED32 AdsGetAllIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
     { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
 UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
     { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsGetAllTables(ADSHANDLE* /*ah*/, UNSIGNED16* pus)
+UNSIGNED32 AdsGetAllTables(ADSHANDLE /*hConnect*/, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
     { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
 UNSIGNED32 AdsCloneTable(ADSHANDLE, ADSHANDLE* p)
     { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }

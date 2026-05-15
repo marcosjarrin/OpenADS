@@ -5,6 +5,81 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc23 — 2026-05-15
+
+- **Harbour `contrib/rddads` clean-compile sweep.** Reported by
+  Pritpal Bedi after he hit `error: too many arguments to function
+  'AdsSetScope'` building Harbour's unmodified `contrib/rddads/`
+  against OpenADS's `ace.h`. Compiling the whole contrib (not just
+  the rddtst happy path) exposed a family of signatures that the
+  442/442 rddtst harness never reached. End-to-end repro:
+  `HB_WITH_ADS=…/openads/include/openads hbmk2
+  contrib/rddads/rddads.hbp -comp=mingw64` now exits 0.
+
+  Functions brought to SAP-canonical shape (header + ABI export +
+  affected unit tests, plus wire opcode for the one function that
+  round-trips over the network):
+
+  - **`AdsSetScope`** — 3-arg `(hIndex, usScope, pucKey)` →
+    5-arg `(hIndex, usScope, pucScope, usLen, usDataType)`.
+    `SetScope` wire opcode now carries `usDataType`; key length
+    derives from trailing payload size. Export mirrors
+    `AdsSeek`'s `ADS_DOUBLEKEY → ASCII-padded numeric`
+    conversion so a scope set with a `double` compares
+    apples-to-apples against the index's stored key bytes.
+  - **`AdsGetVersion`** — 4-arg with mistyped letter/desc slots
+    (`UNSIGNED32*` x4) → 5-arg
+    `(UNSIGNED32* major, UNSIGNED32* minor, UNSIGNED8* letter,
+    UNSIGNED8* desc, UNSIGNED16* descLen)`. Previous shape would
+    have stomped 3 extra bytes past `&ucLetter` on the caller's
+    stack.
+  - **`AdsCopyTableContents`** — 2-arg → 3-arg with
+    `usFilterOption`. Filter mode currently accepted and
+    documented; `IGNOREFILTERS` is the implemented path.
+  - **`AdsCreateSavepoint` / `AdsRollbackTransaction80`** — 2-arg
+    → 3-arg with reserved `ulOptions` parameter (matches ACE 8.x).
+  - **`AdsGetAOF`** — `(ADSHANDLE, UNSIGNED32*, UNSIGNED32*)`
+    (returned-record-count style) → `(ADSHANDLE,
+    UNSIGNED8* pucFilter, UNSIGNED16* pusLen)`. Returns empty
+    filter for now; full AOF-source-string round-trip lands with
+    M-AOF.4.
+  - **`AdsEvalAOF`** — 3rd arg was `UNSIGNED32* pulRecords`; SAP
+    expects `UNSIGNED16* pusOptLevel` (returns `ADS_OPTIMIZED_*`).
+  - **`AdsSetStringW` / `AdsGetStringW` / `AdsGetFieldW`** — field
+    name was declared `UNSIGNED16*` (wide). SAP keeps field names
+    ASCII (`UNSIGNED8*`) even on the W variants; only the data
+    buffer is wide-char. Helper `resolve_field_index_w` retyped
+    to match; UTF-16 → UTF-8 transcode dropped from the name path
+    (it was only there to compensate for the wrong type).
+  - **`AdsGetString` / `AdsGetLong`** — exports were already
+    implemented but missing from the public header, so Harbour's
+    ANSI-path code in `ads1.c` linked only via
+    `-Wimplicit-function-declaration` warnings. Declarations
+    added.
+  - **`ADS_MAX_PARAMDEF_LEN`** — `#define` is now `#ifndef`-guarded
+    so a Harbour-style pre-define (`#define ADS_MAX_PARAMDEF_LEN
+    2048` before the include) is honoured silently.
+  - **`AdsGotoBookmark60`** — was 2-arg `(hObj, *pucBookmark)`;
+    SAP / real ACE is 3-arg `(hObj, *pucBookmark, ulLength)`.
+    Real ACE supports variable-length bookmarks (size depends on
+    the index/order), so the caller hands the length back from
+    `AdsGetBookmark60`'s `*pulLength` out-param. The 2-arg form
+    was internally inconsistent with the Get half of the same
+    pair. Both unit tests that exercised the round-trip were
+    updated.
+  - **`AdsGetAllTables`** — was 2-arg `(*ahTable, *pusArrayLen)`;
+    needs `ADSHANDLE hConnect` as the first arg. With no
+    connection handle the function can't know whose tables to
+    enumerate in a multi-connection process. (Body remains
+    `AE_FUNCTION_NOT_AVAILABLE` until M-13 implements enumeration.)
+
+  Why rddtst missed all of this: rddtst exercises the RDD via
+  `dbUseArea("ads")` so the cursor walks Harbour's vtable, not
+  the `HB_FUN_ADSVERSION` / `HB_FUN_ADSCREATESAVEPOINT` / etc.
+  PRG-level wrappers in `adsfunc.c`. Compiling the whole contrib
+  is the real header check; we now have it (`C:\harbour-git\
+  contrib\rddads` mingw64 build) and will keep it green.
+
 ## 1.0.0-rc22 — 2026-05-13
 
 - **M12.25 — `AdsCreateTable` stamps the DBF header last-update date.**

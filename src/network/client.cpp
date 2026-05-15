@@ -1032,10 +1032,14 @@ RemoteConnection::skip_unique(std::uint32_t index_id,
 util::Result<void>
 RemoteConnection::set_scope(std::uint32_t index_id,
                              std::uint16_t which,
-                             const std::string& key) {
+                             const std::string& key,
+                             std::uint16_t data_type) {
+    // Payload: u32 index_id | u16 which | u16 data_type | bytes key.
+    // Key length is the trailing byte count (payload.size() - 8).
     Frame req; req.opcode = Opcode::SetScope;
     write_u32_le(index_id, req.payload);
     write_u16_le(which, req.payload);
+    write_u16_le(data_type, req.payload);
     req.payload.insert(req.payload.end(), key.begin(), key.end());
     auto rep = request(req);
     if (!rep) return rep.error();

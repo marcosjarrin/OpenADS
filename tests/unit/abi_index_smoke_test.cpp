@@ -100,8 +100,8 @@ TEST_CASE("ABI index smoke: create NTX, seek, walk in order, scope") {
     // Scope: top = BBBB, bottom = CCCC -> only recno 3 then recno 1.
     UNSIGNED8 stop[8] = "BBBB";
     UNSIGNED8 sbot[8] = "CCCC";
-    REQUIRE(AdsSetScope(hIndex, ADS_TOP,    stop) == 0);
-    REQUIRE(AdsSetScope(hIndex, ADS_BOTTOM, sbot) == 0);
+    REQUIRE(AdsSetScope(hIndex, ADS_TOP,    stop, 4, ADS_STRINGKEY) == 0);
+    REQUIRE(AdsSetScope(hIndex, ADS_BOTTOM, sbot, 4, ADS_STRINGKEY) == 0);
     REQUIRE(AdsGotoTop(hTable) == 0);
     REQUIRE(AdsGetRecordNum(hTable, 0, &recno) == 0);
     CHECK(recno == 3);

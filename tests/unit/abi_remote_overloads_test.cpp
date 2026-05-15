@@ -63,7 +63,7 @@ TEST_CASE("M12.22 versioned overloads over the wire"
         REQUIRE(AdsGetRecordNum(hTable, 0, &rbot) == openads::AE_SUCCESS);
         if (cnt > 1u) CHECK(rbot != rtop);
 
-        REQUIRE(AdsGotoBookmark60(hTable, bm.data()) == openads::AE_SUCCESS);
+        REQUIRE(AdsGotoBookmark60(hTable, bm.data(), bml) == openads::AE_SUCCESS);
         UNSIGNED32 rback = 0;
         REQUIRE(AdsGetRecordNum(hTable, 0, &rback) == openads::AE_SUCCESS);
         CHECK(rback == rtop);

@@ -67,7 +67,7 @@ TEST_CASE("AdsCreateSavepoint + AdsRollbackTransaction80 partial rollback") {
     REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
 
     UNSIGNED8 sp_name[16] = "sp1";
-    REQUIRE(AdsCreateSavepoint(hConn, sp_name) == 0);
+    REQUIRE(AdsCreateSavepoint(hConn, sp_name, ADS_DEFAULT) == 0);
 
     UNSIGNED8 v2[8] = "CCCCC";
     REQUIRE(AdsSetString(hTable, fld, v2, 5) == 0);
@@ -79,7 +79,7 @@ TEST_CASE("AdsCreateSavepoint + AdsRollbackTransaction80 partial rollback") {
     CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "CCCCC");
 
     // Partial rollback to sp1 — second update reverts; first update stays.
-    REQUIRE(AdsRollbackTransaction80(hConn, sp_name) == 0);
+    REQUIRE(AdsRollbackTransaction80(hConn, sp_name, ADS_DEFAULT) == 0);
 
     // Refresh the Table's cached record buffer after the disk rewrite.
     REQUIRE(AdsGotoTop(hTable) == 0);
@@ -128,7 +128,7 @@ TEST_CASE("AdsRollbackTransaction80 with null savepoint = full rollback") {
     UNSIGNED8 v1[8]   = "ZZZZZ";
     REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
 
-    REQUIRE(AdsRollbackTransaction80(hConn, nullptr) == 0);
+    REQUIRE(AdsRollbackTransaction80(hConn, nullptr, ADS_DEFAULT) == 0);
 
     UNSIGNED8 buf[16] = {0};
     UNSIGNED32 cap = sizeof(buf);
@@ -165,7 +165,7 @@ TEST_CASE("M11.3 AdsReleaseSavepoint drops marker, keeps work") {
     REQUIRE(AdsSetString(hTable, fld, v1, 5) == 0);
 
     UNSIGNED8 sp_name[16] = "sp1";
-    REQUIRE(AdsCreateSavepoint(hConn, sp_name) == 0);
+    REQUIRE(AdsCreateSavepoint(hConn, sp_name, ADS_DEFAULT) == 0);
     UNSIGNED8 v2[8] = "CCCCC";
     REQUIRE(AdsSetString(hTable, fld, v2, 5) == 0);
 
@@ -173,7 +173,7 @@ TEST_CASE("M11.3 AdsReleaseSavepoint drops marker, keeps work") {
     REQUIRE(AdsReleaseSavepoint(hConn, sp_name) == 0);
 
     // Rolling back to sp1 now must fail (marker gone).
-    CHECK(AdsRollbackTransaction80(hConn, sp_name) != 0);
+    CHECK(AdsRollbackTransaction80(hConn, sp_name, ADS_DEFAULT) != 0);
 
     REQUIRE(AdsCommitTransaction(hConn) == 0);
     REQUIRE(AdsGotoTop(hTable) == 0);

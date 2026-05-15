@@ -1587,17 +1587,19 @@ void Server::session_loop(Socket s) {
                 break;
             }
             case Opcode::SetScope: {
-                if (f.payload.size() < 6) { reply = err("SetScope: bad payload"); break; }
-                std::uint32_t iid   = read_u32_le(f.payload.data());
-                std::uint16_t which = read_u16_le(f.payload.data() + 4);
-                std::string key(reinterpret_cast<const char*>(
-                                    f.payload.data() + 6),
-                                f.payload.size() - 6);
+                // Payload: u32 index_id | u16 which | u16 data_type | bytes key.
+                if (f.payload.size() < 8) { reply = err("SetScope: bad payload"); break; }
+                std::uint32_t iid    = read_u32_le(f.payload.data());
+                std::uint16_t which  = read_u16_le(f.payload.data() + 4);
+                std::uint16_t dtype  = read_u16_le(f.payload.data() + 6);
+                std::size_t   klen   = f.payload.size() - 8;
                 auto iit = index_h.find(iid);
                 if (iit == index_h.end()) { reply = err("SetScope: bad index id"); break; }
-                std::vector<UNSIGNED8> kb(key.size() + 1);
-                std::memcpy(kb.data(), key.data(), key.size());
-                UNSIGNED32 rrc = AdsSetScope(iit->second, which, kb.data());
+                std::vector<UNSIGNED8> kb(klen + 1);
+                if (klen > 0) std::memcpy(kb.data(), f.payload.data() + 8, klen);
+                UNSIGNED32 rrc = AdsSetScope(
+                    iit->second, which, kb.data(),
+                    static_cast<UNSIGNED16>(klen), dtype);
                 if (rrc != 0) { reply = err("SetScope", rrc); break; }
                 reply.opcode = Opcode::SetScopeAck;
                 break;
