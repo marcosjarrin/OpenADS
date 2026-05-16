@@ -67,6 +67,12 @@ final class AceLibrary
         UNSIGNED32 AdsSetAOF(ADSHANDLE hTable, UNSIGNED8* pucCondition,
             UNSIGNED16 usOptions);
         UNSIGNED32 AdsClearAOF(ADSHANDLE hTable);
+
+        UNSIGNED32 AdsGetIndexHandle(ADSHANDLE hTable, UNSIGNED8* pucName,
+            ADSHANDLE* phIndex);
+        UNSIGNED32 AdsSeek(ADSHANDLE hIndex, UNSIGNED8* pucKey,
+            UNSIGNED16 usKeyLen, UNSIGNED16 usKeyType,
+            UNSIGNED16 usSeekType, UNSIGNED16* pbFound);
         C;
 
     private static ?self $instance = null;

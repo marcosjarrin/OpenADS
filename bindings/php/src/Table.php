@@ -132,6 +132,42 @@ final class Table
         $this->check($this->lib->ffi()->AdsClearAOF($this->handle), 'clear AOF');
     }
 
+    /**
+     * Seek a key on an open index tag. Returns true if an exact
+     * match was found; on a hit the table is positioned on that
+     * record. With $soft = true a near-match positions on the
+     * next key >= $key and the method still reports whether the
+     * match was exact.
+     */
+    public function seek(string $indexTag, string $key, bool $soft = false): bool
+    {
+        $ffi    = $this->lib->ffi();
+        $idxOut = $this->lib->newHandle();
+        $rc = $ffi->AdsGetIndexHandle(
+            $this->handle,
+            Connection::cstr($ffi, $indexTag),
+            FFI::addr($idxOut)
+        );
+        if ($rc !== AceTypes::AE_SUCCESS) {
+            throw $this->fail($rc, "get index handle '$indexTag'");
+        }
+        $hIndex = $this->lib->handleValue($idxOut);
+
+        $found = $ffi->new('UNSIGNED16');
+        $rc = $ffi->AdsSeek(
+            $hIndex,
+            Connection::cstr($ffi, $key),
+            strlen($key),
+            AceTypes::ADS_STRINGKEY,
+            $soft ? AceTypes::ADS_SOFTSEEK : AceTypes::ADS_HARDSEEK,
+            FFI::addr($found)
+        );
+        if ($rc !== AceTypes::AE_SUCCESS) {
+            throw $this->fail($rc, "seek '$key' on index '$indexTag'");
+        }
+        return ((int) $found->cdata) !== 0;
+    }
+
     public function record(): Record
     {
         return new Record($this);
