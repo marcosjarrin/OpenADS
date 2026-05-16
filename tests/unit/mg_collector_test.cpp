@@ -98,3 +98,57 @@ TEST_CASE("MgCollector::config_params echoes live counts") {
     CHECK(p.usNumReceiveECBs  == 0);
     CHECK(p.usNumSendECBs     == 0);
 }
+
+TEST_CASE("MgCollector list accessors map snapshot vectors") {
+    MgSnapshot snap;
+
+    openads::mgmt::MgUser u;
+    u.name = "alice"; u.address = "10.0.0.2:5000";
+    u.os_login = "alice"; u.conn_no = 1;
+    snap.user_list.push_back(u);
+
+    openads::mgmt::MgTable t;
+    t.name = "orders.adt"; t.user = "alice";
+    t.conn_no = 1; t.open_mode = 0; t.lock_type = ADS_MGMT_NO_LOCK;
+    snap.table_list.push_back(t);
+
+    openads::mgmt::MgIndex ix;
+    ix.name = "orders.adi"; ix.tag = "CUSTNO";
+    ix.expression = "CUSTNO";
+    snap.index_list.push_back(ix);
+
+    openads::mgmt::MgLock lk;
+    lk.user = "alice"; lk.conn_no = 1; lk.recno = 42;
+    snap.lock_list.push_back(lk);
+
+    MgStats stats;
+    MgCollector c(snap, stats);
+
+    auto users = c.user_names();
+    REQUIRE(users.size() == 1);
+    CHECK(c_str_of(users[0].aucUserName,
+                   sizeof(users[0].aucUserName)) == "alice");
+    CHECK(users[0].usConnNumber == 1);
+
+    auto tables = c.open_tables();
+    REQUIRE(tables.size() == 1);
+    CHECK(c_str_of(tables[0].aucTableName,
+                   sizeof(tables[0].aucTableName)) == "orders.adt");
+
+    auto idxs = c.open_indexes();
+    REQUIRE(idxs.size() == 1);
+    CHECK(c_str_of(idxs[0].aucTagName,
+                   sizeof(idxs[0].aucTagName)) == "CUSTNO");
+
+    auto lks = c.locks();
+    REQUIRE(lks.size() == 1);
+    CHECK(lks[0].ulRecordNumber == 42);
+
+    ADS_MGMT_LOCK_INFO owner = c.lock_owner(42);
+    CHECK(owner.ulRecordNumber == 42);
+    CHECK(c_str_of(owner.aucUserName,
+                   sizeof(owner.aucUserName)) == "alice");
+
+    ADS_MGMT_LOCK_INFO none = c.lock_owner(999);
+    CHECK(none.ulRecordNumber == 0);
+}

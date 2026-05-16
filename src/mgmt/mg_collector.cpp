@@ -127,4 +127,99 @@ ADS_MGMT_CONFIG_MEMORY MgCollector::config_memory() const {
     return m;
 }
 
+std::vector<ADS_MGMT_USER_INFO> MgCollector::user_names() const {
+    std::vector<ADS_MGMT_USER_INFO> out;
+    out.reserve(snapshot_.user_list.size());
+    for (const auto& u : snapshot_.user_list) {
+        ADS_MGMT_USER_INFO i;
+        std::memset(&i, 0, sizeof(i));
+        put_field(i.aucUserName, sizeof(i.aucUserName), u.name);
+        put_field(i.aucAddress, sizeof(i.aucAddress), u.address);
+        put_field(i.aucOSUserLoginName,
+                  sizeof(i.aucOSUserLoginName), u.os_login);
+        put_field(i.aucAuthUserName,
+                  sizeof(i.aucAuthUserName), u.name);
+        i.usConnNumber = u.conn_no;
+        out.push_back(i);
+    }
+    return out;
+}
+
+std::vector<ADS_MGMT_TABLE_INFO> MgCollector::open_tables() const {
+    std::vector<ADS_MGMT_TABLE_INFO> out;
+    out.reserve(snapshot_.table_list.size());
+    for (const auto& t : snapshot_.table_list) {
+        ADS_MGMT_TABLE_INFO i;
+        std::memset(&i, 0, sizeof(i));
+        put_field(i.aucTableName, sizeof(i.aucTableName), t.name);
+        put_field(i.aucUserName, sizeof(i.aucUserName), t.user);
+        i.usConnNumber = t.conn_no;
+        i.usOpenMode   = t.open_mode;
+        i.usLockType   = t.lock_type;
+        out.push_back(i);
+    }
+    return out;
+}
+
+std::vector<ADS_MGMT_INDEX_INFO> MgCollector::open_indexes() const {
+    std::vector<ADS_MGMT_INDEX_INFO> out;
+    out.reserve(snapshot_.index_list.size());
+    for (const auto& x : snapshot_.index_list) {
+        ADS_MGMT_INDEX_INFO i;
+        std::memset(&i, 0, sizeof(i));
+        put_field(i.aucIndexName, sizeof(i.aucIndexName), x.name);
+        put_field(i.aucTagName, sizeof(i.aucTagName), x.tag);
+        put_field(i.aucExpression, sizeof(i.aucExpression),
+                  x.expression);
+        out.push_back(i);
+    }
+    return out;
+}
+
+std::vector<ADS_MGMT_LOCK_INFO> MgCollector::locks() const {
+    std::vector<ADS_MGMT_LOCK_INFO> out;
+    out.reserve(snapshot_.lock_list.size());
+    for (const auto& l : snapshot_.lock_list) {
+        ADS_MGMT_LOCK_INFO i;
+        std::memset(&i, 0, sizeof(i));
+        put_field(i.aucUserName, sizeof(i.aucUserName), l.user);
+        i.usConnNumber   = l.conn_no;
+        i.ulRecordNumber = l.recno;
+        out.push_back(i);
+    }
+    return out;
+}
+
+std::vector<ADS_MGMT_THREAD_ACTIVITY>
+MgCollector::worker_thread_activity() const {
+    std::vector<ADS_MGMT_THREAD_ACTIVITY> out;
+    out.reserve(snapshot_.thread_list.size());
+    for (const auto& t : snapshot_.thread_list) {
+        ADS_MGMT_THREAD_ACTIVITY i;
+        std::memset(&i, 0, sizeof(i));
+        i.ulThreadNumber = t.thread_no;
+        i.usOpCode       = t.opcode;
+        i.usConnNumber   = t.conn_no;
+        put_field(i.aucUserName, sizeof(i.aucUserName), t.user);
+        put_field(i.aucOSUserLoginName,
+                  sizeof(i.aucOSUserLoginName), t.os_login);
+        out.push_back(i);
+    }
+    return out;
+}
+
+ADS_MGMT_LOCK_INFO MgCollector::lock_owner(std::uint32_t recno) const {
+    ADS_MGMT_LOCK_INFO i;
+    std::memset(&i, 0, sizeof(i));
+    for (const auto& l : snapshot_.lock_list) {
+        if (l.recno == recno) {
+            put_field(i.aucUserName, sizeof(i.aucUserName), l.user);
+            i.usConnNumber   = l.conn_no;
+            i.ulRecordNumber = l.recno;
+            break;
+        }
+    }
+    return i;
+}
+
 }  // namespace openads::mgmt
