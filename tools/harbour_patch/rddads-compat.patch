@@ -107,10 +107,9 @@ diff --git a/contrib/rddads/rddads.h b/contrib/rddads/rddads.h
 index 001f393364..e1894d2074 100644
 --- a/contrib/rddads/rddads.h
 +++ b/contrib/rddads/rddads.h
-@@ -67,6 +67,22 @@
- 
+@@ -67,6 +67,31 @@
+
  #include "ace.h"
- 
 +/* M(rddads-compat) shim: SAP / older Harbour rddads expected a
 +   ADSFIELD( n ) helper that yields the n-th field's name in the
 +   CURRENT workarea as UNSIGNED8*. This Harbour build's sources
@@ -127,6 +126,16 @@ index 001f393364..e1894d2074 100644
 +        ( PHB_DYNS ) pCurArea->lpFields[ n - 1 ].sym );
 +}
 +
++/* M(rddads-compat): Harbour's adsfunc.c re-#defines
++   ADS_MAX_PARAMDEF_LEN to 2048 *after* including this header,
++   colliding with ace.h's #ifndef-guarded 256 default and tripping
++   -Wmacro-redefined. Pre-define the 2048 ceiling here so ace.h's
++   guard is satisfied and adsfunc.c's later #define becomes an
++   identical, warning-free redefine. */
++#undef  ADS_MAX_PARAMDEF_LEN
++#define ADS_MAX_PARAMDEF_LEN 2048
++
  /* Auto-detect ACE version. */
  #if   defined( ADS_ROOT_DD_ALIAS )
     #define _ADS_LIB_VERSION  1110 /* or upper */
+

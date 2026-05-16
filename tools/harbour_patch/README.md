@@ -32,6 +32,13 @@ the workarea via `hb_rddGetCurrentWorkAreaPointer()` and reads the
 field's symbol name through `hb_dynsymName`. (Without this patch
 `AdsGetMemoDataType()` and ~30 other `HB_FUNC` wrappers fail to link.)
 
+Also pre-defines `ADS_MAX_PARAMDEF_LEN` to `2048`. Harbour's
+`adsfunc.c` re-`#define`s this constant to `2048` *after* it includes
+`rddads.h`, which collides with `ace.h`'s `#ifndef`-guarded `256`
+default and trips `-Wmacro-redefined`. Pre-defining the `2048` ceiling
+here satisfies `ace.h`'s guard, so `adsfunc.c`'s later `#define`
+becomes an identical, warning-free redefine.
+
 ### `contrib/rddads/ads1.c`
 
 Aligns the not-positioned `hb_adsSkip()` branch with `dbf1.c`'s
