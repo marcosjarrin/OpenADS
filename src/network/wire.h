@@ -148,6 +148,13 @@ enum class Opcode : std::uint8_t {
     // (year << 16) | (month << 8) | day.
     GetLastTableUpdate    = 0x9E,
     GetLastTableUpdateAck = 0x9F,
+
+    // M9.25 — management telemetry channel.
+    MgConnect          = 0xA0,
+    MgConnectAck       = 0xA1,
+    MgRequest          = 0xA2,
+    MgReplyAck         = 0xA3,
+
     Error              = 0xFF,
 };
 
