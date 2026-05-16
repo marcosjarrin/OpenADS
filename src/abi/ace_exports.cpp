@@ -9968,18 +9968,25 @@ UNSIGNED32 AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
     while (!srv.empty() && (srv.back() == '\\' || srv.back() == '/'))
         srv.pop_back();
 
-    if (srv.empty() || srv == "local" || srv == "LOCAL") {
-        be.remote = false;
-    } else {
-        be.remote = true;
-        auto colon = srv.find(':');
-        if (colon == std::string::npos) {
-            be.host = srv;
-            be.port = 16262;
-        } else {
-            be.host = srv.substr(0, colon);
-            be.port = static_cast<std::uint16_t>(
-                std::strtoul(srv.c_str() + colon + 1, nullptr, 10));
+    // Decide local vs. remote. A string is a REMOTE target only when
+    // it is "host:port" with a non-empty, all-digit port. Everything
+    // else — empty, "local", a drive path like "C:" or "C:\data",
+    // a bare name — is a local-mode backend. (rddads' manage.prg
+    // passes "C:" for local management; that must not be mistaken
+    // for a host named "C".)
+    be.remote = false;
+    auto colon = srv.rfind(':');
+    if (colon != std::string::npos && colon > 0 &&
+        colon + 1 < srv.size()) {
+        std::string portstr = srv.substr(colon + 1);
+        bool all_digits = !portstr.empty();
+        for (char ch : portstr)
+            if (ch < '0' || ch > '9') { all_digits = false; break; }
+        if (all_digits) {
+            be.remote = true;
+            be.host   = srv.substr(0, colon);
+            be.port   = static_cast<std::uint16_t>(
+                std::strtoul(portstr.c_str(), nullptr, 10));
         }
     }
 

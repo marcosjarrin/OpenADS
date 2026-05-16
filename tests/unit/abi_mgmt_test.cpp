@@ -36,6 +36,21 @@ TEST_CASE("M9.25 AdsMgConnect (local) produces a real mgmt handle") {
     REQUIRE(AdsMgDisconnect(h) == 0);
 }
 
+TEST_CASE("M9.25 AdsMgConnect treats a drive path as local") {
+    // rddads' manage.prg passes "C:" — a drive path, NOT a host. It
+    // must resolve to a local-mode handle, not a remote host named C.
+    UNSIGNED8 srv[8] = "C:";
+    UNSIGNED8 usr[2] = "u";
+    UNSIGNED8 pwd[2] = "p";
+    ADSHANDLE h = 0;
+    REQUIRE(AdsMgConnect(srv, usr, pwd, &h) == 0);
+    CHECK(h != 0);
+    UNSIGNED16 t = 99;
+    REQUIRE(AdsMgGetServerType(h, &t) == 0);
+    CHECK(t == 0);   // 0 = local
+    REQUIRE(AdsMgDisconnect(h) == 0);
+}
+
 TEST_CASE("M9.25 AdsMgGetServerType reports 0 (local) for a local handle") {
     UNSIGNED8 srv[8] = "local";
     UNSIGNED8 usr[2] = "u";
