@@ -50,6 +50,7 @@ add_library(openads_core STATIC
     network/wire.cpp
     network/server.cpp
     network/client.cpp
+    mgmt/mg_collector.cpp
 )
 
 if(WIN32)
