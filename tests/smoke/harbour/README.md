@@ -420,3 +420,19 @@ run_build.bat
 2. Puts `c:\harbour\bin\win\msvc64` and the OpenADS Release output on
    PATH so `hbmk2` and `ace64.dll` are found.
 3. Invokes `hbmk2 -comp=msvc64 -lrddads -L<openads-out> -lace64`.
+
+## AdsMg* telemetry (M9.25)
+
+Build `contrib/rddads/tests/manage.prg`, then run it against a live
+`openads_serverd`:
+
+    manage
+
+Expected: with at least one other client connected, the report shows
+non-zero `Connections` / `WorkAreas` / `Tables` counters and a
+non-zero `Up Time`, instead of the all-zero output the earlier stub
+produced. `AdsVersion( 3 )` continues to report the OpenADS engine
+string. The `AdsMg*` management functions (`AdsMgGetActivityInfo`,
+`AdsMgGetInstallInfo`, `AdsMgGetCommStats`, `AdsMgGetConfigInfo`,
+`AdsMgGetUserNames`, ...) are now backed by the real `MgCollector`
+telemetry subsystem rather than zero-fill stubs.
