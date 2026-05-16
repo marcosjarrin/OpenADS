@@ -91,6 +91,33 @@ TEST_CASE("index_expr: bare field name returns padded raw bytes") {
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("index_expr: alias-qualified field name resolves to the field") {
+    // Harbour `INDEX ON CUST->NAME` passes the key expression to the
+    // RDD as the literal text "CUST->NAME". The `->` alias qualifier
+    // must resolve to the field — an index built from it had every
+    // key blank (recno-order index, failed SEEK).
+    auto dir = fs::temp_directory_path() / "openads_idx_expr_alias";
+    auto p = stage_dbf(dir);
+    {
+    auto tbl = open_table(p);
+
+    auto bare  = evaluate_index_expr(tbl, "NAME", 10);
+    auto alias = evaluate_index_expr(tbl, "CUST->NAME", 10);
+    REQUIRE(bare.has_value());
+    REQUIRE(alias.has_value());
+    CHECK(alias.value() == bare.value());
+
+    // also nested inside a function call
+    auto ubare  = evaluate_index_expr(tbl, "UPPER(NAME)", 10);
+    auto ualias = evaluate_index_expr(tbl, "UPPER(CUST->NAME)", 10);
+    REQUIRE(ubare.has_value());
+    REQUIRE(ualias.has_value());
+    CHECK(ualias.value() == ubare.value());
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("index_expr: UPPER + LOWER on string fields") {
     auto dir = fs::temp_directory_path() / "openads_idx_expr2";
     auto p = stage_dbf(dir);

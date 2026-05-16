@@ -71,6 +71,46 @@ std::vector<Token> tokenize(const std::string& s) {
     return out;
 }
 
+// Harbour key / FOR expressions arrive with the workarea alias still
+// attached — `INDEX ON CUST->NAME` reaches the RDD as the literal
+// text "CUST->NAME". An index belongs to exactly one table, so an
+// `ALIAS->FIELD` qualifier always denotes a field of that table;
+// drop the `ALIAS->` so the rest of the evaluator sees a plain field
+// reference. (The tokenizer otherwise discards `-` and `>` as stray
+// punctuation, leaving the alias to parse as an unknown identifier —
+// every key then evaluates blank and the index degenerates to
+// record order.) Works inside calls too: UPPER(CUST->NAME).
+std::string strip_alias_qualifiers(const std::string& expr) {
+    std::string out;
+    std::size_t i = 0;
+    while (i < expr.size()) {
+        unsigned char c = static_cast<unsigned char>(expr[i]);
+        if (std::isalpha(c) || c == '_') {
+            std::size_t j = i;
+            while (j < expr.size() &&
+                   (std::isalnum(static_cast<unsigned char>(expr[j])) ||
+                    expr[j] == '_')) {
+                ++j;
+            }
+            std::size_t k = j;
+            while (k < expr.size() &&
+                   std::isspace(static_cast<unsigned char>(expr[k]))) {
+                ++k;
+            }
+            if (k + 1 < expr.size() && expr[k] == '-' && expr[k + 1] == '>') {
+                i = k + 2;          // discard `<ident> ->`
+                continue;
+            }
+            out.append(expr, i, j - i);
+            i = j;
+            continue;
+        }
+        out.push_back(expr[i]);
+        ++i;
+    }
+    return out;
+}
+
 // ---- AST + evaluator ------------------------------------------------
 
 struct Value {
@@ -367,18 +407,19 @@ private:
 
 util::Result<std::string>
 evaluate_index_expr(Table& t, const std::string& expr, std::uint16_t key_len) {
-    if (expr.empty()) return std::string(key_len, ' ');
+    const std::string e = strip_alias_qualifiers(expr);
+    if (e.empty()) return std::string(key_len, ' ');
 
     // Fast-path: bare field-name expression (matches the M8.8 behaviour
     // exactly so existing CDX files round-trip identical bytes).
-    if (std::all_of(expr.begin(), expr.end(),
+    if (std::all_of(e.begin(), e.end(),
             [](char c) {
                 return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
             })) {
         // Only treat as bare-field when the identifier resolves to a
         // real column; otherwise fall through to the general parser.
-        if (t.field_index(expr) >= 0) {
-            std::int32_t fidx = t.field_index(expr);
+        if (t.field_index(e) >= 0) {
+            std::int32_t fidx = t.field_index(e);
             const auto& f = t.field_descriptor(static_cast<std::uint16_t>(fidx));
             auto r = t.read_field(static_cast<std::uint16_t>(fidx));
             if (!r) return r.error();
@@ -390,7 +431,7 @@ evaluate_index_expr(Table& t, const std::string& expr, std::uint16_t key_len) {
         }
     }
 
-    auto toks = tokenize(expr);
+    auto toks = tokenize(e);
     Parser p(toks, t);
     Value v = p.parse_expr();
     std::string s = v.s;
@@ -620,8 +661,9 @@ bool eval_or(Lex& lx, Table& t) {
 } // anonymous namespace
 
 bool evaluate_index_expr_truthy(Table& t, const std::string& expr) {
-    if (expr.empty()) return true;
-    Lex lx(expr);
+    const std::string e = strip_alias_qualifiers(expr);
+    if (e.empty()) return true;
+    Lex lx(e);
     return eval_or(lx, t);
 }
 
