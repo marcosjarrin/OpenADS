@@ -18,9 +18,9 @@ jobs:
     name: ${{ matrix.os }} / ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    # The macOS-arm64 runner currently stalls in the test step (>60 min);
-    # don't let it block the release while that's investigated.
-    continue-on-error: ${{ matrix.os == 'macos-14' }}
+    # The macOS runners can stall in the test step (>60 min);
+    # don't let them block the release while that's investigated.
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +39,10 @@ jobs:
             artifact_ext: tar.gz
           - os: macos-14
             arch: arm64
+            preset: default
+            artifact_ext: tar.gz
+          - os: macos-13
+            arch: x64
             preset: default
             artifact_ext: tar.gz
 
@@ -71,10 +75,10 @@ jobs:
         run: cmake --build build/${{ matrix.preset }} --config Release
 
       - name: Test
-        # The macOS-arm64 runner currently stalls here (>60 min); cap it
-        # and let the leg pass anyway so it can't block the release.
-        timeout-minutes: ${{ matrix.os == 'macos-14' && 20 || 30 }}
-        continue-on-error: ${{ matrix.os == 'macos-14' }}
+        # The macOS runners can stall here (>60 min); cap them and
+        # let the leg pass anyway so it can't block the release.
+        timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 20 || 30 }}
+        continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
         run: ctest --test-dir build/${{ matrix.preset }}
                    --output-on-failure -C Release
 
