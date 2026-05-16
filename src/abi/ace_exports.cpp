@@ -17,6 +17,11 @@
 #if defined(OPENADS_WITH_TLS)
 #include "network/tls_transport.h"
 #endif
+#include "network/mg_wire.h"
+#include "network/server.h"
+#include "network/socket.h"
+#include "mgmt/mg_collector.h"
+#include "mgmt/mg_stats.h"
 #include "session/connection.h"
 #include "session/handle_registry.h"
 #include "drivers/dbf_common.h"
@@ -9766,6 +9771,75 @@ UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED
     { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsWriteAllRecords(void) { return openads::AE_SUCCESS; }
+
+// This file is largely one big `extern "C"` block; the mgmt helpers
+// below return std::string / Result<> / a small struct, so they need
+// C++ linkage.
+extern "C++" {
+namespace {
+
+// A management handle resolves to one of these. Local collects an
+// in-process snapshot; Remote ships a MgRequest to the server.
+struct MgBackend {
+    bool          remote = false;
+    std::string   host;       // remote only
+    std::uint16_t port = 0;   // remote only
+};
+
+// Registry of open mgmt handles. ADSHANDLE values for mgmt start at a
+// high base so they never collide with table / connection handles.
+std::mutex                               g_mg_mu;
+std::unordered_map<ADSHANDLE, MgBackend> g_mg_handles;
+ADSHANDLE                                g_mg_next = 0x4D670001;  // 'Mg'
+
+// Builds a MgSnapshot for whichever backend the handle names.
+openads::util::Result<openads::mgmt::MgSnapshot>
+fetch_mg_snapshot(const MgBackend& be) {
+    using openads::util::Error;
+    if (!be.remote) {
+        // Local mode: report this process. One connection (this one),
+        // no server-side session registry to enumerate.
+        openads::mgmt::MgSnapshot snap;
+        snap.connections = 1;
+        snap.users       = 1;
+        snap.server_type = 0;   // 0 = local
+        openads::mgmt::MgUser u;
+        u.name    = "(local)";
+        u.conn_no = 1;
+        snap.user_list.push_back(u);
+        return snap;
+    }
+    // Remote mode: open a socket, ship one MgRequest, read the reply.
+    openads::network::network_init();
+    auto sock = openads::network::connect_tcp(be.host, be.port);
+    if (!sock.has_value())
+        return Error{1, 0, "mg connect failed", ""};
+    openads::network::Socket s = sock.value();
+
+    openads::network::Frame req;
+    req.opcode = openads::network::Opcode::MgRequest;
+    std::string body = openads::network::encode_mg_request(
+        openads::network::MgRequestKind::Snapshot, 0);
+    req.payload.assign(body.begin(), body.end());
+
+    auto wr = openads::network::write_frame(s, req);
+    if (!wr.has_value()) {
+        openads::network::sock_close(s);
+        return Error{1, 0, "mg request send failed", ""};
+    }
+    auto reply = openads::network::read_frame(s);
+    openads::network::sock_close(s);
+    if (!reply.has_value())
+        return Error{1, 0, "mg reply read failed", ""};
+    if (reply.value().opcode != openads::network::Opcode::MgReplyAck)
+        return Error{1, 0, "mg request rejected", ""};
+    std::string payload(reply.value().payload.begin(),
+                         reply.value().payload.end());
+    return openads::network::decode_mg_snapshot(payload);
+}
+
+}  // namespace
+}  // extern "C++"
 
 // AdsMg* stubs are implemented elsewhere. Kept tests/unit/abi_mgmt_test.cpp's
 // existing pattern: zero-fill caller's buffer, return AE_SUCCESS so apps
