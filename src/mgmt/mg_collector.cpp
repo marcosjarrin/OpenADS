@@ -55,4 +55,38 @@ ADS_MGMT_INSTALL_INFO MgCollector::install_info() const {
     return info;
 }
 
+ADS_MGMT_ACTIVITY_INFO MgCollector::activity_info() const {
+    ADS_MGMT_ACTIVITY_INFO a;
+    std::memset(&a, 0, sizeof(a));
+
+    a.ulOperations   = static_cast<UNSIGNED32>(operations_);
+    a.ulLoggedErrors = static_cast<UNSIGNED32>(logged_errors_);
+
+    long long up = uptime_seconds_;
+    a.stUpTime.usDays    = static_cast<UNSIGNED16>(up / 86400);
+    a.stUpTime.usHours   = static_cast<UNSIGNED16>((up % 86400) / 3600);
+    a.stUpTime.usMinutes = static_cast<UNSIGNED16>((up % 3600) / 60);
+    a.stUpTime.usSeconds = static_cast<UNSIGNED16>(up % 60);
+
+    auto usage = [](UNSIGNED32 in_use, UNSIGNED32 max_used) {
+        ADS_MGMT_USAGE_STRUCT u;
+        u.ulInUse   = in_use;
+        u.ulMaxUsed = max_used < in_use ? in_use : max_used;
+        u.ulRejected = 0;
+        return u;
+    };
+
+    UNSIGNED32 nusers = static_cast<UNSIGNED32>(snapshot_.user_list.size());
+    a.stUsers        = usage(nusers, max_users_);
+    a.stConnections  = usage(snapshot_.connections, max_connections_);
+    a.stWorkAreas    = usage(snapshot_.workareas, max_workareas_);
+    a.stTables       = usage(snapshot_.tables, max_tables_);
+    a.stIndexes      = usage(snapshot_.indexes, max_indexes_);
+    a.stLocks        = usage(snapshot_.locks, max_locks_);
+    a.stWorkerThreads = usage(snapshot_.worker_threads, 0);
+    // TPS* elem usage left zero — transaction-processing internals are
+    // not exposed.
+    return a;
+}
+
 }  // namespace openads::mgmt
