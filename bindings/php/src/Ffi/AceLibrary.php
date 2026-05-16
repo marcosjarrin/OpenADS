@@ -132,6 +132,8 @@ final class AceLibrary
         $len->cdata = 256;
         $buf  = $this->ffi->new('UNSIGNED8[256]');
         $this->ffi->AdsGetLastError(FFI::addr($code), $buf, FFI::addr($len));
-        return [(int) $code->cdata, FFI::string($buf)];
+        // FFI::string() requires a char* pointer, not an array CData — cast via addr of first element.
+        $ptr  = FFI::cast('char*', FFI::addr($buf[0]));
+        return [(int) $code->cdata, FFI::string($ptr)];
     }
 }
