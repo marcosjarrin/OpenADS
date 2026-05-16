@@ -100,6 +100,34 @@ TEST_CASE("Table navigates top / skip / bottom and tracks BOF/EOF") {
     fs::remove(p);
 }
 
+TEST_CASE("Table::read_field at EOF/BOF reports AE_NO_CURRENT_RECORD") {
+    // ACE-conformant callers (Harbour rddads' adsGetValue) special-case
+    // AE_NO_CURRENT_RECORD (5026) as the graceful "read past the last
+    // record" path — every other code is raised as a hard error
+    // (the ADSCDX/5000 TBrowse failure). read_field at a non-positioned
+    // cursor must therefore report 5026, not the generic 5000.
+    auto p = make_fixture("table_nocurrec");
+    {
+        auto opened = Table::open(p.string(), TableType::Cdx);
+        REQUIRE(opened.has_value());
+        Table t = std::move(opened).value();
+
+        REQUIRE(t.goto_top().has_value());
+        REQUIRE(t.skip(99).has_value());
+        REQUIRE(t.eof());
+        auto at_eof = t.read_field(0);
+        REQUIRE_FALSE(at_eof.has_value());
+        CHECK(at_eof.error().code == 5026);
+
+        REQUIRE(t.skip(-99).has_value());
+        REQUIRE(t.bof());
+        auto at_bof = t.read_field(0);
+        REQUIRE_FALSE(at_bof.has_value());
+        CHECK(at_bof.error().code == 5026);
+    }
+    fs::remove(p);
+}
+
 TEST_CASE("Table reads field values by index") {
     auto p = make_fixture("table_field");
     {

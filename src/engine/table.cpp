@@ -143,7 +143,7 @@ util::Result<void> Table::sync_all_indexes_(
 
 util::Result<void> Table::writeback_record_() {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (tx_ && tx_->active()) {
         auto cur = driver_->read_record_raw(recno_);
@@ -475,7 +475,13 @@ util::Result<void> Table::skip(std::int32_t delta) {
 util::Result<drivers::DbfFieldValue>
 Table::read_field(std::uint16_t field_index) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "table not positioned on a record", ""};
+        // 5026 = AE_NO_CURRENT_RECORD. ACE-conformant callers (Harbour
+        // rddads' adsGetValue) special-case this exact code as the
+        // graceful "read past the last record" path and substitute a
+        // blank value; any other code is raised as a hard error — the
+        // ADSCDX/5000 failure TBrowse hits when it paints an EOF row.
+        return util::Error{5026, 0, "table not positioned on a record",
+                           ""};
     }
     if (field_index >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -546,7 +552,7 @@ util::Result<void> Table::append_record() {
 
 util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -584,7 +590,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, const std::string& v) {
 
 util::Result<void> Table::set_field(std::uint16_t idx, double v) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -600,7 +606,7 @@ util::Result<void> Table::set_field(std::uint16_t idx, double v) {
 
 util::Result<void> Table::set_field(std::uint16_t idx, bool v) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -618,7 +624,7 @@ util::Result<void>
 Table::set_field_binary(std::uint16_t idx, const std::string& payload,
                         drivers::MemoBlockType type) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -648,7 +654,7 @@ Table::set_field_binary(std::uint16_t idx, const std::string& payload,
 util::Result<drivers::MemoBlockType>
 Table::field_memo_type(std::uint16_t idx) {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     if (idx >= driver_->fields().size()) {
         return util::Error{5063, 0, "field index out of range", ""};
@@ -674,7 +680,7 @@ Table::field_memo_type(std::uint16_t idx) {
 
 util::Result<void> Table::mark_deleted() {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     drivers::set_record_deleted(record_buf_.data(), record_buf_.size(), true);
     return writeback_record_();
@@ -682,7 +688,7 @@ util::Result<void> Table::mark_deleted() {
 
 util::Result<void> Table::recall_deleted() {
     if (state_ != State::Positioned) {
-        return util::Error{5000, 0, "no record positioned", ""};
+        return util::Error{5026, 0, "no record positioned", ""};
     }
     drivers::set_record_deleted(record_buf_.data(), record_buf_.size(), false);
     return writeback_record_();
