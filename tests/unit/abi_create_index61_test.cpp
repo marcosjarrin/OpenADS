@@ -163,13 +163,13 @@ TEST_CASE("M9.7 AdsCreateIndex61 supports compound expressions (UPPER)") {
 }
 
 TEST_CASE("M12.23 AdsCreateIndex61 option bits: ADS_COMPOUND is not ADS_DESCENDING") {
-    // X#'s ADSRDD always passes ADS_COMPOUND (2) when creating a CDX
-    // order. That bit must be ignored, not treated as ADS_DESCENDING
-    // (8) — otherwise every X# order is built descending and DbGoTop
-    // lands on the last key. Fixture records: BBBB(1), AAAA(2), CCCC(3).
-    constexpr UNSIGNED32 ADS_COMPOUND_   = 2;
-    constexpr UNSIGNED32 ADS_DESCENDING_ = 8;
-
+    // X#'s ADSRDD always passes ADS_COMPOUND when creating a CDX
+    // order. That bit must be ignored, not treated as ADS_DESCENDING —
+    // otherwise every X# order is built descending and DbGoTop lands
+    // on the last key. The real option-bit values come straight from
+    // include/openads/ace.h (ADS_DESCENDING 0x02, ADS_COMPOUND 0x08) —
+    // do NOT hand-redefine them, that is exactly how this bug shipped.
+    // Fixture records: BBBB(1), AAAA(2), CCCC(3).
     auto dir = fs::temp_directory_path() / "openads_m1223_ci_opts";
     std::error_code ec;
 
@@ -198,8 +198,8 @@ TEST_CASE("M12.23 AdsCreateIndex61 option bits: ADS_COMPOUND is not ADS_DESCENDI
         REQUIRE(AdsDisconnect(hConn) == 0);
     };
 
-    run(ADS_COMPOUND_, 2u);                       // ascending → AAAA (rec 2)
-    run(ADS_COMPOUND_ | ADS_DESCENDING_, 3u);     // descending → CCCC (rec 3)
-    run(ADS_DESCENDING_, 3u);                     // descending → CCCC (rec 3)
+    run(ADS_COMPOUND, 2u);                        // ascending → AAAA (rec 2)
+    run(ADS_COMPOUND | ADS_DESCENDING, 3u);       // descending → CCCC (rec 3)
+    run(ADS_DESCENDING, 3u);                      // descending → CCCC (rec 3)
     fs::remove_all(dir, ec);
 }

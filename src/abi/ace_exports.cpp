@@ -2743,14 +2743,17 @@ UNSIGNED32 AdsCreateIndex61(ADSHANDLE   hTable,
     if (!p.has_extension()) p.replace_extension(".cdx");
     bool is_cdx = path_ends_with_ci(p.string(), ".cdx");
 
-    // ACE AdsCreateIndex* option bits: ADS_UNIQUE=1, ADS_COMPOUND=2,
-    // ADS_CUSTOM=4, ADS_DESCENDING=8. ADS_COMPOUND is redundant here
-    // (compound-ness comes from the .cdx extension), so it's ignored —
-    // it must NOT be misread as "descending", or X#'s ADSRDD (which
-    // always sets ADS_COMPOUND for CDX) would build every order
-    // descending and AdsGotoTop would land on the last key.
-    bool unique  = (ulOptions & 0x01u) != 0;
-    bool descend = (ulOptions & 0x08u) != 0;
+    // ACE AdsCreateIndex* option bits (include/openads/ace.h):
+    //   ADS_UNIQUE 0x01  ADS_DESCENDING 0x02  ADS_CUSTOM 0x04
+    //   ADS_COMPOUND 0x08
+    // ADS_COMPOUND is redundant here (compound-ness comes from the
+    // .cdx extension) and MUST be ignored for direction — rddads and
+    // X#'s ADSRDD set it for every CDX/NTX tag. Reading it as
+    // "descending" (the old `& 0x08` bug) built every order
+    // descending: AdsGotoTop landed on the last key and SKIP walked
+    // backward. Direction comes only from ADS_DESCENDING (0x02).
+    bool unique  = (ulOptions & ADS_UNIQUE) != 0;
+    bool descend = (ulOptions & ADS_DESCENDING) != 0;
 
     // Determine key length by evaluating the expression against the
     // first live record. Empty tables get a 32-char default.
