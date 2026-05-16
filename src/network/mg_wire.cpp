@@ -32,16 +32,17 @@ struct Reader {
 
     std::uint16_t u16() {
         if (pos + 2 > b.size()) { ok = false; return 0; }
-        std::uint16_t v = static_cast<std::uint8_t>(b[pos]) |
-                          (static_cast<std::uint16_t>(
-                               static_cast<std::uint8_t>(b[pos + 1])) << 8);
+        std::uint16_t v = static_cast<std::uint16_t>(
+            static_cast<std::uint8_t>(b[pos]) |
+            (static_cast<std::uint16_t>(
+                 static_cast<std::uint8_t>(b[pos + 1])) << 8));
         pos += 2;
         return v;
     }
     std::uint32_t u32() {
         if (pos + 4 > b.size()) { ok = false; return 0; }
         std::uint32_t v = 0;
-        for (int i = 0; i < 4; ++i)
+        for (std::size_t i = 0; i < 4; ++i)
             v |= static_cast<std::uint32_t>(
                      static_cast<std::uint8_t>(b[pos + i])) << (8 * i);
         pos += 4;
@@ -50,7 +51,7 @@ struct Reader {
     std::uint64_t u64() {
         if (pos + 8 > b.size()) { ok = false; return 0; }
         std::uint64_t v = 0;
-        for (int i = 0; i < 8; ++i)
+        for (std::size_t i = 0; i < 8; ++i)
             v |= static_cast<std::uint64_t>(
                      static_cast<std::uint8_t>(b[pos + i])) << (8 * i);
         pos += 8;
@@ -91,9 +92,10 @@ util::Result<MgRequest> decode_mg_request(const std::string& payload) {
     MgRequest req;
     req.kind = static_cast<MgRequestKind>(
         static_cast<std::uint8_t>(payload[0]));
-    req.arg = static_cast<std::uint8_t>(payload[1]) |
-              (static_cast<std::uint16_t>(
-                   static_cast<std::uint8_t>(payload[2])) << 8);
+    req.arg = static_cast<std::uint16_t>(
+        static_cast<std::uint8_t>(payload[1]) |
+        (static_cast<std::uint16_t>(
+             static_cast<std::uint8_t>(payload[2])) << 8));
     return req;
 }
 
