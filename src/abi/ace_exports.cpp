@@ -9844,9 +9844,51 @@ fetch_mg_snapshot(const MgBackend& be) {
 // AdsMg* stubs are implemented elsewhere. Kept tests/unit/abi_mgmt_test.cpp's
 // existing pattern: zero-fill caller's buffer, return AE_SUCCESS so apps
 // proceed without special-casing local-mode mgmt absence.
-UNSIGNED32 AdsMgConnect(UNSIGNED8*, UNSIGNED8*, UNSIGNED8*, ADSHANDLE* p)
-    { if (p) *p = 1; return openads::AE_SUCCESS; }
-UNSIGNED32 AdsMgDisconnect(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
+
+// AdsMgConnect — pucServer selects local vs. remote. An empty or
+// "local" server string yields a local-process backend; anything of
+// the form "host" or "host:port" yields a remote backend (default
+// port 16262, the OpenADS server port).
+UNSIGNED32 AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* /*pucUser*/,
+                        UNSIGNED8* /*pucPwd*/, ADSHANDLE* phMgmt) {
+    if (phMgmt == nullptr) return openads::AE_INTERNAL_ERROR;
+
+    MgBackend be;
+    std::string srv = pucServer
+        ? reinterpret_cast<const char*>(pucServer) : "";
+    // Strip leading / trailing UNC slashes ("\\\\host\\").
+    while (!srv.empty() && (srv.front() == '\\' || srv.front() == '/'))
+        srv.erase(srv.begin());
+    while (!srv.empty() && (srv.back() == '\\' || srv.back() == '/'))
+        srv.pop_back();
+
+    if (srv.empty() || srv == "local" || srv == "LOCAL") {
+        be.remote = false;
+    } else {
+        be.remote = true;
+        auto colon = srv.find(':');
+        if (colon == std::string::npos) {
+            be.host = srv;
+            be.port = 16262;
+        } else {
+            be.host = srv.substr(0, colon);
+            be.port = static_cast<std::uint16_t>(
+                std::strtoul(srv.c_str() + colon + 1, nullptr, 10));
+        }
+    }
+
+    std::lock_guard<std::mutex> g(g_mg_mu);
+    ADSHANDLE h = g_mg_next++;
+    g_mg_handles.emplace(h, std::move(be));
+    *phMgmt = h;
+    return openads::AE_SUCCESS;
+}
+
+UNSIGNED32 AdsMgDisconnect(ADSHANDLE hMgmt) {
+    std::lock_guard<std::mutex> g(g_mg_mu);
+    g_mg_handles.erase(hMgmt);
+    return openads::AE_SUCCESS;
+}
 static inline void mg_zero_(void* p, UNSIGNED16* l) {
     if (p && l && *l > 0) std::memset(p, 0, *l);
 }
