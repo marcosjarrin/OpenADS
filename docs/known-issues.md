@@ -6,7 +6,7 @@ nav_order: 9
 
 # Known issues — current
 
-Status as of **v1.0.0-rc25** (2026-05-16). The historical M3-era
+Status as of **v1.0.0-rc26** (2026-05-16). The historical M3-era
 compat-breaking CDX / NTX list that lived here is closed and now
 only survives in `git log`.
 
@@ -59,7 +59,7 @@ stunnel / SSH tunnel — see [TLS deployment](en/tls-deployment/)
 for the recipes. A dedicated `OPENADS_WITH_OPENSSL=ON` CMake
 option is on the roadmap.
 
-## Closed in v1.0.0-rc1 .. rc25
+## Closed in v1.0.0-rc1 .. rc26
 
 See `CHANGELOG.md` for the full per-release breakdown. The big
 ones since the M3-era list:
@@ -90,6 +90,10 @@ ones since the M3-era list:
   CDX / NTX tag descending), `ALIAS->FIELD` index keys were
   unparseable, and not-positioned reads returned generic 5000
   instead of `AE_NO_CURRENT_RECORD` (5026).
+- **PHP binding** — shipped in v1.0.0-rc26; `bindings/php`
+  (`openads/openads-php`) is a pure-PHP FFI package wrapping the
+  ACE library, with a modern OOP API. The same release fixed the
+  SQL parser's missing `''` string-escape handling.
 
 ## Reporting
 

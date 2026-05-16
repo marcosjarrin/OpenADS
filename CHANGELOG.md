@@ -5,6 +5,41 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc26 — 2026-05-16
+
+- **PHP binding — `bindings/php`.** Reinaldo Crespo asked whether a
+  modern PHP extension for ACE existed: the proprietary Advantage
+  PHP extension stopped working around PHP 5.2 and was never
+  modernised. OpenADS now ships its own.
+
+  - **`openads/openads-php`** — a pure-PHP Composer package, no
+    compiled C. It loads `ace64.dll` / `ace32.dll` / `libace*.so`
+    through PHP's `ext-ffi` and wraps it in a modern namespaced
+    OOP API: `Connection`, `Statement`, `Cursor` (a `\Iterator`
+    over result sets), `Table`, `Record`. Requires PHP 8.1+.
+  - **Local and remote in one path.** A `Connection` takes a
+    local data-directory path or a `tcp://` / `tls://` URI;
+    `AdsConnect60` dispatches on the URI, so the binding has no
+    mode branching.
+  - **Parameterised SQL.** `Statement::query()` accepts `?`
+    positional or `:name` named parameters. OpenADS ACE has no
+    host-variable binding, so `ParameterBinder` substitutes
+    values client-side with per-type quoting (single-pass, so a
+    value containing a `:token` substring cannot corrupt the
+    statement) — the anti-injection boundary, with its own unit
+    tests.
+  - Pinned by 31 PHPUnit tests (21 unit + 10 integration against
+    a live engine) plus a CI leg that builds the ACE library and
+    runs the suite. Design / plan under
+    `docs/superpowers/{specs,plans}/2026-05-16-php-bindings*`.
+- **SQL `''` string-escape fix.** `read_string_literal` in the SQL
+  parser scanned to the next `'` with no escape handling, so the
+  ANSI-standard doubled-quote escape (`'O''Brien'`) parsed as the
+  string `O` followed by a stray token — error 7200. Any SQL
+  client inserting a string containing an apostrophe failed. The
+  parser now decodes `''` to a single `'`; the unterminated-literal
+  error path is unchanged. Pinned by a new `sql_parser_test` case.
+
 ## 1.0.0-rc25 — 2026-05-16
 
 - **Index correctness sweep.** Three bugs that broke CDX/NTX
