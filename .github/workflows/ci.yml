@@ -46,3 +46,34 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
+
+  php-binding:
+    name: PHP binding
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Build OpenADS ACE library
+        run: |
+          cmake --preset ninja-clang
+          cmake --build build/ninja-clang --config Release --target openads_ace
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ffi
+          ini-values: ffi.enable=1
+
+      - name: Install PHP dependencies
+        working-directory: bindings/php
+        run: composer install --no-interaction
+
+      - name: Run PHP binding tests
+        working-directory: bindings/php
+        env:
+          OPENADS_ACE_LIB: ${{ github.workspace }}/build/ninja-clang/src/libace64.so
+        run: composer test

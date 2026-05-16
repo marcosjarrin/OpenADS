@@ -116,6 +116,14 @@ TEST_CASE("parse_select WHERE rejects unterminated string literal") {
     CHECK(r.error().code == 7200);
 }
 
+TEST_CASE("parse_select WHERE decodes doubled '' as an escaped quote") {
+    auto r = parse_select("SELECT * FROM x WHERE NAME = 'O''Brien'");
+    REQUIRE(r.has_value());
+    REQUIRE(r.value().where != nullptr);
+    REQUIRE(r.value().where->kind == WhereExpr::Kind::Cmp);
+    CHECK(r.value().where->cmp.literal == "O'Brien");
+}
+
 TEST_CASE("M10.3 parse_select WHERE supports OR + parens") {
     auto r = parse_select(
         "SELECT * FROM x WHERE (A = 'a' OR B = 'b') AND C = 'c'");

@@ -250,14 +250,15 @@ final class AceTypes
     public const AE_SUCCESS = 0;
 
     /** ACE field-type codes returned by AdsGetFieldType. */
-    public const ADS_STRING    = 1;
+    public const ADS_LOGICAL   = 1;
     public const ADS_NUMERIC   = 2;
     public const ADS_DATE      = 3;
-    public const ADS_LOGICAL   = 4;
+    public const ADS_STRING    = 4;
     public const ADS_MEMO      = 5;
     public const ADS_DOUBLE    = 10;
     public const ADS_INTEGER   = 11;
-    public const ADS_TIMESTAMP = 13;
+    public const ADS_TIME      = 13;
+    public const ADS_TIMESTAMP = 14;
 
     /** Subset of AE_* codes worth naming in error messages. */
     private const ERROR_NAMES = [
@@ -949,10 +950,10 @@ final class Connection
     /** Allocate a NUL-terminated C string buffer for $s. */
     public static function cstr(FFI $ffi, string $s): FFI\CData
     {
-        $len = strlen($s) + 1;
-        $buf = $ffi->new("UNSIGNED8[$len]", false);
-        FFI::memcpy($buf, $s, strlen($s));
-        $buf[strlen($s)] = 0;
+        $n   = strlen($s);
+        $buf = $ffi->new('UNSIGNED8[' . ($n + 1) . ']');
+        FFI::memcpy($buf, $s, $n);
+        $buf[$n] = 0;
         return $buf;
     }
 }
