@@ -3,6 +3,8 @@
 #include "engine/aof_eval.h"
 #include "engine/aof_expr.h"
 #include "engine/table.h"
+#include "mgmt/mg_stats.h"
+#include "network/mg_wire.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "session/connection.h"
@@ -231,6 +233,12 @@ bool Server::kill_session(std::uint64_t id) {
     // runs as normal.
     if (sock.valid()) sock_close(sock);
     return true;
+}
+
+bool Server::kill_session_by_conn_no(std::uint16_t conn_no) {
+    auto sessions = sessions_snapshot();
+    if (conn_no == 0 || conn_no > sessions.size()) return false;
+    return kill_session(sessions[conn_no - 1].id);
 }
 
 util::Result<void> Server::start(const std::string& host,
@@ -1911,6 +1919,50 @@ void Server::session_loop(Socket s) {
                 auto r = tbl->reindex();
                 if (!r) { reply = err("Reindex: reindex failed"); break; }
                 reply.opcode = Opcode::ReindexAck;
+                break;
+            }
+            case Opcode::MgConnect: {
+                // Management handshake — no payload needed; reply with
+                // an ack so the client can register its mgmt handle.
+                reply.opcode = Opcode::MgConnectAck;
+                std::string ok = "mg-ok";
+                reply.payload.assign(ok.begin(), ok.end());
+                break;
+            }
+            case Opcode::MgRequest: {
+                std::string reqbuf(
+                    reinterpret_cast<const char*>(f.payload.data()),
+                    f.payload.size());
+                auto req = decode_mg_request(reqbuf);
+                if (!req) {
+                    reply = err("bad mg request");
+                    break;
+                }
+                switch (req.value().kind) {
+                    case MgRequestKind::Snapshot: {
+                        reply.opcode = Opcode::MgReplyAck;
+                        std::string snap =
+                            encode_mg_snapshot(build_mg_snapshot());
+                        reply.payload.assign(snap.begin(), snap.end());
+                        break;
+                    }
+                    case MgRequestKind::KillUser: {
+                        // arg is the 1-based connection number; map it
+                        // to the matching session id and kill it.
+                        kill_session_by_conn_no(req.value().arg);
+                        reply.opcode = Opcode::MgReplyAck;
+                        break;
+                    }
+                    case MgRequestKind::ResetCommStats: {
+                        openads::mgmt::process_mg_stats().reset_comm();
+                        reply.opcode = Opcode::MgReplyAck;
+                        break;
+                    }
+                    case MgRequestKind::DumpTables: {
+                        reply.opcode = Opcode::MgReplyAck;
+                        break;
+                    }
+                }
                 break;
             }
             default: {

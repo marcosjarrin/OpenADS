@@ -117,6 +117,10 @@ public:
     void          erase_session_socket  (std::uint64_t id);
 
 private:
+    // Kill the session whose 1-based position in sessions_snapshot()
+    // order equals conn_no. Returns true if one was found.
+    bool kill_session_by_conn_no(std::uint16_t conn_no);
+
     // Track each session_loop's accepted socket so kill_session
     // can close it from outside the thread that owns it.
     std::unordered_map<std::uint64_t, Socket> sockets_;
