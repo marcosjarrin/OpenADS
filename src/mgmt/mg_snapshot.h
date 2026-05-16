@@ -60,6 +60,8 @@ struct MgSnapshot {
     std::uint32_t locks           = 0;
     std::uint32_t worker_threads  = 0;
     std::uint16_t server_type     = 0;   // 0 = unknown/local
+    std::uint64_t rss_bytes       = 0;   // RSS of the reporting process
+    std::uint16_t server_port     = 0;   // listener port (0 = local)
 
     std::vector<MgUser>   user_list;
     std::vector<MgTable>  table_list;

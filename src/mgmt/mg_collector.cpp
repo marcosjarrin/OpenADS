@@ -113,17 +113,20 @@ ADS_MGMT_CONFIG_PARAMS MgCollector::config_params() const {
     p.ulNumLocks         = snapshot_.locks;
     p.usNumWorkerThreads = static_cast<UNSIGNED16>(
         snapshot_.worker_threads);
+    p.usSendIPPort    = snapshot_.server_port;
+    p.usReceiveIPPort = snapshot_.server_port;
     // ECB / burst-packet / TPS fields left zero — NetWare-era, no
-    // analogue. Path strings left empty.
+    // analogue. Send/receive IP ports now carry the real listener
+    // port; path strings genuinely remain empty (no analogue).
     return p;
 }
 
 ADS_MGMT_CONFIG_MEMORY MgCollector::config_memory() const {
     ADS_MGMT_CONFIG_MEMORY m;
     std::memset(&m, 0, sizeof(m));
-    // Per-category accounting is out of scope (no allocator
-    // instrumentation). ulTotalConfigMem stays 0 here; a process-RSS
-    // total can be wired in later without changing this interface.
+    m.ulTotalConfigMem = static_cast<double>(snapshot_.rss_bytes);
+    // Per-category fields remain 0 (no allocator instrumentation),
+    // but ulTotalConfigMem now carries the real process RSS.
     return m;
 }
 

@@ -107,6 +107,8 @@ std::string encode_mg_snapshot(const mgmt::MgSnapshot& s) {
     put_u32(b, s.locks);
     put_u32(b, s.worker_threads);
     put_u16(b, s.server_type);
+    put_u64(b, s.rss_bytes);
+    put_u16(b, s.server_port);
 
     put_u32(b, static_cast<std::uint32_t>(s.user_list.size()));
     for (const auto& u : s.user_list) {
@@ -159,6 +161,8 @@ util::Result<mgmt::MgSnapshot> decode_mg_snapshot(
     s.locks          = r.u32();
     s.worker_threads = r.u32();
     s.server_type    = r.u16();
+    s.rss_bytes      = r.u64();
+    s.server_port    = r.u16();
 
     std::uint32_t nu = r.u32();
     for (std::uint32_t i = 0; r.ok && i < nu; ++i) {

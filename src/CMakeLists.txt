@@ -19,6 +19,7 @@ add_library(openads_core STATIC
     platform/path.cpp
     platform/time.cpp
     platform/thread.cpp
+    platform/proc.cpp
     abi/ace_exports.cpp
     abi/ace_stubs.cpp
     abi/last_error.cpp
@@ -62,7 +63,7 @@ if(WIN32)
         platform/dll_win32.cpp
         network/socket_win32.cpp
     )
-    target_link_libraries(openads_core PUBLIC ws2_32)
+    target_link_libraries(openads_core PUBLIC ws2_32 psapi)
 else()
     target_sources(openads_core PRIVATE
         platform/file_posix.cpp

@@ -30,6 +30,7 @@
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/cdx/cdx_index.h"
 #include "drivers/fpt/fpt_memo.h"
+#include "platform/proc.h"
 #include "platform/time.h"
 #include "sql/parser.h"
 
@@ -9807,6 +9808,7 @@ fetch_mg_snapshot(const MgBackend& be) {
         u.name    = "(local)";
         u.conn_no = 1;
         snap.user_list.push_back(u);
+        snap.rss_bytes = openads::platform::process_rss_bytes();
         return snap;
     }
     // Remote mode: open a socket, ship one MgRequest, read the reply.

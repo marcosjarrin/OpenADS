@@ -5,6 +5,7 @@
 #include "engine/table.h"
 #include "mgmt/mg_stats.h"
 #include "network/mg_wire.h"
+#include "platform/proc.h"
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "session/connection.h"
@@ -137,6 +138,8 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
 
     snap.connections = static_cast<std::uint32_t>(sessions.size());
     snap.server_type = 1;   // 1 = remote server
+    snap.server_port = port_;
+    snap.rss_bytes   = openads::platform::process_rss_bytes();
 
     {
         std::lock_guard<std::mutex> g(sessions_mu_);

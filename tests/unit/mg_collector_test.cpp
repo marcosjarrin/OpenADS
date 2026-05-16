@@ -152,3 +152,22 @@ TEST_CASE("MgCollector list accessors map snapshot vectors") {
     ADS_MGMT_LOCK_INFO none = c.lock_owner(999);
     CHECK(none.ulRecordNumber == 0);
 }
+
+TEST_CASE("MgCollector::config_memory reports the snapshot RSS total") {
+    MgSnapshot snap;
+    snap.rss_bytes = 1048576;
+    MgStats stats;
+    MgCollector c(snap, stats);
+    CHECK(c.config_memory().ulTotalConfigMem
+              == doctest::Approx(1048576.0));
+}
+
+TEST_CASE("MgCollector::config_params reports the server port") {
+    MgSnapshot snap;
+    snap.server_port = 16262;
+    MgStats stats;
+    MgCollector c(snap, stats);
+    auto p = c.config_params();
+    CHECK(p.usSendIPPort    == 16262);
+    CHECK(p.usReceiveIPPort == 16262);
+}
