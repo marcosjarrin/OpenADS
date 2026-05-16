@@ -5,6 +5,39 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc24 — 2026-05-16
+
+- **`AdsMg*` server-telemetry subsystem.** Reported by Pritpal Bedi
+  after running Harbour's `contrib/rddads/tests/manage.prg` against
+  OpenADS: every management figure printed `0` — uptime, connections,
+  work areas, comm packets, worker threads, memory. The ~17 `AdsMg*`
+  functions were placeholder stubs (zero-fill the caller's struct,
+  return `AE_SUCCESS`). They now report real telemetry.
+
+  - **`MgCollector`** (`src/mgmt/`) — single source of truth. Formats
+    the SAP-canonical `ADS_MGMT_*` structs from a `MgSnapshot`. Runs
+    identically for local-mode calls and for the server answering a
+    remote request, so the two paths cannot diverge.
+  - **`MgSnapshot`** carries everything across the wire: live counts
+    (connections / work areas / tables / users / worker threads),
+    per-entity lists, process RSS, listener port, and the cumulative
+    `MgStats` values (uptime, comm packet totals, server-initiated
+    disconnects, high-water marks).
+  - **Transport.** New `MgConnect` / `MgRequest` wire opcodes
+    (`0xA0..0xA3`). `AdsMgConnect` to a `host:port` validates
+    reachability with an eager `MgConnect` handshake; a drive path
+    such as rddads' `"C:"` resolves to a local-mode backend. Local
+    mode enumerates the in-process ABI handle registry.
+  - **Honesty.** Fields with no OpenADS analogue — checksum failures,
+    NetWare-era ECB counts, per-category memory, serial number —
+    report a real `0`, documented in
+    `docs/superpowers/specs/2026-05-16-adsmg-telemetry-design.md`.
+  - Verified end-to-end against a live remote `openads_serverd`:
+    `manage.prg` now prints real uptime, packet counts, worker
+    threads, ports and server RSS. `tests/smoke/harbour/manage_probe.prg`
+    (a non-interactive `manage.prg` variant) and the new
+    `tools/mgprobe` CLI (`openads_mgprobe host:port`) reproduce it.
+
 ## 1.0.0-rc23 — 2026-05-15
 
 - **Harbour `contrib/rddads` clean-compile sweep.** Reported by
