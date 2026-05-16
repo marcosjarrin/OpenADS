@@ -23,7 +23,8 @@ final class AceTypes
     public const ADS_MEMO      = 5;
     public const ADS_DOUBLE    = 10;
     public const ADS_INTEGER   = 11;
-    public const ADS_TIMESTAMP = 13;
+    public const ADS_TIME      = 13;
+    public const ADS_TIMESTAMP = 14;
 
     /** Subset of AE_* codes worth naming in error messages. */
     private const ERROR_NAMES = [

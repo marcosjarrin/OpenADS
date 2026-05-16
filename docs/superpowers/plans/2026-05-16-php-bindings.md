@@ -250,14 +250,15 @@ final class AceTypes
     public const AE_SUCCESS = 0;
 
     /** ACE field-type codes returned by AdsGetFieldType. */
-    public const ADS_STRING    = 1;
+    public const ADS_LOGICAL   = 1;
     public const ADS_NUMERIC   = 2;
     public const ADS_DATE      = 3;
-    public const ADS_LOGICAL   = 4;
+    public const ADS_STRING    = 4;
     public const ADS_MEMO      = 5;
     public const ADS_DOUBLE    = 10;
     public const ADS_INTEGER   = 11;
-    public const ADS_TIMESTAMP = 13;
+    public const ADS_TIME      = 13;
+    public const ADS_TIMESTAMP = 14;
 
     /** Subset of AE_* codes worth naming in error messages. */
     private const ERROR_NAMES = [
