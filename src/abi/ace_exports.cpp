@@ -9798,12 +9798,29 @@ openads::util::Result<openads::mgmt::MgSnapshot>
 fetch_mg_snapshot(const MgBackend& be) {
     using openads::util::Error;
     if (!be.remote) {
-        // Local mode: report this process. One connection (this one),
-        // no server-side session registry to enumerate.
+        // Local mode: report this process by enumerating the ABI
+        // handle registry for real open-connection / open-table
+        // counts. The per-table list stays empty in local mode —
+        // counts are what the management surface needs; resolving
+        // each handle to a table name would require engine::Table
+        // introspection that is out of scope here.
         openads::mgmt::MgSnapshot snap;
-        snap.connections = 1;
-        snap.users       = 1;
         snap.server_type = 0;   // 0 = local
+        std::uint32_t conns = 0, tbls = 0;
+        state().registry.for_each_handle(
+            [&](Handle, HandleKind k, void*) {
+                if (k == HandleKind::Connection ||
+                    k == HandleKind::RemoteConnection)
+                    ++conns;
+                else if (k == HandleKind::Table ||
+                         k == HandleKind::RemoteTable)
+                    ++tbls;
+            });
+        snap.connections = conns;
+        snap.tables      = tbls;
+        snap.workareas   = tbls;
+        // The calling process always counts as one "user".
+        snap.users = 1;
         openads::mgmt::MgUser u;
         u.name    = "(local)";
         u.conn_no = 1;
