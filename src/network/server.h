@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mgmt/mg_snapshot.h"
 #include "network/socket.h"
 #include "network/transport.h"
 #include "network/wire.h"
@@ -65,6 +66,10 @@ public:
     };
     std::vector<SessionInfo> sessions_snapshot() const;
 
+    // M9.25 — build a management telemetry snapshot from the live
+    // session registry. Used by the MgRequest opcode handler.
+    mgmt::MgSnapshot build_mg_snapshot() const;
+
 private:
     void accept_loop();
     void session_loop(Socket s);
@@ -73,7 +78,7 @@ private:
     std::uint16_t            port_ = 0;
     std::atomic<bool>        running_{false};
     std::thread              accept_thread_;
-    std::mutex               sessions_mu_;
+    mutable std::mutex       sessions_mu_;
     std::vector<std::thread> sessions_;
 
     // M12.9 — credential map (user -> password). Read-only after

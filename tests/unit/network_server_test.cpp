@@ -856,3 +856,23 @@ TEST_CASE("M12.3 server stop() drops in-flight connection cleanly") {
     sock_close(cs);
     CHECK_FALSE(srv.running());
 }
+
+TEST_CASE("Server::build_mg_snapshot counts live sessions") {
+    using openads::network::Server;
+    Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    Server::SessionInfo a;
+    a.peer_ip = "127.0.0.1"; a.peer_port = 5001;
+    a.user = "alice"; a.open_tables = 2;
+    std::uint64_t id = srv.register_session(a);
+
+    auto snap = srv.build_mg_snapshot();
+    CHECK(snap.connections == 1);
+    CHECK(snap.tables == 2);
+    REQUIRE(snap.user_list.size() == 1);
+    CHECK(snap.user_list[0].name == "alice");
+
+    srv.unregister_session(id);
+    srv.stop();
+}

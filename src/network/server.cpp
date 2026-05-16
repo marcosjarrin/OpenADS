@@ -129,6 +129,37 @@ std::vector<Server::SessionInfo> Server::sessions_snapshot() const {
     return out;
 }
 
+mgmt::MgSnapshot Server::build_mg_snapshot() const {
+    mgmt::MgSnapshot snap;
+    auto sessions = sessions_snapshot();
+
+    snap.connections = static_cast<std::uint32_t>(sessions.size());
+    snap.server_type = 1;   // 1 = remote server
+
+    {
+        std::lock_guard<std::mutex> g(sessions_mu_);
+        snap.worker_threads =
+            static_cast<std::uint32_t>(sessions_.size());
+    }
+
+    std::uint32_t conn_no = 1;
+    for (const auto& s : sessions) {
+        mgmt::MgUser u;
+        u.name    = s.user.empty() ? "(anonymous)" : s.user;
+        u.address = s.peer_ip + ":" + std::to_string(s.peer_port);
+        u.os_login     = u.name;
+        u.conn_no      = static_cast<std::uint16_t>(conn_no);
+        u.connected_at = s.connected_at;
+        snap.user_list.push_back(std::move(u));
+
+        snap.tables    += s.open_tables;
+        snap.workareas += s.open_tables;
+        ++conn_no;
+    }
+    snap.users = static_cast<std::uint32_t>(snap.user_list.size());
+    return snap;
+}
+
 std::uint64_t Server::register_session(const SessionInfo& info) {
     std::lock_guard<std::mutex> lk(info_mu_);
     auto id = next_session_id_.fetch_add(1);
