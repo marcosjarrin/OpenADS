@@ -11,6 +11,8 @@ namespace openads::mgmt {
 // high-water marks). One instance per process; the server daemon and
 // an in-process (local-mode) DLL each own their own.
 struct MgStats {
+    // Written once at Server::start(), before any session/reader
+    // thread exists; plain (non-atomic) read is therefore safe.
     std::chrono::system_clock::time_point start_time{
         std::chrono::system_clock::now()};
 

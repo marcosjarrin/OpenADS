@@ -1981,6 +1981,9 @@ void Server::session_loop(Socket s) {
                         reply.opcode = Opcode::MgReplyAck;
                         break;
                     }
+                    default:
+                        reply = err("unknown mg request kind");
+                        break;
                 }
                 break;
             }
