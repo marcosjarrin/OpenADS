@@ -26,6 +26,14 @@ final class AceTypes
     public const ADS_TIME      = 13;
     public const ADS_TIMESTAMP = 14;
 
+    /** Index key types (AdsSeek usKeyType). */
+    public const ADS_STRINGKEY = 1;
+    public const ADS_DOUBLEKEY = 2;
+
+    /** Seek modes (AdsSeek usSeekType). */
+    public const ADS_HARDSEEK = 0;
+    public const ADS_SOFTSEEK = 1;
+
     /** Subset of AE_* codes worth naming in error messages. */
     private const ERROR_NAMES = [
         0    => 'AE_SUCCESS',

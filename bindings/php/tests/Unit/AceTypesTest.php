@@ -28,4 +28,16 @@ final class AceTypesTest extends TestCase
     {
         self::assertSame('AE_UNKNOWN(9999)', AceTypes::errorName(9999));
     }
+
+    public function testSeekKeyTypeConstants(): void
+    {
+        self::assertSame(1, AceTypes::ADS_STRINGKEY);
+        self::assertSame(2, AceTypes::ADS_DOUBLEKEY);
+    }
+
+    public function testSeekModeConstants(): void
+    {
+        self::assertSame(0, AceTypes::ADS_HARDSEEK);
+        self::assertSame(1, AceTypes::ADS_SOFTSEEK);
+    }
 }

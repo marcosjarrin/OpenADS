@@ -30,6 +30,7 @@ final class Cursor implements Iterator
     private array $fieldKeys = [];
     private int $position = 0;
     private bool $closed = false;
+    private bool $fetchStarted = false;
 
     public function __construct(private Connection $conn, private int $handle)
     {
@@ -55,6 +56,38 @@ final class Cursor implements Iterator
             $rows[] = $row;
         }
         return $rows;
+    }
+
+    /**
+     * Fetch the next row as an associative array (uppercase column
+     * keys), or null when the result set is exhausted. Use either
+     * fetch*() OR foreach iteration on one Cursor, not both.
+     */
+    public function fetchAssoc(): ?array
+    {
+        return $this->fetchRow();
+    }
+
+    /** Fetch the next row as a 0-indexed numeric array, or null at end. */
+    public function fetchNum(): ?array
+    {
+        $row = $this->fetchRow();
+        return $row === null ? null : array_values($row);
+    }
+
+    private function fetchRow(): ?array
+    {
+        $ffi = $this->lib->ffi();
+        if (!$this->fetchStarted) {
+            $this->check($ffi->AdsGotoTop($this->handle), 'goto top');
+            $this->fetchStarted = true;
+        } else {
+            $this->check($ffi->AdsSkip($this->handle, 1), 'skip');
+        }
+        if (!$this->valid()) {
+            return null;
+        }
+        return $this->current();
     }
 
     // --- Iterator -------------------------------------------------
