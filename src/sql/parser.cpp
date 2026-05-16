@@ -130,7 +130,16 @@ public:
         }
         ++pos_;
         std::string out;
-        while (pos_ < s_.size() && s_[pos_] != '\'') {
+        while (pos_ < s_.size()) {
+            if (s_[pos_] == '\'') {
+                // SQL-standard: a doubled '' inside a literal is one '.
+                if (pos_ + 1 < s_.size() && s_[pos_ + 1] == '\'') {
+                    out.push_back('\'');
+                    pos_ += 2;
+                    continue;
+                }
+                break;   // closing quote
+            }
             out.push_back(s_[pos_]);
             ++pos_;
         }
