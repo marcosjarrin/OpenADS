@@ -108,8 +108,9 @@ index 001f393364..e1894d2074 100644
 --- a/contrib/rddads/rddads.h
 +++ b/contrib/rddads/rddads.h
 @@ -67,6 +67,31 @@
-
+ 
  #include "ace.h"
+ 
 +/* M(rddads-compat) shim: SAP / older Harbour rddads expected a
 +   ADSFIELD( n ) helper that yields the n-th field's name in the
 +   CURRENT workarea as UNSIGNED8*. This Harbour build's sources
