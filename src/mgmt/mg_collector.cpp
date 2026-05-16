@@ -222,4 +222,11 @@ ADS_MGMT_LOCK_INFO MgCollector::lock_owner(std::uint32_t recno) const {
     return i;
 }
 
+// Process-global MgStats singleton. start_time is fixed the first
+// time this is called; the server overwrites it at Server::start().
+MgStats& process_mg_stats() {
+    static MgStats g_stats;
+    return g_stats;
+}
+
 }  // namespace openads::mgmt
