@@ -61,3 +61,40 @@ TEST_CASE("MgCollector::activity_info maps counts and uptime") {
     CHECK(a.stWorkerThreads.ulInUse   == 4);
     CHECK(a.stUsers.ulInUse           == 3);
 }
+
+TEST_CASE("MgCollector::comm_stats reports real packet totals only") {
+    MgSnapshot snap;
+    MgStats    stats;
+    stats.packets_in.store(40);
+    stats.packets_out.store(60);
+    stats.disconnects.store(2);
+    stats.partial_connects.store(1);
+
+    MgCollector c(snap, stats);
+    ADS_MGMT_COMM_STATS s = c.comm_stats();
+
+    CHECK(s.ulTotalPackets      == 100);   // in + out
+    CHECK(s.ulDisconnectedUsers == 2);
+    CHECK(s.ulPartialConnects   == 1);
+    // No checksum / sequencing in our framing — honest zeros.
+    CHECK(s.dPercentCheckSums   == doctest::Approx(0.0));
+    CHECK(s.ulCheckSumFailures  == 0);
+    CHECK(s.ulRcvPktOutOfSeq    == 0);
+}
+
+TEST_CASE("MgCollector::config_params echoes live counts") {
+    MgSnapshot snap;
+    snap.connections = 3;
+    snap.tables      = 5;
+    snap.worker_threads = 4;
+    MgStats stats;
+
+    MgCollector c(snap, stats);
+    ADS_MGMT_CONFIG_PARAMS p = c.config_params();
+    CHECK(p.ulNumConnections  == 3);
+    CHECK(p.ulNumTables       == 5);
+    CHECK(p.usNumWorkerThreads == 4);
+    // NetWare-era ECB fields are honest zeros.
+    CHECK(p.usNumReceiveECBs  == 0);
+    CHECK(p.usNumSendECBs     == 0);
+}

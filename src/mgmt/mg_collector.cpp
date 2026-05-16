@@ -89,4 +89,42 @@ ADS_MGMT_ACTIVITY_INFO MgCollector::activity_info() const {
     return a;
 }
 
+ADS_MGMT_COMM_STATS MgCollector::comm_stats() const {
+    ADS_MGMT_COMM_STATS s;
+    std::memset(&s, 0, sizeof(s));
+    s.ulTotalPackets      = static_cast<UNSIGNED32>(
+        packets_in_ + packets_out_);
+    s.ulDisconnectedUsers = static_cast<UNSIGNED32>(disconnects_);
+    s.ulPartialConnects   = static_cast<UNSIGNED32>(partial_connects_);
+    // dPercentCheckSums, ulCheckSumFailures, ulRcvPktOutOfSeq,
+    // ulRcvReqOutOfSeq, ulNotLoggedIn, ulInvalidPackets,
+    // ulRecvFromErrors, ulSendToErrors — no analogue in OpenADS'
+    // TCP framing; left as honest zeros.
+    return s;
+}
+
+ADS_MGMT_CONFIG_PARAMS MgCollector::config_params() const {
+    ADS_MGMT_CONFIG_PARAMS p;
+    std::memset(&p, 0, sizeof(p));
+    p.ulNumConnections   = snapshot_.connections;
+    p.ulNumWorkAreas     = snapshot_.workareas;
+    p.ulNumTables        = snapshot_.tables;
+    p.ulNumIndexes       = snapshot_.indexes;
+    p.ulNumLocks         = snapshot_.locks;
+    p.usNumWorkerThreads = static_cast<UNSIGNED16>(
+        snapshot_.worker_threads);
+    // ECB / burst-packet / TPS fields left zero — NetWare-era, no
+    // analogue. Path strings left empty.
+    return p;
+}
+
+ADS_MGMT_CONFIG_MEMORY MgCollector::config_memory() const {
+    ADS_MGMT_CONFIG_MEMORY m;
+    std::memset(&m, 0, sizeof(m));
+    // Per-category accounting is out of scope (no allocator
+    // instrumentation). ulTotalConfigMem stays 0 here; a process-RSS
+    // total can be wired in later without changing this interface.
+    return m;
+}
+
 }  // namespace openads::mgmt
