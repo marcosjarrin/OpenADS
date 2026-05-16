@@ -224,7 +224,7 @@ silently.
   with `ext-ffi` and runs the suite.
 - **Distribution**: published on Packagist as
   `openads/openads-php`. README documents requirements: PHP
-  7.4+, `ext-ffi` enabled, an `ace` library reachable via
+  8.1+, `ext-ffi` enabled, an `ace` library reachable via
   `OPENADS_ACE_LIB` or the system path.
 
 ## 10. Out of scope (YAGNI)
