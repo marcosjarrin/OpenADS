@@ -288,6 +288,19 @@ Table* get_table(ADSHANDLE h) {
     return via_idx;
 }
 
+// DBF/xbase CHARACTER fields are fixed-width space-padded. The internal
+// decode path (make_string / decode_field) trims trailing spaces because
+// the SQL engine, index keys, and AOF filters need trimmed values. On the
+// way out to an ABI caller, re-pad to the declared field width so that
+// FieldGet of a C(20) field always returns exactly 20 characters — the
+// behaviour expected by rddads, Clipper, and X# (Pritpal's xbrowse bug).
+// Never truncates: a value already at or above width is returned as-is.
+std::string pad_char_field(std::string s, std::size_t width) {
+    if (s.size() < width)
+        s.append(width - s.size(), ' ');
+    return s;
+}
+
 } // namespace
 
 // M9.16: chunked AdsSetBinary keeps a per-(table, field) accumulator;
@@ -1687,7 +1700,11 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
             if (i == std::numeric_limits<std::size_t>::max()) {
                 return fail(openads::AE_COLUMN_NOT_FOUND, "");
             }
-            openads::abi::copy_to_caller(pucBuf, pulLen, rt->current_row[i]);
+            // ADS_STRING == 4; pad CHARACTER fields to declared width.
+            std::string val = rt->current_row[i];
+            if (rt->fields[i].type == ADS_STRING)
+                val = pad_char_field(std::move(val), rt->fields[i].length);
+            openads::abi::copy_to_caller(pucBuf, pulLen, val);
             return ok();
         }
         // EoF / no row — fall through to a plain GetField round-
@@ -1696,7 +1713,14 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         auto fname = openads::abi::to_internal(pucField, 0);
         auto r = rt->conn->get_field(rt->id, fname);
         if (!r) return fail(r.error());
-        openads::abi::copy_to_caller(pucBuf, pulLen, r.value());
+        // Pad if we can resolve the field descriptor from the cached schema.
+        std::string val = r.value();
+        auto fi = remote_field_index(rt, pucField);
+        if (fi != std::numeric_limits<std::size_t>::max() &&
+            rt->fields[fi].type == ADS_STRING) {
+            val = pad_char_field(std::move(val), rt->fields[fi].length);
+        }
+        openads::abi::copy_to_caller(pucBuf, pulLen, val);
         return ok();
     }
     Table* t = get_table(hTable);
@@ -1707,7 +1731,14 @@ UNSIGNED32 AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
     }
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
-    openads::abi::copy_to_caller(pucBuf, pulLen, v.value().as_string);
+    // Re-pad CHARACTER fields to the declared field width on the way out.
+    // The internal decode (make_string) trims for the SQL/index engine;
+    // ABI callers expect the full fixed-width value.
+    std::string val = v.value().as_string;
+    const auto& fd = t->field_descriptor(idx);
+    if (fd.type == openads::drivers::DbfFieldType::Character)
+        val = pad_char_field(std::move(val), fd.length);
+    openads::abi::copy_to_caller(pucBuf, pulLen, val);
     return ok();
 }
 

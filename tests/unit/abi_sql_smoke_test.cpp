@@ -76,12 +76,13 @@ TEST_CASE("ABI SQL smoke: AdsExecuteSQLDirect on SELECT * FROM <table>") {
     UNSIGNED8 buf[16] = {0};
     UNSIGNED32 cap = sizeof(buf);
     REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
-    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "FOO");
+    // TAG is C(4); AdsGetField must return the full padded width.
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "FOO ");
 
     REQUIRE(AdsSkip(hCursor, 1) == 0);
     cap = sizeof(buf); std::memset(buf, 0, sizeof(buf));
     REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
-    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR");
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR ");
 
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
@@ -136,7 +137,8 @@ TEST_CASE("ABI SQL: WHERE filter selects matching record") {
     UNSIGNED8 buf[16] = {0};
     UNSIGNED32 cap = sizeof(buf);
     REQUIRE(AdsGetField(hCursor, fld, buf, &cap, 0) == 0);
-    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR");
+    // TAG is C(4); AdsGetField must return the full padded width.
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "BAR ");
 
     // Skipping past the matching row should hit EOF (only one BAR row).
     REQUIRE(AdsSkip(hCursor, 1) == 0);

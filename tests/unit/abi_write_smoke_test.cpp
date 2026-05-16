@@ -93,7 +93,9 @@ TEST_CASE("ABI write smoke: append two rows, lock/unlock, mark deleted, read bac
     UNSIGNED8 buf[16] = {0};
     UNSIGNED32 cap = sizeof(buf);
     REQUIRE(AdsGetField(hTable, fld, buf, &cap, 0) == 0);
-    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "ABC");
+    // TAG is C(4); "ABC" stored as "ABC " on disk — AdsGetField must
+    // return the full 4-char space-padded value to match declared width.
+    CHECK(std::string(reinterpret_cast<const char*>(buf), cap) == "ABC ");
 
     REQUIRE(AdsSkip(hTable, 1) == 0);
     cap = sizeof(buf);
