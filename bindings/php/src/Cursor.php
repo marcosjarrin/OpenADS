@@ -95,7 +95,8 @@ final class Cursor implements Iterator
     public function rewind(): void
     {
         $this->check($this->lib->ffi()->AdsGotoTop($this->handle), 'goto top');
-        $this->position = 0;
+        $this->position     = 0;
+        $this->fetchStarted = false;
     }
 
     public function valid(): bool
