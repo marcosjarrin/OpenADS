@@ -1,6 +1,8 @@
 @echo off
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
-set PATH=c:\harbour\bin\win\msvc64;C:\OpenADS\build\default\src\Release;%PATH%
+rem ACE build dir must precede harbour\bin: a stale ace64.dll shipped
+rem under c:\harbour\bin\win\msvc64 otherwise shadows the built one.
+set PATH=C:\OpenADS\build\default\src\Release;c:\harbour\bin\win\msvc64;%PATH%
 cd /d "%~dp0"
 
 echo [smoke] Generating fixture data.dbf...
