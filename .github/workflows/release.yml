@@ -37,14 +37,15 @@ jobs:
             arch: x64
             preset: ninja-clang
             artifact_ext: tar.gz
+          # One macOS leg builds a universal (arm64 + x86_64)
+          # binary on the Apple-Silicon runner — GitHub's Intel
+          # macos-13 runners are scarce and stall the release in
+          # the queue. A universal archive runs on both arches.
           - os: macos-14
-            arch: arm64
+            arch: universal
             preset: default
             artifact_ext: tar.gz
-          - os: macos-13
-            arch: x64
-            preset: default
-            artifact_ext: tar.gz
+            cmake_extra: '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"'
 
     steps:
       - uses: actions/checkout@v5
@@ -69,7 +70,8 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }} \
                 -DOPENADS_WITH_TLS=ON \
-                -DOPENADS_WITH_HTTP=ON
+                -DOPENADS_WITH_HTTP=ON \
+                ${{ matrix.cmake_extra }}
 
       - name: Build
         run: cmake --build build/${{ matrix.preset }} --config Release
