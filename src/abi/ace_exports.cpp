@@ -30,6 +30,7 @@
 #include "drivers/cdx/cdx_driver.h"
 #include "drivers/cdx/cdx_index.h"
 #include "drivers/adi/adi_index.h"
+#include "drivers/adm/adm_memo.h"
 #include "drivers/fpt/fpt_memo.h"
 #include "platform/proc.h"
 #include "platform/time.h"
@@ -762,13 +763,37 @@ std::vector<FieldOut> parse_rddads_field_defs(const std::string& defs) {
     return fields;
 }
 
+// ADT field spec: ADT type code + fixed storage length for the creation path.
+struct AdtFieldSpec {
+    std::uint16_t adt_type;
+    std::uint16_t adt_length;
+    std::uint8_t  adt_dec;
+    bool          needs_memo;
+};
+
+AdtFieldSpec adt_spec_for(const FieldOut& f) {
+    switch (f.type) {
+        case 'L': return {1,  1,          0,     false};  // LOGICAL
+        case 'D': return {3,  4,          0,     false};  // DATE (JDN uint32)
+        case 'M': return {5,  9,          0,     true };  // MEMO  (9-byte ref)
+        case 'Q': return {6,  9,          0,     true };  // BINARY (9-byte ref)
+        case 'N':
+            if (f.dec > 0) return {10, 8, f.dec, false}; // DOUBLE
+            return             {11, 4, 0,     false};     // INTEGER
+        case 'C':
+        default:
+            return {4, static_cast<std::uint16_t>(f.length ? f.length : 10u),
+                    0, false};                            // CHAR
+    }
+}
+
 } // namespace
 } // extern "C++"
 
 UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
                           UNSIGNED8*    pucName,
                           UNSIGNED8*    /*pucAlias*/,
-                          UNSIGNED16    /*usTableType*/,
+                          UNSIGNED16    usTableType,
                           UNSIGNED16    /*usCharType*/,
                           UNSIGNED16    /*usLockType*/,
                           UNSIGNED16    /*usCheckRights*/,
@@ -796,13 +821,104 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
 
     namespace fs = std::filesystem;
     fs::path full = fs::path(c->data_dir()) / rel;
-    if (!full.has_extension()) full.replace_extension(".dbf");
+    const bool is_adt = (usTableType == ADS_ADT);
+    if (!full.has_extension()) full.replace_extension(is_adt ? ".adt" : ".dbf");
 
     auto fields = parse_rddads_field_defs(defs);
     if (fields.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no fields");
     }
 
+    if (is_adt) {
+        // ── ADT creation path ───────────────────────────────────────────────
+        if (full.extension() != ".adt") full.replace_extension(".adt");
+
+        std::vector<AdtFieldSpec> specs;
+        specs.reserve(fields.size());
+        bool has_memo = false;
+        for (auto& f : fields) {
+            AdtFieldSpec sp = adt_spec_for(f);
+            if (sp.needs_memo) has_memo = true;
+            specs.push_back(sp);
+        }
+
+        // Record: 5-byte prefix (delete-flag byte + 4-byte null bitmap) + fields
+        std::uint32_t rec_len = 5;
+        for (auto& sp : specs) rec_len += sp.adt_length;
+        if (rec_len > 0xFFFFu)
+            return fail(openads::AE_INTERNAL_ERROR, "ADT record too long");
+
+        std::uint32_t hdr_len = 400u +
+                                static_cast<std::uint32_t>(fields.size()) * 200u;
+
+        // 400-byte file header
+        std::vector<std::uint8_t> adt_hdr(400, 0);
+        std::memcpy(adt_hdr.data(), "Advantage Table", 15);
+        auto w32 = [&](std::size_t off, std::uint32_t v) {
+            adt_hdr[off+0] = static_cast<std::uint8_t>(v);
+            adt_hdr[off+1] = static_cast<std::uint8_t>(v >>  8);
+            adt_hdr[off+2] = static_cast<std::uint8_t>(v >> 16);
+            adt_hdr[off+3] = static_cast<std::uint8_t>(v >> 24);
+        };
+        w32(24, 0);        // rec_count = 0
+        w32(32, hdr_len);  // hdr_len
+        w32(36, rec_len);  // rec_len
+
+        // 200-byte field descriptors
+        std::vector<std::uint8_t> fds(fields.size() * 200, 0);
+        std::uint16_t fld_off = 5;  // first field starts after the 5-byte prefix
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            const auto& f  = fields[i];
+            const auto& sp = specs[i];
+            std::uint8_t* fd = fds.data() + i * 200;
+            // name: null-terminated, bytes 0-127
+            std::size_t n = std::min<std::size_t>(f.name.size(), 127u);
+            std::memcpy(fd, f.name.data(), n);
+            // fd[128] = flags (0 = not nullable)
+            fd[129] = static_cast<std::uint8_t>(sp.adt_type);
+            fd[130] = static_cast<std::uint8_t>(sp.adt_type >> 8);
+            fd[131] = static_cast<std::uint8_t>(fld_off);
+            fd[132] = static_cast<std::uint8_t>(fld_off >> 8);
+            fd[135] = static_cast<std::uint8_t>(sp.adt_length);
+            fd[136] = static_cast<std::uint8_t>(sp.adt_length >> 8);
+            fd[137] = sp.adt_dec;
+            fld_off = static_cast<std::uint16_t>(fld_off + sp.adt_length);
+        }
+
+        // Write the .adt file
+        { std::error_code ec; fs::remove(full, ec); }
+        {
+            std::ofstream out(full, std::ios::binary);
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "AdsCreateTable: ADT open for write failed");
+            out.write(reinterpret_cast<const char*>(adt_hdr.data()),
+                      static_cast<std::streamsize>(adt_hdr.size()));
+            out.write(reinterpret_cast<const char*>(fds.data()),
+                      static_cast<std::streamsize>(fds.size()));
+            if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                  "AdsCreateTable: ADT write failed");
+        }
+
+        // Create a companion .adm for MEMO/BINARY fields
+        if (has_memo) {
+            fs::path adm = full;
+            adm.replace_extension(".adm");
+            { std::error_code ec; fs::remove(adm, ec); }
+            auto mr = openads::drivers::adm::AdmMemo::create(adm.string());
+            if (!mr) return fail(mr.error());
+        }
+
+        // Open via the standard path so the caller gets a usable handle
+        std::string rel_adt = fs::path(rel).replace_extension(".adt").string();
+        UNSIGNED8 adt_namebuf[260] = {0};
+        std::size_t adt_nb = std::min<std::size_t>(rel_adt.size(),
+                                                    sizeof(adt_namebuf) - 1);
+        std::memcpy(adt_namebuf, rel_adt.data(), adt_nb);
+        return AdsOpenTable(hConn, adt_namebuf, adt_namebuf,
+                            ADS_ADT, 0, 0, 0, 1, phTable);
+    }
+
+    // ── DBF creation path (existing) ────────────────────────────────────────
     // Compute header + record sizes.
     std::uint16_t header_len = static_cast<std::uint16_t>(
         32 + 32 * fields.size() + 1);
