@@ -6886,8 +6886,35 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     std::string lit = w.literal;
                     bool is_num     = w.is_numeric;
                     double num      = w.number;
-                    return Pred{[f, op, lit, is_num, num]
+                    std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
+                    if (op == openads::sql::WhereOp::Contains) {
+                        namespace fs = std::filesystem;
+                        fs::path fts_path =
+                            fs::path(ctbl->path()).replace_extension(".fts");
+                        auto loaded = openads::engine::Fts::load(fts_path.string());
+                        if (loaded) {
+                            openads::engine::FtsOptions opts;
+                            auto hits = openads::engine::Fts::search(
+                                loaded.value(), lit, opts);
+                            contains_hits =
+                                std::make_shared<std::unordered_set<std::uint32_t>>(
+                                    hits.begin(), hits.end());
+                        }
+                    }
+                    return Pred{[f, op, lit, is_num, num, contains_hits]
                                 (openads::engine::Table& t) {
+                        if (op == openads::sql::WhereOp::Contains) {
+                            if (!contains_hits) return false;
+                            return contains_hits->find(t.recno()) !=
+                                   contains_hits->end();
+                        }
+                        if (op == openads::sql::WhereOp::Like) {
+                            auto v = t.read_field(f);
+                            if (!v) return false;
+                            auto sv = v.value().as_string;
+                            while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                            return sql_like_match(sv, lit);
+                        }
                         auto v = t.read_field(f);
                         if (!v) return false;
                         int cmp = 0;
@@ -6905,10 +6932,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             case openads::sql::WhereOp::Gt: return cmp >  0;
                             case openads::sql::WhereOp::Le: return cmp <= 0;
                             case openads::sql::WhereOp::Ge: return cmp >= 0;
-                            case openads::sql::WhereOp::Contains: return false;
                         default: return false;
                         }
-                        return false;
                     }};
                 }
                 return openads::util::Error{
@@ -7964,8 +7989,35 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::string lit = w.literal;
                 bool is_num = w.is_numeric;
                 double num = w.number;
-                return AggPred{[f, op, lit, is_num, num]
+                std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
+                if (op == openads::sql::WhereOp::Contains) {
+                    namespace fs = std::filesystem;
+                    fs::path fts_path =
+                        fs::path(tbl->path()).replace_extension(".fts");
+                    auto loaded = openads::engine::Fts::load(fts_path.string());
+                    if (loaded) {
+                        openads::engine::FtsOptions opts;
+                        auto hits = openads::engine::Fts::search(
+                            loaded.value(), lit, opts);
+                        contains_hits =
+                            std::make_shared<std::unordered_set<std::uint32_t>>(
+                                hits.begin(), hits.end());
+                    }
+                }
+                return AggPred{[f, op, lit, is_num, num, contains_hits]
                                (openads::engine::Table& t) {
+                    if (op == openads::sql::WhereOp::Contains) {
+                        if (!contains_hits) return false;
+                        return contains_hits->find(t.recno()) !=
+                               contains_hits->end();
+                    }
+                    if (op == openads::sql::WhereOp::Like) {
+                        auto v = t.read_field(f);
+                        if (!v) return false;
+                        auto sv = v.value().as_string;
+                        while (!sv.empty() && sv.back() == ' ') sv.pop_back();
+                        return sql_like_match(sv, lit);
+                    }
                     auto v = t.read_field(f);
                     if (!v) return false;
                     int cmp = 0;
@@ -7983,7 +8035,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                         case openads::sql::WhereOp::Gt: return cmp >  0;
                         case openads::sql::WhereOp::Le: return cmp <= 0;
                         case openads::sql::WhereOp::Ge: return cmp >= 0;
-                        default: return false;
+                    default: return false;
                     }
                 }};
             };
@@ -9261,8 +9313,27 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             bool is_num = w.is_numeric;
             double num  = w.number;
             double num2 = w.number2;
-            return CondPred{[f, op, lit, lit2, is_num, num, num2]
+            std::shared_ptr<std::unordered_set<std::uint32_t>> contains_hits;
+            if (op == openads::sql::WhereOp::Contains) {
+                namespace fs = std::filesystem;
+                fs::path fts_path =
+                    fs::path(tbl->path()).replace_extension(".fts");
+                auto loaded = openads::engine::Fts::load(fts_path.string());
+                if (loaded) {
+                    openads::engine::FtsOptions opts;
+                    auto hits = openads::engine::Fts::search(
+                        loaded.value(), lit, opts);
+                    contains_hits =
+                        std::make_shared<std::unordered_set<std::uint32_t>>(
+                            hits.begin(), hits.end());
+                }
+            }
+            return CondPred{[f, op, lit, lit2, is_num, num, num2, contains_hits]
                             (openads::engine::Table& t) {
+                if (op == openads::sql::WhereOp::Contains) {
+                    if (!contains_hits) return false;
+                    return contains_hits->find(t.recno()) != contains_hits->end();
+                }
                 auto v = t.read_field(f);
                 if (!v) return false;
                 if (op == openads::sql::WhereOp::Between) {
@@ -9294,7 +9365,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     case openads::sql::WhereOp::Gt: return cmp >  0;
                     case openads::sql::WhereOp::Le: return cmp <= 0;
                     case openads::sql::WhereOp::Ge: return cmp >= 0;
-                    default: return false;
+                default: return false;
                 }
             }};
         };

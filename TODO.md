@@ -96,11 +96,17 @@ Check off completed work and commit the file update so it stays current.
 
 ### Open
 
-- [ ] **`CONTAINS` / `LIKE` in join-cursor and aggregate `WHERE`**.
+- [x] **`CONTAINS` / `LIKE` in join-cursor and aggregate `WHERE`**.
       Both the join-cursor compile path and the aggregate `FILTER`
       compile path only handle `Cmp / AND / OR / NOT` — anything else
       returns `AE_FUNCTION_NOT_AVAILABLE`. `CONTAINS` and `LIKE` are
-      the most common missing operators.
+      the most common missing operators. Fixed in `ace_exports.cpp`:
+      join-cursor compile lambda, aggregate FILTER `cf` lambda, and
+      CASE WHEN `compile_cond` lambda all now support LIKE (strip
+      trailing spaces + `sql_like_match`) and CONTAINS (load `.fts`
+      via `Fts::load/search` before building the lambda; capture the
+      hit set by `shared_ptr`). 3 new tests in
+      `tests/unit/abi_sql_contains_test.cpp`. (2026-05-24)
 
 - [ ] **`CASE WHEN` conditions beyond `Cmp/AND/OR/NOT`**.
       Same restriction in the `CASE WHEN` condition compiler. In

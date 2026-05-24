@@ -14,6 +14,52 @@ namespace fs = std::filesystem;
 
 namespace {
 
+void write_dbf(const fs::path& path,
+               const std::vector<std::pair<std::string,
+                   std::pair<char, std::uint8_t>>>& schema,
+               const std::vector<std::vector<std::string>>& rows) {
+    std::vector<std::uint8_t> file;
+    auto push = [&](const void* d, std::size_t n) {
+        const auto* b = static_cast<const std::uint8_t*>(d);
+        file.insert(file.end(), b, b + n);
+    };
+    std::array<std::uint8_t, 32> hdr{};
+    hdr[0]  = 0x03;
+    hdr[4]  = static_cast<std::uint8_t>(rows.size());
+    std::uint16_t header_len = static_cast<std::uint16_t>(
+        32 + 32 * schema.size() + 1);
+    std::uint16_t rec_len = 1;
+    for (auto& s : schema) rec_len += s.second.second;
+    hdr[8]  = static_cast<std::uint8_t>( header_len       & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>( rec_len          & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rec_len    >> 8) & 0xFFu);
+    push(hdr.data(), hdr.size());
+    for (auto& s : schema) {
+        std::array<std::uint8_t, 32> fd{};
+        std::strncpy(reinterpret_cast<char*>(fd.data()),
+                     s.first.c_str(), 11);
+        fd[11] = static_cast<std::uint8_t>(s.second.first);
+        fd[16] = s.second.second;
+        push(fd.data(), fd.size());
+    }
+    file.push_back(0x0D);
+    for (auto& row : rows) {
+        file.push_back(' ');
+        for (std::size_t i = 0; i < schema.size(); ++i) {
+            const auto& v = row[i];
+            std::uint8_t L = schema[i].second.second;
+            for (std::uint8_t k = 0; k < L; ++k)
+                file.push_back(k < v.size()
+                    ? static_cast<std::uint8_t>(v[k]) : ' ');
+        }
+    }
+    file.push_back(0x1A);
+    std::ofstream(path, std::ios::binary).write(
+        reinterpret_cast<const char*>(file.data()),
+        static_cast<std::streamsize>(file.size()));
+}
+
 fs::path stage_dbf(const fs::path& dir) {
     fs::create_directories(dir);
     auto p = dir / "data.dbf";
@@ -170,6 +216,137 @@ TEST_CASE("M9.21 SQL CONTAINS without prebuilt .fts errors out") {
     ADSHANDLE hCur = 0;
     UNSIGNED32 rc = AdsExecuteSQLDirect(hStmt, sql, &hCur);
     CHECK(rc != 0);
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.like SQL LIKE in join cursor WHERE") {
+    auto dir = fs::temp_directory_path() / "openads_m10_like_join";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "empl.dbf",
+        {{"ID",   {'C', 4}}, {"NAME", {'C', 10}}},
+        {{"E001", "Alice"},
+         {"E002", "Bob"},
+         {"E003", "Alan"}});
+    write_dbf(dir / "dept.dbf",
+        {{"ID",   {'C', 4}}, {"DEPT", {'C', 8}}},
+        {{"E001", "Eng"},
+         {"E002", "Mktg"},
+         {"E003", "Eng"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Join, then filter on the left-side NAME using LIKE.
+    UNSIGNED8 sql[256] =
+        "SELECT * FROM empl.dbf INNER JOIN dept.dbf ON ID = ID "
+        "WHERE NAME LIKE 'Al%'";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hCur, 0, &cnt) == 0);
+    CHECK(cnt == 2);  // Alice (E001) and Alan (E003) both match
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.like SQL LIKE in aggregate FILTER") {
+    auto dir = fs::temp_directory_path() / "openads_m10_like_agg_filter";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    write_dbf(dir / "data.dbf",
+        {{"NAME", {'C', 10}}},
+        {{"Alice"},
+         {"Bob"},
+         {"Alan"},
+         {"Carol"}});
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    UNSIGNED8 sql[256] =
+        "SELECT COUNT(*) FILTER (WHERE NAME LIKE 'Al%'), "
+        "COUNT(*) FILTER (WHERE NAME LIKE '%o%') FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+
+    UNSIGNED8 buf1[32] = {0}; UNSIGNED32 cap1 = sizeof(buf1);
+    UNSIGNED8 col1[8] = "COL1";
+    REQUIRE(AdsGetField(hCur, col1, buf1, &cap1, 0) == 0);
+    auto s1 = std::string(reinterpret_cast<const char*>(buf1), cap1);
+    while (!s1.empty() && s1.back() == ' ') s1.pop_back();
+    CHECK(s1 == "2");  // Alice, Alan
+
+    UNSIGNED8 buf2[32] = {0}; UNSIGNED32 cap2 = sizeof(buf2);
+    UNSIGNED8 col2[8] = "COL2";
+    REQUIRE(AdsGetField(hCur, col2, buf2, &cap2, 0) == 0);
+    auto s2 = std::string(reinterpret_cast<const char*>(buf2), cap2);
+    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+    CHECK(s2 == "2");  // Bob, Carol
+
+    REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("M10.contains SQL CONTAINS in aggregate FILTER") {
+    auto dir = fs::temp_directory_path() / "openads_m10_contains_agg_filter";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    stage_dbf(dir);
+
+    UNSIGNED8 srv[256];
+    std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srv, ADS_LOCAL_SERVER,
+                         nullptr, nullptr, 0, &hConn) == 0);
+    make_fts(hConn);
+
+    ADSHANDLE hStmt = 0;
+    REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
+
+    // Records 1 and 3 contain "fox"; total row count is 4.
+    UNSIGNED8 sql[256] =
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE CONTAINS(NOTES, 'fox')) "
+        "FROM data.dbf";
+    ADSHANDLE hCur = 0;
+    REQUIRE(AdsExecuteSQLDirect(hStmt, sql, &hCur) == 0);
+    REQUIRE(AdsGotoTop(hCur) == 0);
+
+    UNSIGNED8 buf1[32] = {0}; UNSIGNED32 cap1 = sizeof(buf1);
+    UNSIGNED8 col1[8] = "COL1";
+    REQUIRE(AdsGetField(hCur, col1, buf1, &cap1, 0) == 0);
+    auto s1 = std::string(reinterpret_cast<const char*>(buf1), cap1);
+    while (!s1.empty() && s1.back() == ' ') s1.pop_back();
+    CHECK(s1 == "4");  // all rows
+
+    UNSIGNED8 buf2[32] = {0}; UNSIGNED32 cap2 = sizeof(buf2);
+    UNSIGNED8 col2[8] = "COL2";
+    REQUIRE(AdsGetField(hCur, col2, buf2, &cap2, 0) == 0);
+    auto s2 = std::string(reinterpret_cast<const char*>(buf2), cap2);
+    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+    CHECK(s2 == "2");  // records 1 and 3
 
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
