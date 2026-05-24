@@ -32,6 +32,7 @@ public:
                                        const void* buf, std::size_t n);
     util::Result<std::uint64_t> size() const;
     util::Result<void> sync();
+    util::Result<void> truncate(std::uint64_t size);
 
     // Native handle access for the lock + mmap layers below.
     void*    native_handle() const noexcept { return native_; }

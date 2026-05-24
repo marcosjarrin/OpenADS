@@ -57,12 +57,16 @@ Check off completed work and commit the file update so it stays current.
 
 ## ADT / ADM driver
 
-### Open
+### Done
 
-- [ ] **`AdsPackTable` / `AdsZapTable`** for ADT.
-      Currently stubbed as `AE_FUNCTION_NOT_AVAILABLE`. Need to
-      compact the ADT by rewriting active records, rebuilding the
-      header, and truncating the file.
+- [x] **`AdsPackTable` / `AdsZapTable`** for ADT.
+      `platform::File::truncate()` added (Win32 + POSIX). `AdtDriver::zap()`
+      truncates the file to `hdr_len` after zeroing the record count, so
+      `Table::pack()` (zap + re-append survivors) leaves no stale bytes.
+      Tests in `tests/unit/abi_zap_pack_test.cpp` verify record count,
+      field values, and exact file size post-operation. (2026-05-24)
+
+### Open
 
 ---
 

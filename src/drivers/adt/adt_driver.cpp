@@ -299,6 +299,11 @@ util::Result<void> AdtDriver::zap() {
     }
     rec_count_ = 0;
     if (auto r = rewrite_header_(); !r) return r.error();
+    // Truncate to the header length so stale record bytes don't linger.
+    // Table::pack() calls zap() then re-appends survivors, so this also
+    // gives pack a clean starting point.
+    if (auto r = file_.truncate(static_cast<std::uint64_t>(hdr_len_)); !r)
+        return r.error();
     return file_.sync();
 }
 

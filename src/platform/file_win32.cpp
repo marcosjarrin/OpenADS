@@ -112,6 +112,17 @@ util::Result<void> File::sync() {
     return {};
 }
 
+util::Result<void> File::truncate(std::uint64_t size) {
+    LARGE_INTEGER li{};
+    li.QuadPart = static_cast<LONGLONG>(size);
+    if (!::SetFilePointerEx(reinterpret_cast<HANDLE>(native_), li, nullptr,
+                            FILE_BEGIN))
+        return os_error("SetFilePointerEx");
+    if (!::SetEndOfFile(reinterpret_cast<HANDLE>(native_)))
+        return os_error("SetEndOfFile");
+    return {};
+}
+
 } // namespace openads::platform
 
 #endif // _WIN32

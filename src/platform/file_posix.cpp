@@ -97,6 +97,13 @@ util::Result<void> File::sync() {
     return {};
 }
 
+util::Result<void> File::truncate(std::uint64_t size) {
+    int fd = static_cast<int>(fd_from_native(native_));
+    if (::ftruncate(fd, static_cast<off_t>(size)) != 0)
+        return os_error("ftruncate");
+    return {};
+}
+
 } // namespace openads::platform
 
 #endif // !_WIN32
