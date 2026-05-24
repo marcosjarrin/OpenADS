@@ -52,7 +52,7 @@ std::uint16_t page_count(const std::uint8_t* pg) noexcept { return u16_le(pg+2);
 std::uint32_t page_lsib (const std::uint8_t* pg) noexcept { return u32_le(pg+4); }
 std::uint32_t page_rsib (const std::uint8_t* pg) noexcept { return u32_le(pg+8); }
 
-// ── Branch/sparse entry (level 0 and 1): starts at offset 12 ─────────────────
+// ── Numeric branch entry (level 0 and 1): starts at offset 12 ───────────────
 // Format: key[8](BE sign-flipped float64) + cum[4](BE uint32) + page_no[4](BE uint32)
 
 std::uint32_t tree_entry_page(const std::uint8_t* pg, int idx) noexcept {
@@ -62,6 +62,23 @@ std::uint32_t tree_entry_page(const std::uint8_t* pg, int idx) noexcept {
 
 const std::uint8_t* tree_entry_key(const std::uint8_t* pg, int idx) noexcept {
     return pg + ADI_TREE_ENTRY_START + idx * ADI_TREE_ENTRY_SIZE;
+}
+
+// ── Character branch entry (level 1 for char-key ADI) ────────────────────────
+// Format: padded_key[key_padded_len] + cum[4 LE] + page[1]
+
+std::uint32_t char_tree_entry_page(const std::uint8_t* pg, int idx,
+                                   std::uint32_t entry_sz,
+                                   std::uint32_t key_padded_len) noexcept {
+    const std::uint8_t* e = pg + ADI_TREE_ENTRY_START
+                            + static_cast<std::uint32_t>(idx) * entry_sz;
+    return static_cast<std::uint32_t>(e[key_padded_len + 4]);
+}
+
+const std::uint8_t* char_tree_entry_key(const std::uint8_t* pg, int idx,
+                                        std::uint32_t entry_sz) noexcept {
+    return pg + ADI_TREE_ENTRY_START
+           + static_cast<std::uint32_t>(idx) * entry_sz;
 }
 
 // ── Dense-leaf entry: starts at offset 24 ────────────────────────────────────
@@ -99,32 +116,35 @@ double unpack_double_key(const std::string& key) {
     return v;
 }
 
-// Encode an ADT field value to ADI key bytes, given ADT type and field data
+// Encode an ADT field value to ADI key bytes, given ADT type and field data.
+// For character types (CICHAR, CHAR): returns the raw field bytes (length bytes).
+// For numeric types: returns an 8-byte sign-flipped BE float64.
 std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
                            std::uint16_t length) {
+    // Character types: key is the raw field data (space-padded in ADT already)
+    if (adt_type == ADT_TYPE_CICHAR || adt_type == ADT_TYPE_CHAR) {
+        return std::string(reinterpret_cast<const char*>(data), length);
+    }
+
     double val = 0.0;
     switch (adt_type) {
         case ADT_TYPE_DATE: {
-            // 4-byte LE uint32 JDN
             std::uint32_t jdn = u32_le(data);
             val = static_cast<double>(jdn);
             break;
         }
         case ADT_TYPE_AUTOINC:
         case ADT_TYPE_TIME: {
-            // 4-byte LE uint32
             std::uint32_t v = u32_le(data);
             val = static_cast<double>(v);
             break;
         }
         case ADT_TYPE_INTEGER: {
-            // 4-byte LE int32
             std::int32_t v = static_cast<std::int32_t>(u32_le(data));
             val = static_cast<double>(v);
             break;
         }
         case ADT_TYPE_SHORTINT: {
-            // 2-byte LE int16
             std::int16_t v = static_cast<std::int16_t>(u16_le(data));
             val = static_cast<double>(v);
             break;
@@ -132,7 +152,6 @@ std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
         case ADT_TYPE_DOUBLE:
         case ADT_TYPE_MONEY:
         case ADT_TYPE_MODTIME: {
-            // 8-byte IEEE754 LE (same bit pattern, just flip+reverse)
             std::uint8_t raw[8];
             std::memcpy(raw, data, 8);
             std::reverse(raw, raw + 8);
@@ -140,16 +159,12 @@ std::string encode_adt_key(std::uint16_t adt_type, const std::uint8_t* data,
             return std::string(reinterpret_cast<char*>(raw), 8);
         }
         case ADT_TYPE_TIMESTAMP: {
-            // 8-byte: 4-byte JDN LE + 4-byte ms LE
-            // Key = double(JDN) * 86400000 + ms, treat as int64?
-            // Simplify: treat full 8 bytes as uint64 LE
             std::uint64_t v = static_cast<std::uint64_t>(u32_le(data)) |
                               (static_cast<std::uint64_t>(u32_le(data+4)) << 32);
             val = static_cast<double>(v);
             break;
         }
         default:
-            // Unsupported type: return zero key
             (void)length;
             return std::string(8, '\0');
     }
@@ -217,19 +232,37 @@ util::Result<AdiIndex::Page> read_one_page(platform::File& f,
     return pg;
 }
 
-// Parse "F<digits>" F-marker, return field number (1-based) or 0 on failure.
-std::uint8_t parse_fmarker(const AdiIndex::Page& pg) noexcept {
-    if (pg[0] != 'F') return 0;
-    if (pg[1] < '1' || pg[1] > '9') return 0;
-    std::uint32_t n = pg[1] - '0';
-    for (std::size_t i = 2; i < 8 && pg[i] >= '0' && pg[i] <= '9'; ++i)
-        n = n * 10 + (pg[i] - '0');
-    // Must be followed by NUL
-    return (n > 0 && n <= 255) ? static_cast<std::uint8_t>(n) : 0;
+// Parse an F-marker page and return ALL 1-based field numbers it encodes.
+// Single-field example:  "F1\0..."   → [1]
+// Compound-field example: "F2;F14\0" → [2, 14]
+// Returns an empty vector for invalid/unrecognised markers.
+std::vector<std::uint8_t> parse_fmarker_all(const AdiIndex::Page& pg) {
+    if (pg[0] != 'F') return {};
+    std::vector<std::uint8_t> result;
+    std::size_t i = 1;  // skip leading 'F'
+    while (i < ADI_PAGE_SIZE) {
+        if (pg[i] < '1' || pg[i] > '9') break;
+        std::uint32_t n = 0;
+        while (i < ADI_PAGE_SIZE && pg[i] >= '0' && pg[i] <= '9')
+            n = n * 10 + (pg[i++] - '0');
+        if (n > 0 && n <= 255) result.push_back(static_cast<std::uint8_t>(n));
+        // Compound separator: ';' followed by 'F'
+        if (i + 1 < ADI_PAGE_SIZE && pg[i] == ';' && pg[i+1] == 'F')
+            i += 2;
+        else
+            break;
+    }
+    return result;
 }
 
-// Scan tag directory (page 2) and return (field_num, root_page) pairs in order.
-util::Result<std::vector<std::pair<std::uint8_t,std::uint32_t>>>
+// One entry in the tag directory scan result.
+struct TagEntry {
+    std::vector<std::uint8_t> fnums;  // 1-based field numbers (≥1 element)
+    std::uint32_t             root_pg;
+};
+
+// Scan tag directory (page 2) and return all tag entries.
+util::Result<std::vector<TagEntry>>
 scan_tagdir(platform::File& adi_f) {
     AdiIndex::Page pg2;
     auto got = adi_f.read_at(2 * ADI_PAGE_SIZE, pg2.data(), pg2.size());
@@ -237,23 +270,22 @@ scan_tagdir(platform::File& adi_f) {
         return util::Error{6106, 0, "can't read ADI tag directory", ""};
 
     std::uint16_t count = u16_le(pg2.data() + 2);
-    std::vector<std::pair<std::uint8_t,std::uint32_t>> tags;
+    std::vector<TagEntry> tags;
     tags.reserve(count);
 
     for (std::uint16_t i = 0; i < count; ++i) {
         std::size_t off = ADI_TAGDIR_ENTRY_START + i * ADI_TAGDIR_ENTRY_SIZE;
         if (off + 1 >= ADI_PAGE_SIZE) break;
-        std::uint8_t  xx       = pg2[off];         // F-marker page = xx + 1
-        std::uint32_t fmk_pg   = xx + 1u;
-        std::uint32_t root_pg  = fmk_pg + 1u;
+        std::uint8_t  xx      = pg2[off];
+        std::uint32_t fmk_pg  = static_cast<std::uint32_t>(xx) + 1u;
+        std::uint32_t root_pg = fmk_pg + 1u;
 
-        // Verify F-marker
         auto fmk = read_one_page(adi_f, fmk_pg);
         if (!fmk) continue;
-        std::uint8_t fnum = parse_fmarker(fmk.value());
-        if (fnum == 0) continue;
+        auto fnums = parse_fmarker_all(fmk.value());
+        if (fnums.empty()) continue;
 
-        tags.push_back({fnum, root_pg});
+        tags.push_back({std::move(fnums), root_pg});
     }
     return tags;
 }
@@ -301,30 +333,51 @@ util::Result<void> AdiIndex::refresh_current_() {
     return {};
 }
 
+// ── AdiIndex::branch_entry_page_ ────────────────────────────────────────────
+
+std::uint32_t AdiIndex::branch_entry_page_(const std::uint8_t* pg,
+                                           int idx) const noexcept {
+    if (char_key_)
+        return char_tree_entry_page(pg, idx, branch_entry_sz_,
+                                    char_key_padded_len_);
+    return tree_entry_page(pg, idx);
+}
+
 // ── AdiIndex::key_for_recno_ ─────────────────────────────────────────────────
 
 util::Result<std::string> AdiIndex::key_for_recno_(std::uint32_t recno) {
     if (recno == 0 || adt_rec_len_ == 0)
-        return std::string(8, '\0');
+        return std::string(key_total_len_, '\0');
 
-    // ADT records are 1-based
-    std::uint64_t offset = static_cast<std::uint64_t>(adt_hdr_len_)
-                         + static_cast<std::uint64_t>(recno - 1) * adt_rec_len_;
+    // ADT records are 1-based; offset past the 1-byte deleted flag is in fld_offset_
+    std::uint64_t rec_off = static_cast<std::uint64_t>(adt_hdr_len_)
+                          + static_cast<std::uint64_t>(recno - 1) * adt_rec_len_;
 
-    // Read just the field bytes (field is within the record at fld_offset_)
-    std::vector<std::uint8_t> buf(fld_length_);
-    auto got = adt_file_.read_at(offset + fld_offset_, buf.data(), fld_length_);
-    if (!got) return got.error();
-    if (got.value() < fld_length_)
-        return std::string(8, '\0');
+    // Build the full (possibly compound) key by concatenating all components.
+    std::string result;
+    result.reserve(key_total_len_);
 
-    return encode_adt_key(adt_type_, buf.data(), fld_length_);
+    for (const auto& kf : key_fields_) {
+        std::vector<std::uint8_t> buf(kf.length);
+        auto got = adt_file_.read_at(rec_off + kf.offset, buf.data(), kf.length);
+        if (!got || got.value() < kf.length) {
+            // Unreadable field: pad with zeros / spaces
+            bool is_c = (kf.type == ADT_TYPE_CICHAR || kf.type == ADT_TYPE_CHAR);
+            result.append(is_c ? kf.length : 8u, is_c ? ' ' : '\0');
+        } else {
+            result += encode_adt_key(kf.type, buf.data(), kf.length);
+        }
+    }
+    return result;
 }
 
 // ── AdiIndex::compare_keys_ ─────────────────────────────────────────────────
 
-int AdiIndex::compare_keys_(const std::string& a, const std::string& b) noexcept {
-    return std::memcmp(a.data(), b.data(), 8);
+int AdiIndex::compare_keys_(const std::string& a,
+                             const std::string& b) const noexcept {
+    std::size_t len = std::min({a.size(), b.size(),
+                                static_cast<std::size_t>(key_total_len_)});
+    return std::memcmp(a.data(), b.data(), len);
 }
 
 // ── AdiIndex::make_positioned_ ──────────────────────────────────────────────
@@ -341,7 +394,6 @@ SeekOutcome AdiIndex::make_positioned_() const {
 
 util::Result<SeekOutcome> AdiIndex::navigate_leftmost_() {
     Page pg{};
-    // Descend branch → sparse leaf → dense leaf
     std::uint32_t cur = root_page_;
     for (;;) {
         if (auto r = read_adi_page_(cur, pg); !r) return r.error();
@@ -350,8 +402,7 @@ util::Result<SeekOutcome> AdiIndex::navigate_leftmost_() {
         if (ct == 0) {
             SeekOutcome o; o.hit = SeekHit::AfterEnd; return o;
         }
-        if (lv == ADI_LVL_DENSE) {
-            // arrived at a dense leaf
+        if (is_dense_leaf(lv)) {
             cur_page_ = pg;
             cur_pg_   = cur;
             cur_cnt_  = ct;
@@ -361,8 +412,8 @@ util::Result<SeekOutcome> AdiIndex::navigate_leftmost_() {
             if (auto r = refresh_current_(); !r) return r.error();
             return make_positioned_();
         }
-        // branch or sparse leaf: follow first entry's child page
-        cur = tree_entry_page(pg.data(), 0);
+        // Branch or sparse leaf: follow the first entry's child page.
+        cur = branch_entry_page_(pg.data(), 0);
     }
 }
 
@@ -378,7 +429,7 @@ util::Result<SeekOutcome> AdiIndex::navigate_rightmost_() {
         if (ct == 0) {
             SeekOutcome o; o.hit = SeekHit::AfterEnd; return o;
         }
-        if (lv == ADI_LVL_DENSE) {
+        if (is_dense_leaf(lv)) {
             cur_page_ = pg;
             cur_pg_   = cur;
             cur_cnt_  = ct;
@@ -388,28 +439,83 @@ util::Result<SeekOutcome> AdiIndex::navigate_rightmost_() {
             if (auto r = refresh_current_(); !r) return r.error();
             return make_positioned_();
         }
-        cur = tree_entry_page(pg.data(), static_cast<int>(ct) - 1);
+        cur = branch_entry_page_(pg.data(), static_cast<int>(ct) - 1);
     }
 }
 
 // ── IIndex public navigation ─────────────────────────────────────────────────
 
+// ── AdiIndex::apply_tag_ ────────────────────────────────────────────────────
+
+util::Result<void> AdiIndex::apply_tag_(
+    const std::vector<std::uint8_t>& fnums,
+    std::uint32_t                    root_pg,
+    const std::vector<std::uint16_t>& fd_types,
+    const std::vector<std::uint16_t>& fd_offsets,
+    const std::vector<std::uint16_t>& fd_lengths,
+    const std::vector<std::string>&   fd_names,
+    std::uint32_t hlen, std::uint32_t rlen)
+{
+    if (fnums.empty())
+        return util::Error{5004, 0, "ADI tag has no field numbers", ""};
+
+    key_fields_.clear();
+    std::uint32_t total_key_len = 0;
+    bool first = true;
+
+    for (std::uint8_t fnum : fnums) {
+        if (fnum == 0 || fnum > static_cast<unsigned>(fd_types.size()))
+            return util::Error{5004, 0, "ADI field number out of range", ""};
+        std::size_t fi = static_cast<std::size_t>(fnum) - 1u;  // 1-based → 0-based
+
+        FieldComp kf;
+        kf.type   = fd_types[fi];
+        kf.offset = fd_offsets[fi];
+        kf.length = fd_lengths[fi];
+        key_fields_.push_back(kf);
+
+        bool is_c = (kf.type == ADT_TYPE_CICHAR || kf.type == ADT_TYPE_CHAR);
+        total_key_len += is_c ? static_cast<std::uint32_t>(kf.length) : 8u;
+
+        if (first) {
+            tag_name_   = fd_names[fi];
+            root_page_  = root_pg;
+            adt_type_   = kf.type;
+            fld_offset_ = kf.offset;
+            fld_length_ = kf.length;
+            char_key_   = is_c;
+            first = false;
+        }
+    }
+
+    adt_hdr_len_   = hlen;
+    adt_rec_len_   = rlen;
+    key_total_len_ = total_key_len;
+    entry_size_    = dense_entry_size(fld_length_);
+
+    if (char_key_) {
+        char_key_padded_len_ = (total_key_len + 3u) & ~3u;
+        branch_entry_sz_     = char_key_padded_len_ + 5u;
+    } else {
+        char_key_padded_len_ = 0;
+        branch_entry_sz_     = ADI_TREE_ENTRY_SIZE;
+    }
+    return {};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
-    // open() is a thin wrapper: opens the first tag found
     auto fi = platform::File::open(path, map_open_mode(mode));
     if (!fi) return fi.error();
     adi_file_ = std::move(fi).value();
     adi_path_ = path;
 
-    // Find first tag in directory
     auto tags = scan_tagdir(adi_file_);
     if (!tags) return tags.error();
     if (tags.value().empty())
         return util::Error{5004, 0, "ADI has no tags", path};
 
-    auto [fnum, root_pg] = tags.value()[0];
-
-    // Open ADT companion
     std::string adt_p = adt_path_for(path);
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
@@ -418,19 +524,18 @@ util::Result<void> AdiIndex::open(const std::string& path, IndexOpenMode mode) {
     std::uint32_t hlen = 0, rlen = 0;
     auto fields = read_adt_fields(adt_file_, hlen, rlen);
     if (!fields) return fields.error();
-    if (fnum == 0 || fnum > static_cast<int>(fields.value().size()))
-        return util::Error{5004, 0, "ADI field number out of range", ""};
 
-    const auto& fd = fields.value()[fnum - 1]; // 1-based → 0-indexed
-    tag_name_    = fd.name;
-    root_page_   = root_pg;
-    adt_type_    = fd.type;
-    fld_offset_  = fd.offset;
-    fld_length_  = fd.length;
-    adt_hdr_len_ = hlen;
-    adt_rec_len_ = rlen;
-    entry_size_  = dense_entry_size(fld_length_);
-    return {};
+    const TagEntry& tag = tags.value()[0];
+    std::vector<std::uint16_t> types, offsets, lengths;
+    std::vector<std::string>   names;
+    for (const auto& fd : fields.value()) {
+        types.push_back(fd.type);
+        offsets.push_back(fd.offset);
+        lengths.push_back(fd.length);
+        names.push_back(fd.name);
+    }
+    return apply_tag_(tag.fnums, tag.root_pg, types, offsets, lengths, names,
+                      hlen, rlen);
 }
 
 util::Result<void> AdiIndex::open_named(const std::string& adi_path,
@@ -444,7 +549,6 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
     auto tags = scan_tagdir(adi_file_);
     if (!tags) return tags.error();
 
-    // Open ADT to get field names
     std::string adt_p = adt_path_for(adi_path);
     auto fa = platform::File::open(adt_p, platform::OpenMode::ReadOnly);
     if (!fa) return fa.error();
@@ -453,10 +557,7 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
     std::uint32_t hlen = 0, rlen = 0;
     auto fields = read_adt_fields(adt_file_, hlen, rlen);
     if (!fields) return fields.error();
-    adt_hdr_len_ = hlen;
-    adt_rec_len_ = rlen;
 
-    // Find the tag whose field name matches (case-insensitive)
     auto name_eq = [](const std::string& a, const std::string& b) {
         if (a.size() != b.size()) return false;
         for (std::size_t i = 0; i < a.size(); ++i) {
@@ -466,17 +567,23 @@ util::Result<void> AdiIndex::open_named(const std::string& adi_path,
         return true;
     };
 
-    for (auto [fnum, root_pg] : tags.value()) {
-        if (fnum == 0 || fnum > static_cast<int>(fields.value().size())) continue;
+    std::vector<std::uint16_t> types, offsets, lengths;
+    std::vector<std::string>   names;
+    for (const auto& fd : fields.value()) {
+        types.push_back(fd.type);
+        offsets.push_back(fd.offset);
+        lengths.push_back(fd.length);
+        names.push_back(fd.name);
+    }
+
+    for (const auto& tag : tags.value()) {
+        if (tag.fnums.empty()) continue;
+        std::uint8_t fnum = tag.fnums[0];
+        if (fnum == 0 || fnum > static_cast<unsigned>(fields.value().size())) continue;
         const auto& fd = fields.value()[fnum - 1];
         if (!name_eq(fd.name, field_name)) continue;
-        tag_name_   = fd.name;
-        root_page_  = root_pg;
-        adt_type_   = fd.type;
-        fld_offset_ = fd.offset;
-        fld_length_ = fd.length;
-        entry_size_ = dense_entry_size(fld_length_);
-        return {};
+        return apply_tag_(tag.fnums, tag.root_pg, types, offsets, lengths, names,
+                          hlen, rlen);
     }
     return util::Error{5004, 0, "ADI tag not found: " + field_name, adi_path};
 }
@@ -503,9 +610,10 @@ AdiIndex::list_tags(const std::string& adi_path) {
 
     std::vector<std::string> names;
     names.reserve(tags.value().size());
-    for (auto [fnum, root_pg] : tags.value()) {
-        (void)root_pg;
-        if (fnum == 0 || fnum > static_cast<int>(fields.value().size())) continue;
+    for (const auto& tag : tags.value()) {
+        if (tag.fnums.empty()) continue;
+        std::uint8_t fnum = tag.fnums[0];
+        if (fnum == 0 || fnum > static_cast<unsigned>(fields.value().size())) continue;
         names.push_back(fields.value()[fnum - 1].name);
     }
     return names;
@@ -572,22 +680,25 @@ util::Result<SeekOutcome> AdiIndex::prev() {
 // by comparing actual ADT field values (since dense leaves don't store keys).
 
 util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) {
+    // Character-key binary seek is not yet implemented: fall back to leftmost.
+    // Callers that need accurate seek on char-key ADI tags must use a full scan.
+    if (char_key_) {
+        return navigate_leftmost_();
+    }
     if (key.size() != 8) {
-        // Fall back to first for unsupported key sizes
         return navigate_leftmost_();
     }
 
     Page pg{};
 
-    // ── Level 1 (branch/root) → find the sparse-leaf child ────────────────
+    // ── Level 1 (branch/root) → find the sparse-leaf or dense-leaf child ──
     if (auto r = read_adi_page_(root_page_, pg); !r) return r.error();
     std::uint16_t lv  = page_level(pg.data());
     std::uint16_t cnt = page_count(pg.data());
     if (cnt == 0) { SeekOutcome o; o.hit = SeekHit::AfterEnd; return o; }
 
-    // Walk branches until we reach a sparse leaf (level 0)
-    while (lv != ADI_LVL_SPARSE && lv != ADI_LVL_DENSE) {
-        // Find first entry whose key >= seek key
+    // Walk non-leaf branch pages (level 1) until sparse leaf (level 0) or dense.
+    while (lv != ADI_LVL_SPARSE && !is_dense_leaf(lv)) {
         int chosen = cnt - 1;
         for (int i = 0; i < cnt; ++i) {
             const std::uint8_t* ek = tree_entry_key(pg.data(), i);
@@ -603,9 +714,8 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
     std::uint32_t dense_pg = ADI_INVALID_PAGE;
 
     if (lv == ADI_LVL_SPARSE) {
-        // ── Level 0 (sparse leaf) → find the dense-leaf page ──────────────
-        // Each sparse entry's key is the MAX key in the covered dense leaf.
-        // Find first entry whose key >= seek key.
+        // Level 0 (sparse leaf): each entry points to a dense leaf.
+        // Find the first sparse entry whose key >= seek key.
         int chosen = cnt - 1;
         for (int i = 0; i < cnt; ++i) {
             const std::uint8_t* ek = tree_entry_key(pg.data(), i);
@@ -613,26 +723,22 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
         }
         dense_pg = tree_entry_page(pg.data(), chosen);
     } else {
-        // Arrived at dense leaf directly (tiny index with root=dense)
+        // Root IS the dense leaf (tiny single-page index).
         dense_pg = root_page_;
-        // reload
         if (auto r = read_adi_page_(dense_pg, pg); !r) return r.error();
         cnt = page_count(pg.data());
     }
 
-    // ── Level 2 (dense leaf) → linear scan by comparing ADT field values ──
+    // Dense leaf: linear scan comparing ADT field values against the seek key.
     if (auto r = load_dense_leaf_(dense_pg); !r) return r.error();
 
-    // Scan entries: the dense leaf is sorted by key, find first entry >= key
     for (int i = 0; i < static_cast<int>(cur_cnt_); ++i) {
         std::uint32_t rno = dense_entry_recno(cur_page_.data(), i, entry_size_);
         auto ck = key_for_recno_(rno);
         if (!ck) return ck.error();
         int cmp = compare_keys_(ck.value(), key);
         if (cmp > 0) {
-            // Overshot: key not found
             if (soft) {
-                // Position before this entry
                 cur_idx_ = i;
                 cur_recno_ = rno;
                 current_key_ = std::move(ck).value();
@@ -651,7 +757,7 @@ util::Result<SeekOutcome> AdiIndex::seek_key(const std::string& key, bool soft) 
             return make_positioned_();
         }
     }
-    // Key is beyond everything in this dense leaf; try rsib
+    // Key beyond this dense leaf: try right sibling.
     if (cur_rsib_ != ADI_INVALID_PAGE) {
         if (auto r = load_dense_leaf_(cur_rsib_); !r) return r.error();
         if (cur_cnt_ > 0) {

@@ -13,18 +13,26 @@ namespace openads::drivers::adi {
 constexpr std::uint32_t ADI_PAGE_SIZE    = 512;
 constexpr std::uint32_t ADI_INVALID_PAGE = 0xFFFFFFFFu;
 
-// ADI B-tree level constants (observed from real ADI files)
-// Levels 0-2 are unconfirmed (only seen in tiny tables with no branch pages).
-// Level 3 is confirmed: both dense-leaf pages and the tag-directory page carry
-// level=3 in their header, but the tag directory is always accessed directly by
-// page number so the collision is harmless.
+// ADI B-tree level constants (observed from real ADI files).
+// Level 2 and 3 are both dense-leaf levels:
+//   level 3 — numeric-key indexes (landlords.adi) or single-page root
+//   level 2 — character-key indexes with a branch level above (leases.adi)
+// The tag-directory page (page 2) also carries level=3 but is always accessed
+// directly by page number, so the collision with dense-leaf detection is harmless.
 constexpr std::uint16_t ADI_LVL_SPARSE = 0;  // sparse leaf: ref → dense leaf
-constexpr std::uint16_t ADI_LVL_BRANCH = 1;  // root/branch: ref → sparse leaf
-constexpr std::uint16_t ADI_LVL_DENSE  = 3;  // dense leaf: individual record entries
+constexpr std::uint16_t ADI_LVL_BRANCH = 1;  // root/branch: ref → sparse/dense leaf
+constexpr std::uint16_t ADI_LVL_DENSE2 = 2;  // dense leaf (character-key indexes)
+constexpr std::uint16_t ADI_LVL_DENSE  = 3;  // dense leaf (numeric-key indexes)
 constexpr std::uint16_t ADI_LVL_TAGDIR = 3;  // tag directory (page 2 only)
 
-// Entry sizes
-constexpr std::uint32_t ADI_TREE_ENTRY_SIZE   = 16; // key(8) + cum(4) + page(4)
+// Numeric branch entry (level-1 or level-0 for numeric-key ADI):
+//   key[8 BE float64] + cum[4 BE uint32] + page[4 BE uint32] = 16 bytes
+constexpr std::uint32_t ADI_TREE_ENTRY_SIZE   = 16;
+// Character branch entry (level-1 for char-key ADI):
+//   padded_key[(key_len+3)&~3] + cum[4 LE uint32] + page[1 uint8]
+// The padded_key length and total entry size are computed at open() time and
+// stored in char_key_padded_len_ and branch_entry_sz_.
+
 // Dense-leaf entry size depends on field storage width:
 //   1-byte fields (LOGICAL): recno(1) + key_value(1)     = 2 bytes
 //   wider fields:            recno(1) + dup(1) + trail(1) = 3 bytes
@@ -33,6 +41,11 @@ constexpr std::uint32_t ADI_TREE_ENTRY_START  = 12; // right after 12-byte page 
 constexpr std::uint32_t ADI_DENSE_ENTRY_START = 24; // after header(12) + sub-header(12)
 constexpr std::uint32_t ADI_TAGDIR_ENTRY_SIZE =  6; // XX(1) + zeros(4) + YY(1)
 constexpr std::uint32_t ADI_TAGDIR_ENTRY_START= 24; // same as dense leaf
+
+// A page is a dense leaf if its level is ADI_LVL_DENSE2 or ADI_LVL_DENSE.
+inline constexpr bool is_dense_leaf(std::uint16_t lv) noexcept {
+    return lv == ADI_LVL_DENSE2 || lv == ADI_LVL_DENSE;
+}
 
 inline constexpr std::uint32_t dense_entry_size(std::uint16_t fld_length) noexcept {
     return (fld_length == 1u) ? 2u : 3u;
@@ -55,12 +68,20 @@ constexpr std::uint16_t ADT_TYPE_CICHAR    = 20;  // case-insensitive char (diff
 constexpr std::uint16_t ADT_TYPE_ROWVERSION= 21;  // (unconfirmed)
 constexpr std::uint16_t ADT_TYPE_MODTIME   = 22;  // 8-byte modification timestamp
 
-// Read-only ADI index.  Each instance represents one tag (one indexed field).
+// Read-only ADI index.  Each instance represents one tag (one indexed field,
+// or a compound index on multiple fields).
 // Multi-tag discovery:  AdiIndex::list_tags(adi_path) → field names
 //                       AdiIndex::open_named(adi_path, mode, field_name) → opens one tag
 class AdiIndex final : public IIndex {
 public:
     using Page = std::array<std::uint8_t, ADI_PAGE_SIZE>;
+
+    // Per-field component of a (possibly compound) index key.
+    struct FieldComp {
+        std::uint16_t type;    // ADT_TYPE_* constant
+        std::uint16_t offset;  // byte offset within ADT record (past the 1-byte deleted flag)
+        std::uint16_t length;  // field storage length in bytes
+    };
 
     // IIndex
     util::Result<void> open(const std::string& path, IndexOpenMode mode) override;
@@ -69,7 +90,9 @@ public:
     std::string    expression() const override { return tag_name_; }
     bool           descending() const override { return false; }
     bool           unique()     const override { return false; }
-    std::uint16_t  key_length() const override { return 8; }
+    std::uint16_t  key_length() const override {
+        return static_cast<std::uint16_t>(key_total_len_);
+    }
 
     util::Result<SeekOutcome> seek_first()                           override;
     util::Result<SeekOutcome> seek_last()                            override;
@@ -102,7 +125,7 @@ private:
     // Load the dense leaf at page_no into cur_page_ and update cursor metadata
     util::Result<void> load_dense_leaf_(std::uint32_t page_no);
 
-    // Navigate to the first (leftmost-most) entry of the B-tree
+    // Navigate to the first (leftmost) entry of the B-tree
     util::Result<SeekOutcome> navigate_leftmost_();
 
     // Navigate to the last (rightmost) entry of the B-tree
@@ -114,31 +137,59 @@ private:
     // Update cur_recno_ and current_key_ from cur_page_ at cur_idx_
     util::Result<void> refresh_current_();
 
-    // Compute an 8-byte sign-flipped BE float64 key from an ADT record
+    // Build the full index key (may be compound) from an ADT record
     util::Result<std::string> key_for_recno_(std::uint32_t recno);
 
-    // Compare a candidate key (from ADT) against target (8-byte ADI key)
-    // Returns negative / 0 / positive
-    static int compare_keys_(const std::string& a, const std::string& b) noexcept;
+    // Return the child page pointer from a branch page entry.
+    // For numeric indexes: reads 4-byte BE uint32 at offset 12 within the entry.
+    // For character indexes: reads 1-byte uint8 at offset char_key_padded_len_+4.
+    std::uint32_t branch_entry_page_(const std::uint8_t* pg, int idx) const noexcept;
+
+    // Compare two keys.  For numeric keys 8-byte memcmp; for char keys
+    // key_total_len_ bytes (memcmp; CICHAR case-insensitivity deferred).
+    int compare_keys_(const std::string& a, const std::string& b) const noexcept;
+
+    // Initialise all tag-related state from a list of 1-based field numbers,
+    // a root page, a field-descriptor table, and the ADT layout sizes.
+    // Field descriptors are passed as four parallel arrays to avoid exposing
+    // the internal AdtFieldDesc type in this header.
+    util::Result<void> apply_tag_(
+        const std::vector<std::uint8_t>& fnums,
+        std::uint32_t                    root_pg,
+        const std::vector<std::uint16_t>& fd_types,
+        const std::vector<std::uint16_t>& fd_offsets,
+        const std::vector<std::uint16_t>& fd_lengths,
+        const std::vector<std::string>&   fd_names,
+        std::uint32_t hlen, std::uint32_t rlen);
+
 
     // ADI file + ADT companion file
     platform::File  adi_file_;
     platform::File  adt_file_;
     std::string     adi_path_;
 
-    // Tag metadata
-    std::string     tag_name_;        // ADT field name, e.g. "Date"
+    // Tag metadata (primary / first-component field)
+    std::string     tag_name_;        // ADT field name of first component
     std::uint32_t   root_page_  = 0;
-    std::uint16_t   adt_type_   = 0;  // raw ADT type code
-    std::uint16_t   fld_offset_ = 0;  // field byte offset in ADT record
-    std::uint16_t   fld_length_ = 0;  // field storage length in bytes
+    std::uint16_t   adt_type_   = 0;  // type of first-component field
+    std::uint16_t   fld_offset_ = 0;  // offset of first-component field in ADT record
+    std::uint16_t   fld_length_ = 0;  // length of first-component field
+
+    // All key components (1 entry for simple, >1 for compound indexes).
+    std::vector<FieldComp> key_fields_;
+
+    // Key type and branch-entry geometry (computed at open time).
+    bool          char_key_          = false; // first component is CICHAR or CHAR
+    std::uint32_t key_total_len_     = 8;     // total key bytes (8 for numeric, field_len[s] for char)
+    std::uint32_t char_key_padded_len_ = 0;   // (key_total_len_+3)&~3 (char keys only)
+    std::uint32_t branch_entry_sz_   = ADI_TREE_ENTRY_SIZE; // bytes per branch-page entry
 
     // ADT layout for record reads
     std::uint32_t   adt_hdr_len_ = 0;
     std::uint32_t   adt_rec_len_ = 0;
 
     // Dense-leaf cursor
-    std::uint32_t   entry_size_ = 3;  // dense_entry_size(fld_length_), set in open/open_named
+    std::uint32_t   entry_size_ = 3;  // dense_entry_size(fld_length_)
     std::uint32_t   cur_pg_    = ADI_INVALID_PAGE;
     std::int32_t    cur_idx_   = -1;
     std::uint16_t   cur_cnt_   = 0;

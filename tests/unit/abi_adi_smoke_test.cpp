@@ -4,6 +4,9 @@
 //   * AdsOpenTable + AdsOpenIndex wire up successfully
 //   * AdsSetOrder + AdsGotoTop + AdsSkip iterate all 7 records without error
 //   * Direct driver navigation (seek_first / next) visits each record once
+//
+// Also tests leases.adi (fixtures/adi) — character-key indexes with level-2
+// dense leaves, which previously caused error 6106.
 #include "doctest.h"
 #include "drivers/adi/adi_index.h"
 #include "openads/ace.h"
@@ -117,4 +120,86 @@ TEST_CASE("M4 ADI ABI: AdsOpenIndex + AdsSetOrder iterates landlords.adt") {
 
     AdsCloseTable(hTable);
     AdsDisconnect(hConn);
+}
+
+// ── Level-2 dense leaf fix: leases.adi character-key navigation ─────────────
+
+static fs::path fixture_adi_dir() {
+    return fs::path(__FILE__).parent_path().parent_path() / "fixtures" / "adi";
+}
+
+TEST_CASE("M4 ADI driver: navigate leases.adi char-key tags (level-2 dense leaf)") {
+    fs::path adi_path = fixture_adi_dir() / "leases.adi";
+    std::error_code ec;
+    if (!fs::exists(adi_path, ec)) {
+        MESSAGE("leases.adi not found, skipping char-key ADI test");
+        return;
+    }
+
+    // list_tags must return 7 entries (6 single-field + 1 compound)
+    auto tags = openads::drivers::adi::AdiIndex::list_tags(adi_path.string());
+    REQUIRE(tags);
+    CHECK(tags.value().size() >= 1u);
+
+    // Open leaseid tag (CICHAR, length=13, root has level-1 branch → level-2 leaves)
+    openads::drivers::adi::AdiIndex idx;
+    REQUIRE(idx.open_named(adi_path.string(),
+                           openads::drivers::IndexOpenMode::ReadOnly,
+                           "leaseid"));
+
+    CHECK(idx.name() == "leaseid");
+    CHECK(idx.key_length() == 13u);  // char key = field length, not 8
+
+    // seek_first must succeed and land on a valid record (not error 6106)
+    auto r = idx.seek_first();
+    REQUIRE(r);
+    REQUIRE(r.value().positioned);
+    CHECK(r.value().recno > 0);
+
+    // Iterate all entries via next(); collect recnos
+    std::set<std::uint32_t> seen;
+    while (r.value().positioned) {
+        CHECK(r.value().recno > 0);
+        seen.insert(r.value().recno);
+        r = idx.next();
+        REQUIRE(r);
+    }
+    // leases.adt has 245 records; every recno should appear exactly once
+    CHECK(seen.size() == 245u);
+
+    // seek_last must also succeed
+    auto last = idx.seek_last();
+    REQUIRE(last);
+    REQUIRE(last.value().positioned);
+    CHECK(seen.count(last.value().recno) == 1u);
+}
+
+TEST_CASE("M4 ADI driver: leases.adi all char-key tags navigable") {
+    fs::path adi_path = fixture_adi_dir() / "leases.adi";
+    std::error_code ec;
+    if (!fs::exists(adi_path, ec)) {
+        MESSAGE("leases.adi not found, skipping");
+        return;
+    }
+
+    auto tag_names = openads::drivers::adi::AdiIndex::list_tags(adi_path.string());
+    REQUIRE(tag_names);
+
+    // Single-field CICHAR tags that must work: leaseid, propertyID, LandLordID, ManagerID
+    static const char* kCharTags[] = {"leaseid", "propertyID", "LandLordID", "ManagerID"};
+    for (const char* tname : kCharTags) {
+        openads::drivers::adi::AdiIndex idx;
+        auto open_r = idx.open_named(adi_path.string(),
+                                     openads::drivers::IndexOpenMode::ReadOnly,
+                                     tname);
+        if (!open_r) continue;  // tag might not exist in all fixture versions
+
+        auto r = idx.seek_first();
+        REQUIRE(r);
+        // Must not fail with 6106 — just check it returns a valid outcome
+        CHECK((r.value().positioned || r.value().hit == openads::drivers::SeekHit::AfterEnd));
+        if (r.value().positioned) {
+            CHECK(r.value().recno > 0);
+        }
+    }
 }

@@ -48,11 +48,15 @@ Check off completed work and commit the file update so it stays current.
       group membership. 7 tests in `tests/unit/abi_dd_user_prop_test.cpp`.
       Cross-checked against `f:\harbour3.2-bcc7.3\contrib\rddads\`. (2026-05-24)
 
-- [ ] **ADI level-2 page navigation** (deferred).
-      Causes error 6106 on tables with large/complex index files
-      (e.g. `leases.adi` with 23 tags). Level 1 (branch) and Level 3
-      (dense leaf) already work; only the intermediate level is missing.
-      See format notes in `src/drivers/adi/adi_driver.cpp`.
+- [x] **ADI level-2 page navigation** — fixed.
+      Character-key ADI indexes (CICHAR/CHAR fields) use level-2 dense-leaf
+      pages instead of level-3. Branch entries use a different format:
+      `padded_key[(len+3)&~3] + cum[4 LE] + page[1]` vs numeric's
+      `key[8 BE] + cum[4 BE] + page[4 BE]`. Compound-key tags (e.g. "F2;F14")
+      are now parsed and their total key length computed correctly.
+      `is_dense_leaf()` now accepts both level-2 and level-3 pages.
+      `encode_adt_key` handles CICHAR/CHAR (returns raw field bytes).
+      2 new unit tests in `abi_adi_smoke_test.cpp`. (2026-05-24)
 
 - [ ] **ADS proprietary ADT encryption** — out of scope for now.
       We use our own AES encryption (M11.2). ADS-original per-table
