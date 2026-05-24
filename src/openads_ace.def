@@ -122,12 +122,14 @@ EXPORTS
     AdsDDDeleteUser
     AdsDDDropLink
     AdsDDGetDatabaseProperty
+    AdsDDGetTableProperty
     AdsDDGetUserProperty
     AdsDDModifyLink
     AdsDDRemoveIndexFile
     AdsDDRemoveRefIntegrity
     AdsDDRemoveUserFromGroup
     AdsDDSetDatabaseProperty
+    AdsDDSetTableProperty
     AdsDeleteCustomKey
     AdsDeleteFile
     AdsEvalAOF

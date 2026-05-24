@@ -567,6 +567,25 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_MAX_FAILED_ATTEMPTS           21
 #define ADS_DD_USER_DEFINED_PROP             22
 
+// Table-object property codes (200-216).
+#define ADS_DD_TABLE_VALIDATION_EXPR         200
+#define ADS_DD_TABLE_VALIDATION_MSG          201
+#define ADS_DD_TABLE_PRIMARY_KEY             202
+#define ADS_DD_TABLE_AUTO_CREATE             203
+#define ADS_DD_TABLE_TYPE                    204
+#define ADS_DD_TABLE_PATH                    205
+#define ADS_DD_TABLE_FIELD_COUNT             206
+#define ADS_DD_TABLE_RI_GRAPH                207
+#define ADS_DD_TABLE_OBJ_ID                  208
+#define ADS_DD_TABLE_RI_XY                   209
+#define ADS_DD_TABLE_IS_RI_PARENT            210
+#define ADS_DD_TABLE_RELATIVE_PATH           211
+#define ADS_DD_TABLE_CHAR_TYPE               212
+#define ADS_DD_TABLE_DEFAULT_INDEX           213
+#define ADS_DD_TABLE_ENCRYPTION              214
+#define ADS_DD_TABLE_MEMO_BLOCK_SIZE         215
+#define ADS_DD_TABLE_PERMISSION_LEVEL        216
+
 // Note: SAP's ace.h uses the ADS_MGMT_* names for management-info
 // struct typedefs (declared further below), not for numeric
 // selectors. The earlier integer #defines here would collide with
@@ -1076,6 +1095,16 @@ UNSIGNED32 ENTRYPOINT AdsDDRemoveUserFromGroup(ADSHANDLE hConnect,
                                              UNSIGNED8* pucGroup,
                                              UNSIGNED8* pucUser);
 UNSIGNED32 ENTRYPOINT AdsDDSetDatabaseProperty(ADSHANDLE hConnect,
+                                             UNSIGNED16 usProp,
+                                             void* pvBuf,
+                                             UNSIGNED16 usLen);
+UNSIGNED32 ENTRYPOINT AdsDDGetTableProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED16 usProp,
+                                             void* pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
                                              UNSIGNED16 usProp,
                                              void* pvBuf,
                                              UNSIGNED16 usLen);

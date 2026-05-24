@@ -3627,9 +3627,13 @@ UNSIGNED32 AdsFTSSearch(ADSHANDLE   /*hConnect*/,
 
 namespace {
 
-openads::engine::DataDict* dd_from_handle(ADSHANDLE hConn) {
+Connection* conn_from_handle(ADSHANDLE hConn) {
     auto& s = state();
-    Connection* c = s.registry.lookup<Connection>(hConn, HandleKind::Connection);
+    return s.registry.lookup<Connection>(hConn, HandleKind::Connection);
+}
+
+openads::engine::DataDict* dd_from_handle(ADSHANDLE hConn) {
+    Connection* c = conn_from_handle(hConn);
     if (c == nullptr || !c->has_dd()) return nullptr;
     return c->dd();
 }
@@ -3822,6 +3826,118 @@ UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
     if (pBuf != nullptr && n > 0) std::memcpy(pBuf, val.data(), n);
     *pusLen = static_cast<UNSIGNED16>(val.size());
     return ok();
+}
+
+UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16* pusLen) {
+    namespace fs = std::filesystem;
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    Connection* c = conn_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+
+    auto* dd = (c != nullptr && c->has_dd()) ? c->dd() : nullptr;
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+
+    auto alias = openads::abi::to_internal(pucTable, 0);
+    if (!dd->has_alias(alias)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND),
+                    alias.c_str());
+    }
+
+    std::string rel = dd->resolve(alias);
+
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
+        const UNSIGNED16 need = 2;
+        if (pBuf != nullptr && cap >= need) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0] = static_cast<std::uint8_t>(v & 0xFFu);
+            b[1] = static_cast<std::uint8_t>(v >> 8);
+        }
+        *pusLen = need;
+        return ok();
+    };
+    auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
+        const UNSIGNED16 need = 4;
+        if (pBuf != nullptr && cap >= need) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0] = static_cast<std::uint8_t>( v        & 0xFFu);
+            b[1] = static_cast<std::uint8_t>((v >>  8) & 0xFFu);
+            b[2] = static_cast<std::uint8_t>((v >> 16) & 0xFFu);
+            b[3] = static_cast<std::uint8_t>((v >> 24) & 0xFFu);
+        }
+        *pusLen = need;
+        return ok();
+    };
+
+    switch (usProp) {
+        case ADS_DD_TABLE_RELATIVE_PATH:       // 211
+            return put_str(rel);
+
+        case ADS_DD_TABLE_PATH: {              // 205 — absolute path
+            fs::path abs = fs::path(c->data_dir()) / rel;
+            return put_str(abs.string());
+        }
+
+        case ADS_DD_TABLE_TYPE: {              // 204 — infer from extension
+            fs::path p(rel);
+            std::string ext = p.extension().string();
+            for (auto& ch : ext)
+                ch = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch)));
+            UNSIGNED16 ttype = ADS_CDX;
+            if (ext == ".adt") ttype = ADS_ADT;
+            return put_u16(ttype);
+        }
+
+        case ADS_DD_TABLE_CHAR_TYPE:           // 212
+            return put_u16(ADS_ANSI);
+
+        case ADS_DD_TABLE_OBJ_ID:             // 208
+            return put_u32(0);
+
+        case ADS_DD_TABLE_FIELD_COUNT:         // 206 — requires opening table
+            return put_u32(0);
+
+        case ADS_DD_TABLE_ENCRYPTION:          // 214
+        case ADS_DD_TABLE_AUTO_CREATE:         // 203
+        case ADS_DD_TABLE_IS_RI_PARENT:        // 210
+        case ADS_DD_TABLE_MEMO_BLOCK_SIZE:     // 215
+        case ADS_DD_TABLE_PERMISSION_LEVEL:    // 216
+            return put_u16(0);
+
+        case ADS_DD_TABLE_VALIDATION_EXPR:     // 200
+        case ADS_DD_TABLE_VALIDATION_MSG:      // 201
+        case ADS_DD_TABLE_PRIMARY_KEY:         // 202
+        case ADS_DD_TABLE_DEFAULT_INDEX:       // 213
+            return put_str({});
+
+        default:
+            *pusLen = 0;
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                 UNSIGNED16 /*usProp*/, void* /*pBuf*/,
+                                 UNSIGNED16 /*usLen*/) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto alias = openads::abi::to_internal(pucTable, 0);
+    if (!dd->has_alias(alias))
+        return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND),
+                    alias.c_str());
+    return fail(static_cast<int>(openads::AE_FUNCTION_NOT_AVAILABLE),
+                "AdsDDSetTableProperty");
 }
 
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,

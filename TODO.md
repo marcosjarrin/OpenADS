@@ -31,11 +31,12 @@ Check off completed work and commit the file update so it stays current.
       OpenADS. Options: (a) mark binary DDs read-only and return
       `AE_DD_CANNOT_MODIFY` on mutations, or (b) implement binary write.
 
-- [ ] **`AdsDDGetTableProperty` / `AdsDDSetTableProperty`**.
-      Not yet exported. Real ACE apps use these to read the registered
-      path, table type, character set, etc. for a table alias.
-      Signature (from ace.h conventions):
-      `AdsDDGetTableProperty(hConn, pucTable, usProp, pBuf, pusLen)`
+- [x] **`AdsDDGetTableProperty` / `AdsDDSetTableProperty`**.
+      Exported. Handles: RELATIVE_PATH (211), TABLE_PATH (205),
+      TABLE_TYPE (204, inferred from extension), CHAR_TYPE (212),
+      OBJ_ID (208), FIELD_COUNT (206, returns 0), and the numeric-zero
+      boolean properties. Set returns AE_FUNCTION_NOT_AVAILABLE.
+      5 unit tests in `tests/unit/abi_dd_table_prop_test.cpp`. (2026-05-24)
 
 - [ ] **`AdsDDSetUserProperty`** property-code mapping.
       The thunk calls `set_user_property` with a raw `usProp` numeric
