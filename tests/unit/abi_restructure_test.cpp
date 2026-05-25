@@ -123,13 +123,14 @@ TEST_CASE("M9.26 AdsRestructureTable adds a new field, preserves old data") {
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("M10.12 AdsRestructureTable rejects CHANGE type conversion") {
-    // CHANGE supports same-type len/decimals changes; type conversion
-    // (e.g. C → N) still surfaces AE_FUNCTION_NOT_AVAILABLE.
-    auto dir = fs::temp_directory_path() / "openads_m10_12_reject_type";
+TEST_CASE("M10.12 AdsRestructureTable CHANGE type conversion C→N succeeds") {
+    // AdsRestructureTable now supports type conversion.  Changing a
+    // Character(5) field to Numeric(10,0): non-numeric strings parse
+    // to 0.0, so every record should read back as "         0".
+    auto dir = fs::temp_directory_path() / "openads_m10_12_type_conv";
     std::error_code ec;
     fs::remove_all(dir, ec);
-    stage_dbf(dir);
+    stage_dbf(dir);   // C(5) TAG, records "ALPHA", "BETA "
 
     UNSIGNED8 srv[256];
     std::memcpy(srv, dir.string().c_str(), dir.string().size() + 1);
@@ -144,8 +145,22 @@ TEST_CASE("M10.12 AdsRestructureTable rejects CHANGE type conversion") {
     UNSIGNED32 rc = AdsRestructureTable(hConn, leaf, nullptr,
                                         ADS_CDX, 0, 0, 0,
                                         empty, empty, chg);
-    CHECK(rc == openads::AE_FUNCTION_NOT_AVAILABLE);
+    CHECK(rc == 0);
 
+    // Reopen and verify the converted field is readable as numeric zero.
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, leaf, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+    UNSIGNED8 tag[8] = "TAG";
+    UNSIGNED8 buf[16] = {};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    REQUIRE(AdsGetField(hTable, tag, buf, &cap, 0) == 0);
+    double dval = 0.0;
+    AdsGetDouble(hTable, tag, &dval);
+    CHECK(dval == 0.0);   // "ALPHA" → strtod → 0
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir, ec);
 }

@@ -1120,6 +1120,8 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             bool           from_old      = false;
             std::uint16_t  old_offset    = 0;
             std::uint8_t   old_length    = 0;
+            char           old_type      = '\0';  // non-'\0' → type conversion
+            char           new_type      = '\0';  // target raw type
         };
         std::vector<PerField> plan;
         for (std::uint16_t i = 0; i < t.field_count(); ++i) {
@@ -1137,10 +1139,9 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             auto cit = change_map.find(src.name);
             if (cit != change_map.end()) {
                 if (cit->second.type != src.raw_type) {
-                    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,
-                                "AdsRestructureTable: CHANGE type "
-                                "conversion deferred — name + type "
-                                "must match the existing column");
+                    p.old_type        = src.raw_type;
+                    p.new_type        = cit->second.type;
+                    p.descriptor.type = cit->second.type;
                 }
                 p.descriptor.length = cit->second.length;
                 p.descriptor.dec    = cit->second.dec;
@@ -1212,7 +1213,77 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             new_buf[0] = old_buf.empty() ? ' ' : old_buf[0];
             std::uint16_t out_off = 1;
             for (auto& p : plan) {
-                if (p.from_old) {
+                if (p.from_old && p.new_type != '\0') {
+                    // Type conversion: read old bytes, convert, write new.
+                    std::string old_data(p.old_length, ' ');
+                    if (old_buf.size() >= static_cast<std::size_t>(p.old_offset)
+                                         + p.old_length) {
+                        std::memcpy(old_data.data(),
+                                    old_buf.data() + p.old_offset, p.old_length);
+                    }
+                    const std::uint8_t nlen = p.descriptor.length;
+                    const std::uint8_t ndec = p.descriptor.dec;
+                    if (p.old_type == 'C' && p.new_type == 'N') {
+                        auto first = old_data.find_first_not_of(' ');
+                        const char* src_ptr = (first == std::string::npos)
+                            ? "" : old_data.c_str() + first;
+                        double val = *src_ptr ? std::strtod(src_ptr, nullptr) : 0.0;
+                        char fmt[32];
+                        std::snprintf(fmt, sizeof(fmt), "%%%u.%uf",
+                                      static_cast<unsigned>(nlen),
+                                      static_cast<unsigned>(ndec));
+                        char nb[64] = {};
+                        std::snprintf(nb, sizeof(nb), fmt, val);
+                        std::size_t slen = std::strlen(nb);
+                        std::size_t copy = std::min<std::size_t>(slen, nlen);
+                        std::size_t soff = slen > nlen ? slen - nlen : 0u;
+                        std::memcpy(new_buf.data() + out_off, nb + soff, copy);
+                    } else if (p.old_type == 'N' && p.new_type == 'C') {
+                        auto first = old_data.find_first_not_of(' ');
+                        if (first != std::string::npos) {
+                            std::size_t copy = std::min<std::size_t>(
+                                old_data.size() - first,
+                                static_cast<std::size_t>(nlen));
+                            std::memcpy(new_buf.data() + out_off,
+                                        old_data.data() + first, copy);
+                        }
+                    } else if (p.new_type == 'L') {
+                        char lval = 'F';
+                        if (p.old_type == 'C') {
+                            char ch = old_data.empty() ? ' ' : old_data[0];
+                            if (ch=='T'||ch=='t'||ch=='Y'||ch=='y'||ch=='1') lval='T';
+                        } else if (p.old_type == 'N') {
+                            auto f2 = old_data.find_first_not_of(' ');
+                            if (f2 != std::string::npos &&
+                                std::strtod(old_data.c_str() + f2, nullptr) != 0.0)
+                                lval = 'T';
+                        }
+                        new_buf[out_off] = static_cast<std::uint8_t>(lval);
+                    } else if (p.old_type == 'L') {
+                        char lc = old_data.empty() ? 'F' : old_data[0];
+                        bool is_true = (lc == 'T' || lc == 't');
+                        if (p.new_type == 'C') {
+                            new_buf[out_off] =
+                                static_cast<std::uint8_t>(is_true ? 'T' : 'F');
+                        } else if (p.new_type == 'N') {
+                            char fmt[32];
+                            std::snprintf(fmt, sizeof(fmt), "%%%u.%uf",
+                                          static_cast<unsigned>(nlen),
+                                          static_cast<unsigned>(ndec));
+                            char nb[64] = {};
+                            std::snprintf(nb, sizeof(nb), fmt, is_true ? 1.0 : 0.0);
+                            std::size_t copy =
+                                std::min<std::size_t>(std::strlen(nb), nlen);
+                            std::memcpy(new_buf.data() + out_off, nb, copy);
+                        }
+                    } else {
+                        // D↔C and other pairs: raw copy up to min length.
+                        std::uint8_t copy_len =
+                            std::min<std::uint8_t>(p.old_length, nlen);
+                        std::memcpy(new_buf.data() + out_off,
+                                    old_data.data(), copy_len);
+                    }
+                } else if (p.from_old) {
                     std::uint8_t copy_len =
                         std::min<std::uint8_t>(p.old_length,
                                                p.descriptor.length);
@@ -5425,6 +5496,15 @@ struct SqlStatement {
     // place to store :name -> SQL-literal pairs that AdsExecuteSQL can substitute
     // before handing the final SQL to the parser.
     std::unordered_map<std::string, std::string> params;
+    // Per-statement table-open overrides set by AdsStmt* helpers.
+    UNSIGNED16  table_type   = 0;   // 0 = ADS_DEFAULT → CDX
+    UNSIGNED16  lock_type    = 0;   // 0 = default → compatible locking
+    UNSIGNED16  char_type    = 0;
+    UNSIGNED16  read_only    = 0;   // non-zero → open read-only
+    UNSIGNED16  check_rights = 0;
+    bool        disable_enc  = false;
+    std::string collation;
+    std::vector<std::pair<std::string, std::string>> passwords;
 };
 
 std::unordered_map<ADSHANDLE, std::unique_ptr<SqlStatement>>& stmt_map() {
@@ -5452,6 +5532,22 @@ bool set_stmt_param(ADSHANDLE h, const char* pname, std::string literal) {
     if (!key.empty() && key[0] == ':') key.erase(0, 1);
     it->second->params[key] = std::move(literal);
     return true;
+}
+
+openads::engine::TableType stmt_table_type(const SqlStatement& s) {
+    return map_type(s.table_type);
+}
+
+openads::engine::OpenMode stmt_open_mode(const SqlStatement& s, bool for_write) {
+    if (s.read_only != 0) return openads::engine::OpenMode::Read;
+    return for_write ? openads::engine::OpenMode::Shared
+                     : openads::engine::OpenMode::Read;
+}
+
+openads::engine::LockingMode stmt_locking_mode(const SqlStatement& s) {
+    return (s.lock_type == ADS_PROPRIETARY_LOCKING)
+           ? openads::engine::LockingMode::Proprietary
+           : openads::engine::LockingMode::Compatible;
 }
 
 } // namespace
@@ -5904,8 +6000,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto upd = openads::sql::parse_update(sql);
         if (!upd) return fail(upd.error());
         auto th = c->open_table(upd.value().table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Shared);
+                                stmt_table_type(*it->second),
+                                stmt_open_mode(*it->second, true),
+                                stmt_locking_mode(*it->second));
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
@@ -6035,8 +6132,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto del = openads::sql::parse_delete(sql);
         if (!del) return fail(del.error());
         auto th = c->open_table(del.value().table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Shared);
+                                stmt_table_type(*it->second),
+                                stmt_open_mode(*it->second, true),
+                                stmt_locking_mode(*it->second));
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
@@ -6141,8 +6239,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto ins = openads::sql::parse_insert(sql);
         if (!ins) return fail(ins.error());
         auto th = c->open_table(ins.value().table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Shared);
+                                stmt_table_type(*it->second),
+                                stmt_open_mode(*it->second, true),
+                                stmt_locking_mode(*it->second));
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
@@ -7553,8 +7652,9 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     Handle table_handle = 0;
     if (!tbl) {
         auto th = c->open_table(parsed.value().table,
-                                openads::engine::TableType::Cdx,
-                                openads::engine::OpenMode::Read);
+                                stmt_table_type(*it->second),
+                                stmt_open_mode(*it->second, false),
+                                stmt_locking_mode(*it->second));
         if (!th) return fail(th.error());
         table_handle = th.value();
         tbl = c->lookup_table(table_handle);
@@ -10418,10 +10518,28 @@ UNSIGNED32 AdsShowDeleted(UNSIGNED16 us) {
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 AdsShowError(UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE, UNSIGNED8*, UNSIGNED8*) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsStmtSetTableReadOnly(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsStmtSetTableType(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
+UNSIGNED32 AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {
+    auto& m = stmt_map(); auto it = m.find(h);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    it->second->lock_type = us; return ok();
+}
+UNSIGNED32 AdsStmtSetTablePassword(ADSHANDLE h, UNSIGNED8* pTable, UNSIGNED8* pPwd) {
+    auto& m = stmt_map(); auto it = m.find(h);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    it->second->passwords.emplace_back(openads::abi::to_internal(pTable, 0),
+                                       openads::abi::to_internal(pPwd, 0));
+    return ok();
+}
+UNSIGNED32 AdsStmtSetTableReadOnly(ADSHANDLE h, UNSIGNED16 us) {
+    auto& m = stmt_map(); auto it = m.find(h);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    it->second->read_only = us; return ok();
+}
+UNSIGNED32 AdsStmtSetTableType(ADSHANDLE h, UNSIGNED16 us) {
+    auto& m = stmt_map(); auto it = m.find(h);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    it->second->table_type = us; return ok();
+}
 UNSIGNED32 AdsTestLogin(UNSIGNED8*, UNSIGNED16, UNSIGNED8*, UNSIGNED8*, UNSIGNED32)
     { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsTestRecLocks(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
@@ -11150,11 +11268,31 @@ UNSIGNED32 AdsMgDumpInternalTables(ADSHANDLE h) {
 }
 UNSIGNED32 AdsClearSQLAbortFunc(void) { return ok(); }
 UNSIGNED32 AdsClearSQLParams(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsStmtDisableEncryption(ADSHANDLE) { return ok(); }
-UNSIGNED32 AdsStmtSetTableCharType(ADSHANDLE, UNSIGNED16) { return ok(); }
-UNSIGNED32 AdsStmtSetTableCollation(ADSHANDLE, UNSIGNED8*) { return ok(); }
-UNSIGNED32 AdsStmtSetTableRights(ADSHANDLE, UNSIGNED16) { return ok(); }
+UNSIGNED32 AdsStmtClearTablePasswords(ADSHANDLE h) {
+    auto it = stmt_map().find(h);
+    if (it != stmt_map().end()) it->second->passwords.clear();
+    return ok();
+}
+UNSIGNED32 AdsStmtDisableEncryption(ADSHANDLE h) {
+    auto it = stmt_map().find(h);
+    if (it != stmt_map().end()) it->second->disable_enc = true;
+    return ok();
+}
+UNSIGNED32 AdsStmtSetTableCharType(ADSHANDLE h, UNSIGNED16 us) {
+    auto it = stmt_map().find(h);
+    if (it != stmt_map().end()) it->second->char_type = us;
+    return ok();
+}
+UNSIGNED32 AdsStmtSetTableCollation(ADSHANDLE h, UNSIGNED8* puc) {
+    auto it = stmt_map().find(h);
+    if (it != stmt_map().end()) it->second->collation = openads::abi::to_internal(puc, 0);
+    return ok();
+}
+UNSIGNED32 AdsStmtSetTableRights(ADSHANDLE h, UNSIGNED16 us) {
+    auto it = stmt_map().find(h);
+    if (it != stmt_map().end()) it->second->check_rights = us;
+    return ok();
+}
 
 // --- field-identifier-aware setters/getters (name OR ordinal-as-pointer) ---
 UNSIGNED32 AdsSetField(ADSHANDLE hObj, UNSIGNED8* pId, UNSIGNED8* pucBuf,
