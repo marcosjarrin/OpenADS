@@ -21,6 +21,7 @@
 #include "openads/ace.h"
 #include "openads/error.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -65,10 +66,8 @@ void create_table(const std::string& dir, const std::string& tname) {
     }
     UNSIGNED8 def[] =
         "TOKEN,N,20,0;COUNTER,N,10,0;TID,N,4,0;PADDING,C,32,0";
-    UNSIGNED8 nm[64];
-    std::strncpy(reinterpret_cast<char*>(nm), tname.c_str(),
-                 sizeof(nm) - 1);
-    nm[sizeof(nm) - 1] = 0;
+    UNSIGNED8 nm[64] = {};
+    std::memcpy(nm, tname.c_str(), std::min(tname.size(), sizeof(nm) - 1));
     ADSHANDLE hTable = 0;
     if (auto rc = AdsCreateTable(hConn, nm, nullptr, ADS_CDX,
                                   0, 0, 0, 0, def, &hTable);
@@ -107,9 +106,8 @@ void worker(int tid,
         c->errors.fetch_add(1);
         return;
     }
-    UNSIGNED8 nm[64] = {0};
-    std::strncpy(reinterpret_cast<char*>(nm), tname.c_str(),
-                 sizeof(nm) - 1);
+    UNSIGNED8 nm[64] = {};
+    std::memcpy(nm, tname.c_str(), std::min(tname.size(), sizeof(nm) - 1));
     ADSHANDLE hTable = 0;
     if (AdsOpenTable(hConn, nm, nm, ADS_CDX,
                      0, 2, 0, 0, &hTable) != 0) {
@@ -278,8 +276,8 @@ int main(int argc, char** argv) {
     std::memcpy(srv.data(), data_dir.c_str(), data_dir.size() + 1);
     ADSHANDLE hConn = 0;
     AdsConnect60(srv.data(), ADS_LOCAL_SERVER, nullptr, nullptr, 0, &hConn);
-    UNSIGNED8 nm[64] = {0};
-    std::strncpy(reinterpret_cast<char*>(nm), tname.c_str(), sizeof(nm) - 1);
+    UNSIGNED8 nm[64] = {};
+    std::memcpy(nm, tname.c_str(), std::min(tname.size(), sizeof(nm) - 1));
     ADSHANDLE hTable = 0;
     AdsOpenTable(hConn, nm, nm, ADS_CDX, 0, 0, 0, 0, &hTable);
     UNSIGNED32 final_count = 0;

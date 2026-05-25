@@ -61,7 +61,7 @@ fs::path stage_bench_dbf(const fs::path& dir, std::uint32_t rows) {
     file.insert(file.end(), hdr.begin(), hdr.end());
     auto fld = [&](const char* n, char t, std::uint8_t L, std::uint8_t d) {
         std::array<std::uint8_t, 32> fd{};
-        std::strncpy(reinterpret_cast<char*>(fd.data()), n, 11);
+        std::memcpy(fd.data(), n, std::min(std::strlen(n), std::size_t{11}));
         fd[11] = static_cast<std::uint8_t>(t);
         fd[16] = L; fd[17] = d;
         file.insert(file.end(), fd.begin(), fd.end());
@@ -115,7 +115,7 @@ double run_query(ADSHANDLE hStmt, const std::string& sql,
         for (std::uint32_t i = 0; i < cnt && i < 10; ++i) {
             UNSIGNED8 fld[16] = "ID";
             UNSIGNED8 buf[32]{};
-            UNSIGNED32 cap = sizeof(buf);
+            UNSIGNED32 cap = static_cast<UNSIGNED32>(sizeof(buf));
             (void)AdsGetField(hCur, fld, buf, &cap, 0);
             (void)AdsSkip(hCur, 1);
         }
@@ -236,8 +236,8 @@ int main(int argc, char** argv) {
     {
         double t_idx = now_ms();
         UNSIGNED8 sql[128];
-        std::strcpy(reinterpret_cast<char*>(sql),
-            "CREATE INDEX ID_IDX ON bench.dbf (ID)");
+        constexpr const char kCreateIdx[] = "CREATE INDEX ID_IDX ON bench.dbf (ID)";
+        std::memcpy(sql, kCreateIdx, sizeof(kCreateIdx));
         ADSHANDLE hCur = 0;
         AdsExecuteSQLDirect(hStmt, sql, &hCur);
         if (hCur != 0) AdsCloseTable(hCur);
@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
     // statement on a separate hStmt does NOT auto-bind the tag.
     {
         std::vector<UNSIGNED8> tname(11);
-        std::strcpy(reinterpret_cast<char*>(tname.data()), "bench.dbf");
+        std::memcpy(tname.data(), "bench.dbf", sizeof("bench.dbf"));
         ADSHANDLE hT = 0;
         bool ok = (AdsOpenTable(hConn, tname.data(), nullptr,
                                  ADS_CDX, ADS_ANSI, 0, 0, 0, &hT) == 0);
@@ -283,8 +283,9 @@ int main(int argc, char** argv) {
             std::uint32_t kept = 0;
             UNSIGNED16 lvl = 0;
             for (int i = 0; i < repeats; ++i) {
-                std::vector<UNSIGNED8> c(std::strlen(cond) + 1);
-                std::strcpy(reinterpret_cast<char*>(c.data()), cond);
+                std::size_t clen = std::strlen(cond) + 1;
+                std::vector<UNSIGNED8> c(clen);
+                std::memcpy(c.data(), cond, clen);
                 double t0 = now_ms();
                 if (AdsSetAOF(hT, c.data(), 0) != 0) break;
                 UNSIGNED16 buflen = 0;

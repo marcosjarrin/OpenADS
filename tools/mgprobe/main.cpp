@@ -9,6 +9,7 @@
 //
 #include "openads/ace.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -28,9 +29,8 @@ UNSIGNED32 AdsMgGetUserNames(ADSHANDLE, UNSIGNED8*, void*,
 int main(int argc, char** argv) {
     const char* srv = (argc > 1) ? argv[1] : "local";
 
-    UNSIGNED8 server[256];
-    std::strncpy(reinterpret_cast<char*>(server), srv, sizeof(server) - 1);
-    server[sizeof(server) - 1] = 0;
+    UNSIGNED8 server[256] = {};
+    std::memcpy(server, srv, std::min(std::strlen(srv), sizeof(server) - 1));
     UNSIGNED8 user[2] = "u";
     UNSIGNED8 pwd[2]  = "p";
 

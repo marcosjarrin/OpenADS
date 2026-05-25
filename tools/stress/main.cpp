@@ -190,21 +190,18 @@ run_indexes:
         };
         for (auto& d : idxs) {
             double i0 = now_ms();
-            UNSIGNED8 file_buf[64]; std::strncpy(
-                reinterpret_cast<char*>(file_buf), d.file, sizeof(file_buf) - 1);
-            file_buf[sizeof(file_buf) - 1] = 0;
-            UNSIGNED8 tag_buf[64];  std::strncpy(
-                reinterpret_cast<char*>(tag_buf), d.tag, sizeof(tag_buf) - 1);
-            tag_buf[sizeof(tag_buf) - 1] = 0;
-            UNSIGNED8 expr_buf[128]; std::strncpy(
-                reinterpret_cast<char*>(expr_buf), d.expr, sizeof(expr_buf) - 1);
-            expr_buf[sizeof(expr_buf) - 1] = 0;
+            UNSIGNED8 file_buf[64]  = {};
+            UNSIGNED8 tag_buf[64]   = {};
+            UNSIGNED8 expr_buf[128] = {};
+            std::memcpy(file_buf,  d.file, std::min(std::strlen(d.file),  sizeof(file_buf)  - 1));
+            std::memcpy(tag_buf,   d.tag,  std::min(std::strlen(d.tag),   sizeof(tag_buf)   - 1));
+            std::memcpy(expr_buf,  d.expr, std::min(std::strlen(d.expr),  sizeof(expr_buf)  - 1));
             ADSHANDLE hIdx = 0;
             UNSIGNED32 ir = AdsCreateIndex61(hIdxTable, file_buf, tag_buf,
                                               expr_buf, nullptr, nullptr,
                                               0, 0, &hIdx);
             char emsg[512] = {0};
-            UNSIGNED16 elen = sizeof(emsg);
+            UNSIGNED16 elen = static_cast<UNSIGNED16>(sizeof(emsg));
             UNSIGNED32 ecode = 0;
             if (ir != 0) AdsGetLastError(&ecode,
                 reinterpret_cast<UNSIGNED8*>(emsg), &elen);
@@ -223,10 +220,8 @@ run_indexes:
                          0, 0, 0, 0, &hMulti) == 0) {
             const char* bags[] = {"stress_a.cdx", "stress_b.cdx"};
             for (auto* f : bags) {
-                UNSIGNED8 file_buf[64]; std::strncpy(
-                    reinterpret_cast<char*>(file_buf), f,
-                    sizeof(file_buf) - 1);
-                file_buf[sizeof(file_buf) - 1] = 0;
+                UNSIGNED8 file_buf[64] = {};
+                std::memcpy(file_buf, f, std::min(std::strlen(f), sizeof(file_buf) - 1));
                 ADSHANDLE harr[8] = {0};
                 UNSIGNED16 hcount = 8;
                 UNSIGNED32 rc = AdsOpenIndex(hMulti, file_buf, harr, &hcount);

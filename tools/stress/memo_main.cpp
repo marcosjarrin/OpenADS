@@ -105,7 +105,7 @@ fs::path build_dbf(const fs::path& dir, const char* leaf) {
     auto add_field = [&](const char* name, char type,
                           std::uint8_t len, std::uint8_t dec) {
         std::array<std::uint8_t, 32> fd{};
-        std::strncpy(reinterpret_cast<char*>(fd.data()), name, 11);
+        std::memcpy(fd.data(), name, std::min(std::strlen(name), std::size_t{11}));
         fd[11] = static_cast<std::uint8_t>(type);
         fd[16] = len;
         fd[17] = dec;

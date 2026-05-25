@@ -1460,8 +1460,13 @@ bool HttpConsole::start(const std::string& host,
             return;
         }
         char ts[32]; std::time_t t = std::time(nullptr);
-        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S",
-                      std::localtime(&t));
+        struct tm tm_buf{};
+#ifdef _WIN32
+        localtime_s(&tm_buf, &t);
+#else
+        localtime_r(&t, &tm_buf);
+#endif
+        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tm_buf);
         std::string fname = std::string("openads-backup-") + ts + ".zip";
         res.set_header("Content-Disposition",
                        "attachment; filename=\"" + fname + "\"");
