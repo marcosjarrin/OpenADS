@@ -58,6 +58,40 @@ Check off completed work and commit the file update so it stays current.
       `encode_adt_key` handles CICHAR/CHAR (returns raw field bytes).
       2 new unit tests in `abi_adi_smoke_test.cpp`. (2026-05-24)
 
+- [ ] **RI enforcement at write time**.
+      `AdsDDCreateRefIntegrity` stores rules in `DataDict::ri_` but nothing
+      enforces them. `append_record`, `mark_deleted`, and `set_field` in
+      `table.cpp` proceed without consulting RI rules. Needs a
+      `Connection::check_ri_on_write(table, op)` helper that loads the
+      relevant `RiEntry` records from the DD and returns an error (or
+      triggers the fail-table / cascade / restrict action) before the
+      write commits.
+
+- [ ] **DD authentication for local connections**.
+      `AdsConnect60` for local paths ignores `pucUser`/`pucPwd` (line 416
+      in `ace_exports.cpp`). The DD stores passwords as `prop_1101` under
+      each user, but they are never consulted. Need to: (a) look up the
+      user record in the DD after `Connection::open`, (b) compare the
+      supplied password against the stored `prop_1101` value, (c) return
+      `AE_INVALID_USERNAME` / `AE_INVALID_PASSWORD` on mismatch, and
+      (d) attach the authenticated username to the `Connection` so
+      per-table permission checks can reference it.
+
+- [ ] **Per-table access control / permission checking**.
+      `ADS_DD_TABLE_PERMISSION_LEVEL` (property 216) always returns 0;
+      `check_rights` on `SqlStatement` is stored but never consulted.
+      The DD needs to store per-user / per-group permission bits for
+      each table (read / write / delete / full) and `AdsOpenTable` /
+      `AdsExecuteSQLDirect` need to verify the authenticated user holds
+      the required permission before proceeding.
+
+- [ ] **DD triggers and stored procedures**.
+      The ADS DD supports `TRIGGER` and `STORED_PROCEDURE` record types
+      (fired before/after INSERT, UPDATE, DELETE). These have no
+      representation in our `DataDict` model or write path. The AEP
+      mechanism (M11.4, `AdsExecuteProcedure`) is a separate DLL-extension
+      surface and does not substitute for DD-level triggers.
+
 - [ ] **ADS proprietary ADT encryption** — out of scope for now.
       We use our own AES encryption (M11.2). ADS-original per-table
       encryption format not reversed; tables with that flag will open
