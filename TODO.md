@@ -179,10 +179,12 @@ Check off completed work and commit the file update so it stays current.
       forward move with `*pbFound = eof() ? 0 : 1`. Test in
       `tests/unit/abi_aof_test.cpp`. (2026-05-24)
 
-- [ ] **Table-management stubs**.
-      `AdsCopyTableContent`, `AdsCloneTable`, `AdsCopyTableStructure`
-      all return `AE_FUNCTION_NOT_AVAILABLE`. Needed by migration tools
-      and some DD-aware GUI clients.
+- [x] **Table-management stubs**.
+      `AdsCopyTableContent` (field-name-matched copy between two open
+      tables), `AdsCloneTable` (full structural clone including deleted
+      records into a temp DBF; returns new handle), and
+      `AdsCopyTableStructure` (schema-only copy, 0 records). All
+      implemented and tested. (2026-05-25)
 
 - [ ] **Enumeration stubs**.
       `AdsGetAllTables`, `AdsGetAllIndexes`, `AdsGetFTSIndexes` return
