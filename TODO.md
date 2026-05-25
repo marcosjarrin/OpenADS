@@ -162,10 +162,15 @@ Check off completed work and commit the file update so it stays current.
       (field read or numeric literal parse), `AdsEvalStringExpr`
       (field read or string literal passthrough). (2026-05-25)
 
-- [ ] **`AdsStmt*` helpers** — used by the X# SQL surface.
+- [x] **`AdsStmt*` helpers** — per-statement table-open settings
+      (table_type, lock_type, char_type, read_only, check_rights,
+      disable_enc, collation, passwords) stored in SqlStatement and
+      threaded into AdsExecuteSQLDirect for SELECT/UPDATE/DELETE/INSERT.
+      All 9 setter functions implemented. (2026-05-25)
 
-- [ ] **`AdsRestructureTable` type conversion** — rename + retype is
-      deferred; apps that need it can issue DELETE + ADD for now.
+- [x] **`AdsRestructureTable` type conversion** — CHANGE path now
+      supports C↔N, C/N→L, L→C/N, and D↔C conversions. Raw-copy
+      fallback for other pairs. Test updated. (2026-05-25)
 
 - [x] **`AdsContinue`** (LOCATE/CONTINUE loop).
       Implemented: filter-aware skip(1) on the underlying Table — since
