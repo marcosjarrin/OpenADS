@@ -1128,11 +1128,11 @@ UNSIGNED32 AdsRestructureTable(ADSHANDLE   hConnect,
             PerField p;
             p.descriptor.name   = src.name;
             p.descriptor.type   = src.raw_type;
-            p.descriptor.length = src.length;
+            p.descriptor.length = static_cast<std::uint8_t>(src.length);
             p.descriptor.dec    = src.decimals;
             p.from_old   = true;
             p.old_offset = src.record_offset;
-            p.old_length = src.length;
+            p.old_length = static_cast<std::uint8_t>(src.length);
 
             auto cit = change_map.find(src.name);
             if (cit != change_map.end()) {
@@ -4525,7 +4525,7 @@ UNSIGNED32 AdsCopyTable(ADSHANDLE   hHandle,
         std::size_t n = std::min<std::size_t>(f.name.size(), 10);
         std::memcpy(fd.data(), f.name.data(), n);
         fd[11] = static_cast<std::uint8_t>(f.raw_type ? f.raw_type : 'C');
-        fd[16] = f.length;
+        fd[16] = static_cast<std::uint8_t>(f.length);
         fd[17] = f.decimals;
         file.insert(file.end(), fd.begin(), fd.end());
     }
@@ -6461,7 +6461,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                 static_cast<std::uint16_t>(col_src[i]));
                             if (v) sval = v.value().as_string;
                         }
-                        std::uint8_t L = schema[i].length;
+                        std::uint8_t L = static_cast<std::uint8_t>(schema[i].length);
                         for (std::uint8_t k = 0; k < L; ++k) {
                             rec[off + k] = k < sval.size()
                                 ? static_cast<std::uint8_t>(sval[k]) : ' ';
@@ -6498,7 +6498,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::strncpy(reinterpret_cast<char*>(bytes.data()),
                              fd.name.c_str(), 11);
                 bytes[11] = static_cast<std::uint8_t>(fd.raw_type);
-                bytes[16] = fd.length;
+                bytes[16] = static_cast<std::uint8_t>(fd.length);
                 bytes[17] = fd.decimals;
                 file.insert(file.end(), bytes.begin(), bytes.end());
             }
@@ -6711,7 +6711,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::size_t n = std::min<std::size_t>(f.name.size(), 10);
             std::memcpy(fd.data(), f.name.data(), n);
             fd[11] = static_cast<std::uint8_t>(f.raw_type);
-            fd[16] = f.length;
+            fd[16] = static_cast<std::uint8_t>(f.length);
             fd[17] = f.decimals;
             file.insert(file.end(), fd.begin(), fd.end());
         }
@@ -7103,7 +7103,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     static_cast<std::uint16_t>(fi));
                 GBCol gc;
                 gc.field_index = static_cast<std::uint16_t>(fi);
-                gc.length      = fd.length;
+                gc.length      = static_cast<std::uint8_t>(fd.length);
                 gc.name        = gname;
                 gc.raw_type    = static_cast<std::uint8_t>(fd.raw_type);
                 gbs.push_back(std::move(gc));
@@ -7691,7 +7691,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     static_cast<std::uint16_t>(fi));
                 GBCol gc;
                 gc.field_index = static_cast<std::uint16_t>(fi);
-                gc.length      = fd.length;
+                gc.length      = static_cast<std::uint8_t>(fd.length);
                 gc.name        = gname;
                 gc.raw_type    = static_cast<std::uint8_t>(fd.raw_type);
                 gbs.push_back(std::move(gc));
@@ -9269,7 +9269,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     } else {
                         const auto& fd = tbl->field_descriptor(
                             static_cast<std::uint16_t>(fi));
-                        o.length = fd.length ? fd.length : 30;
+                        o.length = static_cast<std::uint8_t>(fd.length ? fd.length : 30);
                     }
                 } else {
                     // M10.43 / M10.45 — multi-arg fns. Width = generous
@@ -9329,7 +9329,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     static_cast<std::uint16_t>(fi));
                 o.name      = fd.name;
                 o.raw_type  = static_cast<char>(fd.raw_type);
-                o.length    = fd.length;
+                o.length    = static_cast<std::uint8_t>(fd.length);
                 o.src_field = fi;
             }
             outs.push_back(std::move(o));
