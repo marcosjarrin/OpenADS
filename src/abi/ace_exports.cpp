@@ -10154,8 +10154,37 @@ UNSIGNED32 AdsCacheOpenCursors(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheOpenTables(UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCacheRecords(ADSHANDLE, UNSIGNED16) { ADS_STUB(openads::AE_SUCCESS); }
 UNSIGNED32 AdsCloseCachedTables(ADSHANDLE) { ADS_STUB(openads::AE_SUCCESS); }
-UNSIGNED32 AdsCopyTableContent(ADSHANDLE, ADSHANDLE)
-    { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
+UNSIGNED32 AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
+    Table* src = get_table(hSrc);
+    Table* dst = get_table(hDst);
+    if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+
+    // Build a field-name mapping: for each source field find the
+    // matching destination field (by name). Fields that exist only in
+    // one table are silently skipped, which is the documented ADS
+    // behaviour — no schema match required.
+    struct FieldPair { std::uint16_t si; std::uint16_t di; };
+    std::vector<FieldPair> pairs;
+    std::uint16_t nc = src->field_count();
+    for (std::uint16_t si = 0; si < nc; ++si) {
+        std::int32_t di = dst->field_index(src->field_descriptor(si).name);
+        if (di >= 0) pairs.push_back({si, static_cast<std::uint16_t>(di)});
+    }
+
+    std::uint32_t rcount = src->record_count();
+    for (std::uint32_t r = 1; r <= rcount; ++r) {
+        if (auto g = src->goto_record(r); !g) continue;
+        if (src->is_deleted()) continue;
+        if (auto ar = dst->append_record(); !ar) return fail(ar.error());
+        for (auto& fp : pairs) {
+            auto v = src->read_field(fp.si);
+            if (!v) continue;
+            (void)dst->set_field(fp.di, v.value().as_string);
+        }
+    }
+    if (auto fl = dst->flush(); !fl) return fail(fl.error());
+    return ok();
+}
 UNSIGNED32 AdsCustomizeAOF(ADSHANDLE, UNSIGNED32, UNSIGNED32*, UNSIGNED16)
     { ADS_STUB(openads::AE_FUNCTION_NOT_AVAILABLE); }
 UNSIGNED32 AdsData(UNSIGNED16, void*) { ADS_STUB(openads::AE_SUCCESS); }
@@ -11255,10 +11284,157 @@ UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
     { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
 UNSIGNED32 AdsGetAllTables(ADSHANDLE /*hConnect*/, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
     { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsCloneTable(ADSHANDLE, ADSHANDLE* p)
-    { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsCopyTableStructure(ADSHANDLE, UNSIGNED8*)
-    { return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
+    if (!phClone) return fail(openads::AE_INTERNAL_ERROR, "null out param");
+    *phClone = 0;
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!t->driver()) return fail(openads::AE_INTERNAL_ERROR, "no driver");
+
+    // Locate the connection that owns this table.
+    Connection* owning = nullptr;
+    s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+        if (k != HandleKind::Connection || owning) return;
+        auto* cc = static_cast<Connection*>(p);
+        if (cc->owns_table_ptr(t)) owning = cc;
+    });
+    if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
+                             "table not owned by any connection");
+
+    // Unique temp filename inside the data directory.
+    namespace fs = std::filesystem;
+    char tmp_name[64] = {};
+    std::snprintf(tmp_name, sizeof(tmp_name), "_clone_%llx.dbf",
+                  static_cast<unsigned long long>(
+                      openads::platform::monotonic_nanos()));
+
+    // Serialize structure + all records (including deleted, for exact
+    // fidelity) to the temp file.
+    const auto& src_fields = t->driver()->fields();
+    if (src_fields.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsCloneTable: no fields");
+    std::uint16_t header_len = static_cast<std::uint16_t>(
+        32 + 32 * src_fields.size() + 1);
+    std::uint16_t rec_len = t->driver()->record_length();
+
+    std::vector<std::uint8_t> file;
+    std::vector<std::uint8_t> hdr(32, 0);
+    hdr[0] = 0x03;
+    stamp_dbf_header_today(hdr.data());
+    hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+    file = hdr;
+    for (const auto& f : src_fields) {
+        std::vector<std::uint8_t> fd(32, 0);
+        std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+        std::memcpy(fd.data(), f.name.data(), n);
+        fd[11] = static_cast<std::uint8_t>(f.raw_type ? f.raw_type : 'C');
+        fd[16] = static_cast<std::uint8_t>(f.length);
+        fd[17] = f.decimals;
+        file.insert(file.end(), fd.begin(), fd.end());
+    }
+    file.push_back(0x0D);
+
+    std::uint32_t rcount = t->driver()->record_count();
+    for (std::uint32_t r = 1; r <= rcount; ++r) {
+        auto rec = t->driver()->read_record_raw(r);
+        if (!rec) return fail(rec.error());
+        file.insert(file.end(), rec.value().begin(), rec.value().end());
+    }
+    file.push_back(0x1A);
+    file[4] = static_cast<std::uint8_t>( rcount        & 0xFFu);
+    file[5] = static_cast<std::uint8_t>((rcount >>  8) & 0xFFu);
+    file[6] = static_cast<std::uint8_t>((rcount >> 16) & 0xFFu);
+    file[7] = static_cast<std::uint8_t>((rcount >> 24) & 0xFFu);
+
+    fs::path tmp_path = fs::path(owning->data_dir()) / tmp_name;
+    {
+        std::ofstream out(tmp_path, std::ios::binary);
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCloneTable: write failed");
+        out.write(reinterpret_cast<const char*>(file.data()),
+                  static_cast<std::streamsize>(file.size()));
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCloneTable: write error");
+    }
+
+    // Open the clone through the owning connection.
+    auto th = owning->open_table(std::string(tmp_name),
+                                 openads::engine::TableType::Cdx,
+                                 openads::engine::OpenMode::Shared);
+    if (!th) {
+        std::error_code ec;
+        fs::remove(tmp_path, ec);
+        return fail(th.error());
+    }
+    Table* clone = owning->lookup_table(th.value());
+    if (!clone) return fail(openads::AE_INTERNAL_ERROR,
+                            "AdsCloneTable: post-open");
+    *phClone = s.registry.register_object(HandleKind::Table, clone);
+    return ok();
+}
+
+UNSIGNED32 AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile) {
+    if (!pucFile) return fail(openads::AE_INTERNAL_ERROR, "null path");
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!t->driver()) return fail(openads::AE_INTERNAL_ERROR, "no driver");
+
+    namespace fs = std::filesystem;
+    auto raw = openads::abi::to_internal(pucFile, 0);
+    fs::path dst(raw);
+    if (!dst.is_absolute())
+        dst = fs::path(t->path()).parent_path() / dst;
+    if (!dst.has_extension()) dst.replace_extension(".dbf");
+
+    const auto& src_fields = t->driver()->fields();
+    if (src_fields.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "AdsCopyTableStructure: no fields");
+    std::uint16_t header_len = static_cast<std::uint16_t>(
+        32 + 32 * src_fields.size() + 1);
+    std::uint16_t rec_len = t->driver()->record_length();
+
+    std::vector<std::uint8_t> file;
+    std::vector<std::uint8_t> hdr(32, 0);
+    hdr[0] = 0x03;
+    stamp_dbf_header_today(hdr.data());
+    // record count = 0 (bytes 4-7 stay zero)
+    hdr[8]  = static_cast<std::uint8_t>(header_len & 0xFFu);
+    hdr[9]  = static_cast<std::uint8_t>((header_len >> 8) & 0xFFu);
+    hdr[10] = static_cast<std::uint8_t>(rec_len & 0xFFu);
+    hdr[11] = static_cast<std::uint8_t>((rec_len >> 8) & 0xFFu);
+    file = hdr;
+    for (const auto& f : src_fields) {
+        std::vector<std::uint8_t> fd(32, 0);
+        std::size_t n = std::min<std::size_t>(f.name.size(), 10);
+        std::memcpy(fd.data(), f.name.data(), n);
+        fd[11] = static_cast<std::uint8_t>(f.raw_type ? f.raw_type : 'C');
+        fd[16] = static_cast<std::uint8_t>(f.length);
+        fd[17] = f.decimals;
+        file.insert(file.end(), fd.begin(), fd.end());
+    }
+    file.push_back(0x0D);
+    file.push_back(0x1A);   // EOF, no records
+
+    {
+        std::error_code ec;
+        fs::remove(dst, ec);
+    }
+    {
+        std::ofstream out(dst, std::ios::binary);
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCopyTableStructure: open failed");
+        out.write(reinterpret_cast<const char*>(file.data()),
+                  static_cast<std::streamsize>(file.size()));
+        if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                              "AdsCopyTableStructure: write failed");
+    }
+    return ok();
+}
 UNSIGNED32 AdsGetRecordCRC(ADSHANDLE, UNSIGNED32* p, UNSIGNED32)
     { if (p) *p = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
 UNSIGNED32 AdsInitRawKey(ADSHANDLE) { return ok(); }
