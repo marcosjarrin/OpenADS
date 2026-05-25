@@ -5872,7 +5872,7 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         hdr[11] = static_cast<std::uint8_t>((rl >> 8) & 0xFFu);
         file.insert(file.end(), hdr.begin(), hdr.end());
         std::array<std::uint8_t, 32> fd{};
-        std::strncpy(reinterpret_cast<char*>(fd.data()), "RESULT", 11);
+        std::memcpy(fd.data(), "RESULT", 6);
         fd[11] = 'C'; fd[16] = 255;
         file.insert(file.end(), fd.begin(), fd.end());
         file.push_back(0x0D);
@@ -6495,8 +6495,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             file.insert(file.end(), hdr.begin(), hdr.end());
             for (auto& fd : schema) {
                 std::array<std::uint8_t, 32> bytes{};
-                std::strncpy(reinterpret_cast<char*>(bytes.data()),
-                             fd.name.c_str(), 11);
+                std::memcpy(bytes.data(), fd.name.data(),
+                            std::min(fd.name.size(), std::size_t{11}));
                 bytes[11] = static_cast<std::uint8_t>(fd.raw_type);
                 bytes[16] = static_cast<std::uint8_t>(fd.length);
                 bytes[17] = fd.decimals;
@@ -7286,8 +7286,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             jg_file.insert(jg_file.end(), jg_hdr.begin(), jg_hdr.end());
             for (auto& g : gbs) {
                 std::array<std::uint8_t, 32> fd{};
-                std::strncpy(reinterpret_cast<char*>(fd.data()),
-                             g.name.c_str(), 11);
+                std::memcpy(fd.data(), g.name.data(),
+                            std::min(g.name.size(), std::size_t{11}));
                 fd[11] = g.raw_type ? g.raw_type : 'C';
                 fd[16] = g.length;
                 jg_file.insert(jg_file.end(), fd.begin(), fd.end());
@@ -7342,12 +7342,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                     : 0.0);
                             break;
                         case K::Min:
-                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            if (acc.count[i] == 0) std::memcpy(buf, "0", 2);
                             else std::snprintf(buf, sizeof(buf), "%.6f",
                                                acc.minv[i]);
                             break;
                         case K::Max:
-                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            if (acc.count[i] == 0) std::memcpy(buf, "0", 2);
                             else std::snprintf(buf, sizeof(buf), "%.6f",
                                                acc.maxv[i]);
                             break;
@@ -7488,11 +7488,11 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                      : 0.0);
                         break;
                     case openads::sql::AggregateKind::Min:
-                        if (count[i] == 0) std::strcpy(buf, "0");
+                        if (count[i] == 0) std::memcpy(buf, "0", 2);
                         else std::snprintf(buf, sizeof(buf), "%.6f", minv[i]);
                         break;
                     case openads::sql::AggregateKind::Max:
-                        if (count[i] == 0) std::strcpy(buf, "0");
+                        if (count[i] == 0) std::memcpy(buf, "0", 2);
                         else std::snprintf(buf, sizeof(buf), "%.6f", maxv[i]);
                         break;
                 }
@@ -7848,8 +7848,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 
             for (auto& g : gbs) {
                 std::array<std::uint8_t, 32> fd{};
-                std::strncpy(reinterpret_cast<char*>(fd.data()),
-                             g.name.c_str(), 11);
+                std::memcpy(fd.data(), g.name.data(),
+                            std::min(g.name.size(), std::size_t{11}));
                 fd[11] = g.raw_type ? g.raw_type : 'C';
                 fd[16] = g.length;
                 file.insert(file.end(), fd.begin(), fd.end());
@@ -7934,12 +7934,12 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                     : 0.0);
                             break;
                         case K::Min:
-                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            if (acc.count[i] == 0) std::memcpy(buf, "0", 2);
                             else std::snprintf(buf, sizeof(buf), "%.6f",
                                                acc.minv[i]);
                             break;
                         case K::Max:
-                            if (acc.count[i] == 0) std::strcpy(buf, "0");
+                            if (acc.count[i] == 0) std::memcpy(buf, "0", 2);
                             else std::snprintf(buf, sizeof(buf), "%.6f",
                                                acc.maxv[i]);
                             break;
@@ -8211,11 +8211,11 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                                  : 0.0);
                     break;
                 case openads::sql::AggregateKind::Min:
-                    if (count[i] == 0) std::strcpy(buf, "0");
+                    if (count[i] == 0) std::memcpy(buf, "0", 2);
                     else std::snprintf(buf, sizeof(buf), "%.6f", minv[i]);
                     break;
                 case openads::sql::AggregateKind::Max:
-                    if (count[i] == 0) std::strcpy(buf, "0");
+                    if (count[i] == 0) std::memcpy(buf, "0", 2);
                     else std::snprintf(buf, sizeof(buf), "%.6f", maxv[i]);
                     break;
             }
@@ -9621,8 +9621,8 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         file.insert(file.end(), hdr.begin(), hdr.end());
         for (auto& o : outs) {
             std::array<std::uint8_t, 32> fd{};
-            std::strncpy(reinterpret_cast<char*>(fd.data()),
-                         o.name.c_str(), 11);
+            std::memcpy(fd.data(), o.name.data(),
+                        std::min(o.name.size(), std::size_t{11}));
             fd[11] = static_cast<std::uint8_t>(o.raw_type);
             fd[16] = o.length;
             file.insert(file.end(), fd.begin(), fd.end());

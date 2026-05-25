@@ -13,15 +13,16 @@ namespace openads::engine {
 namespace {
 
 static inline uint32_t le32(const std::string& b, std::size_t off) {
-    return static_cast<uint8_t>(b[off])
-         | (static_cast<uint8_t>(b[off+1]) << 8)
-         | (static_cast<uint8_t>(b[off+2]) << 16)
-         | (static_cast<uint8_t>(b[off+3]) << 24);
+    return static_cast<uint32_t>(static_cast<uint8_t>(b[off]))
+         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+1])) << 8)
+         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+2])) << 16)
+         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+3])) << 24);
 }
 
 static inline uint16_t le16(const std::string& b, std::size_t off) {
-    return static_cast<uint8_t>(b[off])
-         | (static_cast<uint8_t>(b[off+1]) << 8);
+    return static_cast<uint16_t>(
+        static_cast<unsigned>(static_cast<uint8_t>(b[off]))
+      | (static_cast<unsigned>(static_cast<uint8_t>(b[off+1])) << 8));
 }
 
 static void put_le32(std::string& b, std::size_t off, uint32_t v) {
@@ -146,15 +147,15 @@ util::Result<void> DataDict::load_add_binary_(const std::string& buf) {
         }
 
         // More Property (9 bytes)
-        for (int j = 0; j < 9; ++j)
-            r.more_property[j] = static_cast<uint8_t>(buf[base + 498 + j]);
+        for (std::size_t j = 0; j < 9; ++j)
+            r.more_property[j] = static_cast<uint8_t>(buf[base + 498u + j]);
 
         r.info1 = le32(buf, base + 507);
         r.info2 = le32(buf, base + 511);
 
         // Comment (9 bytes)
-        for (int j = 0; j < 9; ++j)
-            r.comment[j] = static_cast<uint8_t>(buf[base + 515 + j]);
+        for (std::size_t j = 0; j < 9; ++j)
+            r.comment[j] = static_cast<uint8_t>(buf[base + 515u + j]);
 
         binary_recs_.push_back(std::move(r));
 
@@ -626,13 +627,13 @@ std::string DataDict::serialize_binary_rec_(const BinaryRecord& r,
             rec[225 + i] = r.property[i];
     }
     // More Property (9 bytes at 498)
-    for (int j = 0; j < 9; ++j)
-        rec[498 + j] = static_cast<char>(r.more_property[j]);
+    for (std::size_t j = 0; j < 9; ++j)
+        rec[498u + j] = static_cast<char>(r.more_property[j]);
     put_le32(rec, 507, r.info1);
     put_le32(rec, 511, r.info2);
     // Comment (9 bytes at 515)
-    for (int j = 0; j < 9; ++j)
-        rec[515 + j] = static_cast<char>(r.comment[j]);
+    for (std::size_t j = 0; j < 9; ++j)
+        rec[515u + j] = static_cast<char>(r.comment[j]);
 
     return rec;
 }

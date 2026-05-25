@@ -1025,21 +1025,29 @@ void Server::session_loop(Socket s) {
                     auto map_type = [](openads::drivers::DbfFieldType t) -> std::uint16_t {
                         using T = openads::drivers::DbfFieldType;
                         switch (t) {
-                            case T::Character: return ADS_STRING;
+                            case T::Character:    return ADS_STRING;
                             case T::Numeric:
-                            case T::Float:     return ADS_NUMERIC;
-                            case T::Logical:   return ADS_LOGICAL;
-                            case T::Date:      return ADS_DATE;
-                            case T::DateTime:  return ADS_TIMESTAMP;
-                            case T::Memo:      return ADS_MEMO;
-                            case T::Integer:   return ADS_INTEGER;
-                            case T::Currency:  return ADS_MONEY;
-                            case T::Double:    return ADS_DOUBLE;
-                            case T::Varchar:   return ADS_STRING;
-                            case T::Varbinary: return ADS_RAW;
-                            case T::Unknown:   return ADS_FIELD_TYPE_UNKNOWN;
+                            case T::Float:        return ADS_NUMERIC;
+                            case T::Logical:      return ADS_LOGICAL;
+                            case T::Date:
+                            case T::AdtDate:      return ADS_DATE;
+                            case T::DateTime:
+                            case T::AdtTimestamp: return ADS_TIMESTAMP;
+                            case T::Memo:         return ADS_MEMO;
+                            case T::Integer:
+                            case T::ShortInt:
+                            case T::AutoInc:      return ADS_INTEGER;
+                            case T::Currency:
+                            case T::AdtMoney:     return ADS_MONEY;
+                            case T::Double:       return ADS_DOUBLE;
+                            case T::Varchar:
+                            case T::CiCharacter:  return ADS_STRING;
+                            case T::Varbinary:
+                            case T::Binary:       return ADS_RAW;
+                            case T::Time:         return ADS_TIME;
+                            case T::Unknown:
+                            default:              return ADS_FIELD_TYPE_UNKNOWN;
                         }
-                        return ADS_FIELD_TYPE_UNKNOWN;
                     };
                     auto nf = static_cast<std::uint16_t>(tbl->field_count());
                     reply.payload.push_back(static_cast<std::uint8_t>(nf & 0xFFu));

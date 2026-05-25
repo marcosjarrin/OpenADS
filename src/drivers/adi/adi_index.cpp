@@ -13,8 +13,8 @@ namespace {
 // ── Byte-level helpers ────────────────────────────────────────────────────────
 
 std::uint16_t u16_le(const std::uint8_t* p) noexcept {
-    return static_cast<std::uint16_t>(p[0]) |
-           (static_cast<std::uint16_t>(p[1]) << 8);
+    return static_cast<std::uint16_t>(
+        static_cast<unsigned>(p[0]) | (static_cast<unsigned>(p[1]) << 8));
 }
 
 std::uint32_t u32_le(const std::uint8_t* p) noexcept {
@@ -56,12 +56,14 @@ std::uint32_t page_rsib (const std::uint8_t* pg) noexcept { return u32_le(pg+8);
 // Format: key[8](BE sign-flipped float64) + cum[4](BE uint32) + page_no[4](BE uint32)
 
 std::uint32_t tree_entry_page(const std::uint8_t* pg, int idx) noexcept {
-    const std::uint8_t* e = pg + ADI_TREE_ENTRY_START + idx * ADI_TREE_ENTRY_SIZE;
+    const std::uint8_t* e = pg + ADI_TREE_ENTRY_START
+                            + static_cast<std::uint32_t>(idx) * ADI_TREE_ENTRY_SIZE;
     return u32_be(e + 12);
 }
 
 const std::uint8_t* tree_entry_key(const std::uint8_t* pg, int idx) noexcept {
-    return pg + ADI_TREE_ENTRY_START + idx * ADI_TREE_ENTRY_SIZE;
+    return pg + ADI_TREE_ENTRY_START
+           + static_cast<std::uint32_t>(idx) * ADI_TREE_ENTRY_SIZE;
 }
 
 // ── Character branch entry (level 1 for char-key ADI) ────────────────────────
@@ -75,19 +77,14 @@ std::uint32_t char_tree_entry_page(const std::uint8_t* pg, int idx,
     return static_cast<std::uint32_t>(e[key_padded_len + 4]);
 }
 
-const std::uint8_t* char_tree_entry_key(const std::uint8_t* pg, int idx,
-                                        std::uint32_t entry_sz) noexcept {
-    return pg + ADI_TREE_ENTRY_START
-           + static_cast<std::uint32_t>(idx) * entry_sz;
-}
-
 // ── Dense-leaf entry: starts at offset 24 ────────────────────────────────────
 // Format: recno[1](byte) + key_or_dup_trail[1 or 2]
 // entry_sz = dense_entry_size(fld_length): 2 for 1-byte fields, 3 for wider
 
 std::uint32_t dense_entry_recno(const std::uint8_t* pg, int idx,
                                 std::uint32_t entry_sz) noexcept {
-    const std::uint8_t* e = pg + ADI_DENSE_ENTRY_START + idx * entry_sz;
+    const std::uint8_t* e = pg + ADI_DENSE_ENTRY_START
+                            + static_cast<std::uint32_t>(idx) * entry_sz;
     return e[0];  // 1-byte record number
 }
 
@@ -103,17 +100,6 @@ std::string pack_double_key(double v) {
     // Flip sign bit so negative values sort before positive
     raw[0] ^= 0x80u;
     return std::string(reinterpret_cast<char*>(raw), 8);
-}
-
-// Unpack an ADI 8-byte key back to double (for debug / seek conversion)
-double unpack_double_key(const std::string& key) {
-    std::uint8_t raw[8];
-    std::memcpy(raw, key.data(), 8);
-    raw[0] ^= 0x80u;                       // un-flip sign
-    std::reverse(raw, raw + 8);            // BE → LE
-    double v;
-    std::memcpy(&v, raw, 8);
-    return v;
 }
 
 // Encode an ADT field value to ADI key bytes, given ADT type and field data.
