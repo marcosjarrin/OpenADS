@@ -11278,12 +11278,54 @@ UNSIGNED32 AdsFindConnection(UNSIGNED8* /*pucServer*/, ADSHANDLE* phConnect) {
     if (phConnect) *phConnect = 0;
     return fail(openads::AE_NO_CONNECTION, "no connection for path");
 }
-UNSIGNED32 AdsGetAllIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
-    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
-    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
-UNSIGNED32 AdsGetAllTables(ADSHANDLE /*hConnect*/, ADSHANDLE* /*ah*/, UNSIGNED16* pus)
-    { if (pus) *pus = 0; return openads::AE_FUNCTION_NOT_AVAILABLE; }
+UNSIGNED32 AdsGetAllIndexes(ADSHANDLE hTable, ADSHANDLE* ahIndex,
+                            UNSIGNED16* pusArrayLen) {
+    if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
+    if (get_remote_table(hTable)) { *pusArrayLen = 0; return ok(); }
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    std::vector<ADSHANDLE> found;
+    for (auto& [h, b] : index_bindings()) {
+        if (b.table == t) found.push_back(h);
+    }
+    UNSIGNED16 cap   = *pusArrayLen;
+    auto       total = static_cast<UNSIGNED16>(found.size());
+    UNSIGNED16 n     = cap < total ? cap : total;
+    *pusArrayLen     = n;
+    if (ahIndex) {
+        for (UNSIGNED16 i = 0; i < n; ++i) ahIndex[i] = found[i];
+    }
+    return ok();
+}
+UNSIGNED32 AdsGetFTSIndexes(ADSHANDLE /*hTable*/, ADSHANDLE* /*ahIndex*/,
+                             UNSIGNED16* pusArrayLen) {
+    // FTS indexes are loaded ad-hoc at query time with no persistent
+    // handle, so there is nothing to enumerate here.
+    if (pusArrayLen) *pusArrayLen = 0;
+    return ok();
+}
+UNSIGNED32 AdsGetAllTables(ADSHANDLE hConnect, ADSHANDLE* ahTable,
+                           UNSIGNED16* pusArrayLen) {
+    if (!pusArrayLen) return fail(openads::AE_INTERNAL_ERROR, "null out");
+    auto& s = state();
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
+    Connection* conn =
+        s.registry.lookup<Connection>(hConnect, HandleKind::Connection);
+    if (!conn) { *pusArrayLen = 0; return ok(); }  // remote or unknown
+    std::vector<ADSHANDLE> found;
+    s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
+        if (k != HandleKind::Table) return;
+        if (conn->owns_table_ptr(static_cast<Table*>(p))) found.push_back(h);
+    });
+    UNSIGNED16 cap   = *pusArrayLen;
+    auto       total = static_cast<UNSIGNED16>(found.size());
+    UNSIGNED16 n     = cap < total ? cap : total;
+    *pusArrayLen     = n;
+    if (ahTable) {
+        for (UNSIGNED16 i = 0; i < n; ++i) ahTable[i] = found[i];
+    }
+    return ok();
+}
 UNSIGNED32 AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
     if (!phClone) return fail(openads::AE_INTERNAL_ERROR, "null out param");
     *phClone = 0;

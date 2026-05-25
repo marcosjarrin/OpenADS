@@ -186,10 +186,13 @@ Check off completed work and commit the file update so it stays current.
       `AdsCopyTableStructure` (schema-only copy, 0 records). All
       implemented and tested. (2026-05-25)
 
-- [ ] **Enumeration stubs**.
-      `AdsGetAllTables`, `AdsGetAllIndexes`, `AdsGetFTSIndexes` return
-      zero-count stubs. DD-aware GUI tools (Studio, ADS Data Architect
-      equivalents) call these to populate their object trees.
+- [x] **Enumeration stubs**.
+      `AdsGetAllTables` enumerates all table handles owned by a connection
+      (iterates `HandleRegistry` for `HandleKind::Table`, filters via
+      `owns_table_ptr`). `AdsGetAllIndexes` enumerates all index handles
+      bound to a table (iterates `index_bindings()`). `AdsGetFTSIndexes`
+      returns 0 — FTS indexes have no persistent handles in OpenADS.
+      3 tests in `tests/unit/abi_enum_test.cpp`. (2026-05-25)
 
 ---
 
