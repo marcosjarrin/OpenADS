@@ -10950,9 +10950,17 @@ UNSIGNED32 AdsGetKeyCount(ADSHANDLE hIndex, UNSIGNED16 /*usFilter*/,
     if (Table* t = get_table(hIndex)) *pulCount = t->record_count();
     return ok();
 }
-UNSIGNED32 AdsContinue(ADSHANDLE /*hTable*/, UNSIGNED16* pbFound) {
+UNSIGNED32 AdsContinue(ADSHANDLE hTable, UNSIGNED16* pbFound) {
     if (pbFound) *pbFound = 0;
-    return openads::AE_FUNCTION_NOT_AVAILABLE;   // X# runs LOCATE/CONTINUE itself
+    Table* t = get_table(hTable);
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    // Skip one record forward — Table::skip() is filter-aware: it walks
+    // past non-matching records until it finds one that passes the current
+    // filter (AOF or SetFilter) or reaches EOF.
+    auto r = t->skip(1);
+    if (!r) return fail(r.error());
+    if (pbFound) *pbFound = t->eof() ? 0 : 1;
+    return ok();
 }
 UNSIGNED32 AdsEvalTestExpr(ADSHANDLE /*hTable*/, UNSIGNED8* /*pucExpr*/,
                            UNSIGNED16* pusType) {

@@ -137,6 +137,62 @@ TEST_CASE("AdsSetAOF: Skip walks only matching records") {
     fs::remove(p);
 }
 
+TEST_CASE("AdsContinue: walks filter-matching records in order") {
+    // Fixture: AAA/25, BBB/42, CCC/30, DDD/18
+    // AOF:  AGE >= 25  →  records 1, 2, 3 pass; record 4 (DDD/18) does not.
+    auto p = make_fixture("cont");
+    auto dir  = p.parent_path().string();
+    auto base = p.filename().string();
+    {
+        ADSHANDLE hConn = 0;
+        REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(dir.data()),
+                             ADS_LOCAL_SERVER, nullptr, nullptr,
+                             ADS_DEFAULT, &hConn) == 0);
+        ADSHANDLE hT = 0;
+        REQUIRE(AdsOpenTable(hConn,
+                             reinterpret_cast<UNSIGNED8*>(base.data()),
+                             nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0,
+                             &hT) == 0);
+
+        std::string cond = "AGE >= 25";
+        REQUIRE(AdsSetAOF(hT,
+                          reinterpret_cast<UNSIGNED8*>(cond.data()),
+                          0) == 0);
+
+        // GoTop lands on rec 1 (AAA/25 — passes filter).
+        REQUIRE(AdsGotoTop(hT) == 0);
+        UNSIGNED32 r = 0;
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 1);
+
+        // Continue → rec 2 (BBB/42)
+        UNSIGNED16 found = 0;
+        REQUIRE(AdsContinue(hT, &found) == 0);
+        CHECK(found == 1);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 2);
+
+        // Continue → rec 3 (CCC/30)
+        found = 0;
+        REQUIRE(AdsContinue(hT, &found) == 0);
+        CHECK(found == 1);
+        REQUIRE(AdsGetRecordNum(hT, ADS_IGNOREFILTERS, &r) == 0);
+        CHECK(r == 3);
+
+        // Continue → skips rec 4 (DDD/18 fails filter) → EOF, not found
+        found = 1;
+        REQUIRE(AdsContinue(hT, &found) == 0);
+        CHECK(found == 0);
+        UNSIGNED16 eof = 0;
+        REQUIRE(AdsAtEOF(hT, &eof) == 0);
+        CHECK(eof != 0);
+
+        AdsCloseTable(hT);
+        AdsDisconnect(hConn);
+    }
+    fs::remove(p);
+}
+
 TEST_CASE("AdsSetAOF: non-optimisable AOF succeeds with OPTIMIZED_NONE") {
     auto p = make_fixture("badparse");
     auto dir = p.parent_path().string();

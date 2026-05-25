@@ -169,9 +169,12 @@ Check off completed work and commit the file update so it stays current.
 - [ ] **`AdsRestructureTable` type conversion** — rename + retype is
       deferred; apps that need it can issue DELETE + ADD for now.
 
-- [ ] **`AdsContinue`** (LOCATE/CONTINUE loop).
-      Returns `AE_FUNCTION_NOT_AVAILABLE`; X# runs LOCATE itself but
-      Harbour apps calling `CONTINUE` directly will fail.
+- [x] **`AdsContinue`** (LOCATE/CONTINUE loop).
+      Implemented: filter-aware skip(1) on the underlying Table — since
+      `Table::skip()` already walks past non-matching records when a
+      filter or AOF bitmap is active, `AdsContinue` is a single-step
+      forward move with `*pbFound = eof() ? 0 : 1`. Test in
+      `tests/unit/abi_aof_test.cpp`. (2026-05-24)
 
 - [ ] **Table-management stubs**.
       `AdsCopyTableContent`, `AdsCloneTable`, `AdsCopyTableStructure`
