@@ -73,6 +73,115 @@ final class AceLibrary
         UNSIGNED32 AdsSeek(ADSHANDLE hIndex, UNSIGNED8* pucKey,
             UNSIGNED16 usKeyLen, UNSIGNED16 usKeyType,
             UNSIGNED16 usSeekType, UNSIGNED16* pbFound);
+
+        /* Data Dictionary — creation */
+        UNSIGNED32 AdsDDCreate(UNSIGNED8* pucDictionary, UNSIGNED16 bEncrypt,
+            UNSIGNED8* pucAdminPassword, ADSHANDLE* phConnect);
+
+        /* Tables */
+        UNSIGNED32 AdsDDAddTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+            UNSIGNED8* pucTablePath, UNSIGNED16 usFileType,
+            UNSIGNED16 usCharType, UNSIGNED8* pucIndexPath,
+            UNSIGNED8* pucComment);
+        UNSIGNED32 AdsDDRemoveTable(ADSHANDLE hConnect, UNSIGNED8* pucAlias,
+            UNSIGNED16 usDeleteFiles);
+        UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16 usLen);
+        UNSIGNED32 AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucUser, UNSIGNED32* pulLevel);
+        UNSIGNED32 AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucUser, UNSIGNED32 ulLevel);
+
+        /* Fields */
+        UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucField, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucField, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16 usLen);
+
+        /* Indexes */
+        UNSIGNED32 AdsDDGetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucIndex, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+            UNSIGNED8* pucIndex, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16 usLen);
+
+        /* Users */
+        UNSIGNED32 AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
+            UNSIGNED8* pucUser, UNSIGNED8* pucPwd, UNSIGNED8* pucDesc);
+        UNSIGNED32 AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser);
+        UNSIGNED32 AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16 usLen);
+        UNSIGNED32 AdsDDAddUserToGroup(ADSHANDLE hConn,
+            UNSIGNED8* pucGroup, UNSIGNED8* pucUser);
+        UNSIGNED32 AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
+            UNSIGNED8* pucGroup, UNSIGNED8* pucUser);
+
+        /* Database properties */
+        UNSIGNED32 AdsDDGetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usProp,
+            UNSIGNED8* pBuf, UNSIGNED16 usLen);
+
+        /* Index files */
+        UNSIGNED32 AdsDDAddIndexFile(ADSHANDLE hConn,
+            UNSIGNED8* pucTable, UNSIGNED8* pucIndex, UNSIGNED8* pucComment);
+        UNSIGNED32 AdsDDRemoveIndexFile(ADSHANDLE hConn,
+            UNSIGNED8* pucTable, UNSIGNED8* pucIndex, UNSIGNED16 usOptions);
+
+        /* Links */
+        UNSIGNED32 AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+            UNSIGNED8* pucPath, UNSIGNED8* pucUser,
+            UNSIGNED8* pucPwd, UNSIGNED16 usOptions);
+        UNSIGNED32 AdsDDDropLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+            UNSIGNED16 bPhysical);
+        UNSIGNED32 AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
+            UNSIGNED8* pucPath, UNSIGNED8* pucUser,
+            UNSIGNED8* pucPwd, UNSIGNED16 usOptions);
+
+        /* Referential integrity */
+        UNSIGNED32 AdsDDCreateRefIntegrity(ADSHANDLE hConn,
+            UNSIGNED8* pucName, UNSIGNED8* pucFail,
+            UNSIGNED8* pucParent, UNSIGNED8* pucParentKey,
+            UNSIGNED8* pucChild, UNSIGNED8* pucChildKey,
+            UNSIGNED16 usUpdateRule, UNSIGNED16 usDeleteRule);
+        UNSIGNED32 AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucName);
+
+        /* Triggers — (name, table, ulType, ulOptions, container, procedure, priority) */
+        UNSIGNED32 AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED8* pucTable, UNSIGNED32 ulType,
+            UNSIGNED32 ulOptions, UNSIGNED8* pucContainer,
+            UNSIGNED8* pucProcedure, UNSIGNED32 ulPriority);
+        UNSIGNED32 AdsDDDropTrigger(ADSHANDLE hConn, UNSIGNED8* pucName);
+        UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16 usLen);
+
+        /* Stored procedures — (name, container, procedure, input, output) */
+        UNSIGNED32 AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED8* pucContainer, UNSIGNED8* pucProcedure,
+            UNSIGNED8* pucInput, UNSIGNED8* pucOutput);
+        UNSIGNED32 AdsDDDropProcedure(ADSHANDLE hConn, UNSIGNED8* pucName);
+        UNSIGNED32 AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16 usLen);
+
+        /* Views — (name, comments, sql) — note: comment before sql */
+        UNSIGNED32 AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED8* pucComments, UNSIGNED8* pucSQL);
+        UNSIGNED32 AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName);
+        UNSIGNED32 AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16* pusLen);
+        UNSIGNED32 AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+            UNSIGNED16 usProp, UNSIGNED8* pBuf, UNSIGNED16 usLen);
         C;
 
     private static ?self $instance = null;

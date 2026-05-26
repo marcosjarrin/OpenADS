@@ -1284,8 +1284,8 @@ UNSIGNED32 AdsCreateTable(ADSHANDLE     hConn,
             std::size_t n = std::min<std::size_t>(f.name.size(), 127u);
             std::memcpy(fd, f.name.data(), n);
             // fd[128] = flags (0 = not nullable)
-            fd[129] = static_cast<std::uint8_t>(sp.adt_type);
-            fd[130] = static_cast<std::uint8_t>(sp.adt_type >> 8);
+            fd[129] = static_cast<std::uint8_t>(sp.adt_type & 0xFFu);
+            fd[130] = static_cast<std::uint8_t>((sp.adt_type >> 8) & 0xFFu);
             fd[131] = static_cast<std::uint8_t>(fld_off & 0xFFu);
             fd[132] = static_cast<std::uint8_t>((fld_off >> 8) & 0xFFu);
             fd[135] = static_cast<std::uint8_t>(sp.adt_length & 0xFFu);

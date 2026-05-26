@@ -34,6 +34,90 @@ final class AceTypes
     public const ADS_HARDSEEK = 0;
     public const ADS_SOFTSEEK = 1;
 
+    /** Data Dictionary — database properties (AdsDDGetDatabaseProperty). */
+    public const ADS_DD_COMMENT                  = 1;
+    public const ADS_DD_ADMIN_PASSWORD           = 2;
+    public const ADS_DD_DEFAULT_TABLE_PATH       = 3;
+    public const ADS_DD_LOG_IN_REQUIRED          = 5;
+    public const ADS_DD_VERIFY_ACCESS_RIGHTS     = 6;
+    public const ADS_DD_MAX_FAILED_ATTEMPTS      = 21;
+
+    /** Data Dictionary — RI rule options. */
+    public const ADS_DD_RI_CASCADE               = 1;
+    public const ADS_DD_RI_RESTRICT              = 2;
+    public const ADS_DD_RI_SETNULL               = 3;
+    public const ADS_DD_RI_SETDEFAULT            = 4;
+
+    /** Data Dictionary — user properties. */
+    public const ADS_DD_USER_PASSWORD            = 1101;
+    public const ADS_DD_USER_GROUP_MEMBERSHIP    = 1102;
+    public const ADS_DD_USER_BAD_LOGINS          = 1103;
+
+    /** Data Dictionary — table properties (AdsDDGetTableProperty). */
+    public const ADS_DD_TABLE_VALIDATION_EXPR    = 200;
+    public const ADS_DD_TABLE_VALIDATION_MSG     = 201;
+    public const ADS_DD_TABLE_PRIMARY_KEY        = 202;
+    public const ADS_DD_TABLE_AUTO_CREATE        = 203;
+    public const ADS_DD_TABLE_TYPE               = 204;
+    public const ADS_DD_TABLE_PATH               = 205;
+    public const ADS_DD_TABLE_FIELD_COUNT        = 206;
+    public const ADS_DD_TABLE_OBJ_ID             = 208;
+    public const ADS_DD_TABLE_IS_RI_PARENT       = 210;
+    public const ADS_DD_TABLE_RELATIVE_PATH      = 211;
+    public const ADS_DD_TABLE_CHAR_TYPE          = 212;
+    public const ADS_DD_TABLE_DEFAULT_INDEX      = 213;
+    public const ADS_DD_TABLE_ENCRYPTION         = 214;
+    public const ADS_DD_TABLE_MEMO_BLOCK_SIZE    = 215;
+    public const ADS_DD_TABLE_PERMISSION_LEVEL   = 216;
+
+    /** Data Dictionary — table permission levels. */
+    public const ADS_DD_TABLE_PERMISSION_NONE    = 0;
+    public const ADS_DD_TABLE_PERMISSION_READ    = 1;
+    public const ADS_DD_TABLE_PERMISSION_WRITE   = 2;
+    public const ADS_DD_TABLE_PERMISSION_DELETE  = 3;
+    public const ADS_DD_TABLE_PERMISSION_FULL    = 4;
+
+    /** Data Dictionary — field properties (AdsDDGetFieldProperty). */
+    public const ADS_DD_FIELD_NAME               = 301;
+    public const ADS_DD_FIELD_TYPE               = 302;
+    public const ADS_DD_FIELD_LENGTH             = 303;
+    public const ADS_DD_FIELD_DECIMAL            = 304;
+    public const ADS_DD_FIELD_REQUIRED           = 305;
+    public const ADS_DD_FIELD_DEFAULT            = 306;
+    public const ADS_DD_FIELD_VALIDATION_RULE    = 307;
+    public const ADS_DD_FIELD_VALIDATION_MSG     = 308;
+    public const ADS_DD_FIELD_COMMENT            = 309;
+
+    /** Data Dictionary — index properties (AdsDDGetIndexProperty). */
+    public const ADS_DD_INDEX_FILE_NAME          = 401;
+    public const ADS_DD_INDEX_EXPR               = 402;
+    public const ADS_DD_INDEX_UNIQUE             = 403;
+    public const ADS_DD_INDEX_DESCENDING         = 404;
+    public const ADS_DD_INDEX_CONDITION          = 405;
+    public const ADS_DD_INDEX_KEY_LENGTH         = 406;
+    public const ADS_DD_INDEX_TYPE               = 407;
+    public const ADS_DD_INDEX_FILE_TYPE          = 408;
+
+    /** Data Dictionary — trigger properties (AdsDDGetTriggerProperty). */
+    public const ADS_DD_TRIGGER_TABLE            = 501;
+    public const ADS_DD_TRIGGER_EVENT            = 502;
+    public const ADS_DD_TRIGGER_CONTAINER        = 503;
+    public const ADS_DD_TRIGGER_PROC_NAME        = 504;
+    public const ADS_DD_TRIGGER_ENABLED          = 505;
+    public const ADS_DD_TRIGGER_PRIORITY         = 506;
+    public const ADS_DD_TRIGGER_COMMENT          = 507;
+
+    /** Data Dictionary — procedure properties (AdsDDGetProcProperty). */
+    public const ADS_DD_PROC_INPUT               = 601;
+    public const ADS_DD_PROC_OUTPUT              = 602;
+    public const ADS_DD_PROC_CONTAINER           = 603;
+    public const ADS_DD_PROC_PROC_NAME           = 604;
+    public const ADS_DD_PROC_COMMENT             = 605;
+
+    /** Data Dictionary — view properties (AdsDDGetViewProperty). */
+    public const ADS_DD_VIEW_STMT                = 701;
+    public const ADS_DD_VIEW_COMMENT             = 702;
+
     /** Subset of AE_* codes worth naming in error messages. */
     private const ERROR_NAMES = [
         0    => 'AE_SUCCESS',

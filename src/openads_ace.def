@@ -117,20 +117,38 @@ EXPORTS
     AdsDDAddIndexFile
     AdsDDAddUserToGroup
     AdsDDCreateLink
+    AdsDDCreateProcedure
     AdsDDCreateRefIntegrity
+    AdsDDCreateTrigger
     AdsDDCreateUser
+    AdsDDCreateView
     AdsDDDeleteUser
     AdsDDDropLink
+    AdsDDDropProcedure
+    AdsDDDropTrigger
+    AdsDDDropView
     AdsDDGetDatabaseProperty
+    AdsDDGetFieldProperty
+    AdsDDGetIndexProperty
+    AdsDDGetProcProperty
     AdsDDGetTableProperty
+    AdsDDGetTriggerProperty
     AdsDDGetUserProperty
+    AdsDDGetUserTableRights
+    AdsDDGetViewProperty
     AdsDDModifyLink
     AdsDDRemoveIndexFile
     AdsDDRemoveRefIntegrity
     AdsDDRemoveUserFromGroup
     AdsDDSetDatabaseProperty
+    AdsDDSetFieldProperty
+    AdsDDSetIndexProperty
+    AdsDDSetProcProperty
     AdsDDSetTableProperty
+    AdsDDSetTriggerProperty
     AdsDDSetUserProperty
+    AdsDDSetUserTableRights
+    AdsDDSetViewProperty
     AdsDeleteCustomKey
     AdsDeleteFile
     AdsEvalAOF

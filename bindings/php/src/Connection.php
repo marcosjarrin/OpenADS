@@ -5,6 +5,7 @@ namespace OpenADS;
 
 use FFI;
 use OpenADS\Exception\ConnectionException;
+use OpenADS\Exception\OpenAdsException;
 use OpenADS\Ffi\AceLibrary;
 use OpenADS\Ffi\AceTypes;
 
@@ -13,6 +14,9 @@ final class Connection
     private AceLibrary $lib;
     private int $handle = 0;
     private bool $open = false;
+
+    /** Internal sentinel: skip AdsConnect60 when wrapping an existing handle. */
+    private const SKIP_CONNECT = "\x00__bypass__";
 
     /**
      * @param string $uri  Local data-dir path, or tcp:// / tls:// URI.
@@ -23,7 +27,10 @@ final class Connection
         ?string $pass = null
     ) {
         $this->lib = AceLibrary::load();
-        $ffi       = $this->lib->ffi();
+        if ($uri === self::SKIP_CONNECT) {
+            return;
+        }
+        $ffi = $this->lib->ffi();
 
         $serverType = str_starts_with($uri, 'tcp://') || str_starts_with($uri, 'tls://')
             ? AceTypes::ADS_REMOTE_SERVER
@@ -72,6 +79,40 @@ final class Connection
     public function table(string $name): Table
     {
         return new Table($this, $name);
+    }
+
+    /** Access Data Dictionary functions on this connection. */
+    public function dd(): DataDictionary
+    {
+        return new DataDictionary($this);
+    }
+
+    /**
+     * Create a new Data Dictionary on disk and return a Connection rooted at it.
+     * The .add file is created if it does not already exist.
+     */
+    public static function createDictionary(string $path): self
+    {
+        $lib = AceLibrary::load();
+        $ffi = $lib->ffi();
+        $out = $lib->newHandle();
+        $rc  = $ffi->AdsDDCreate(
+            self::cstr($ffi, $path),
+            0,
+            null,
+            FFI::addr($out)
+        );
+        if ($rc !== AceTypes::AE_SUCCESS) {
+            [$code, $text] = $lib->lastError();
+            throw new OpenAdsException(
+                "AdsDDCreate('$path') failed: " . AceTypes::errorName($code) . " ($code): $text",
+                $code
+            );
+        }
+        $conn         = new self(self::SKIP_CONNECT);
+        $conn->handle = $lib->handleValue($out);
+        $conn->open   = true;
+        return $conn;
     }
 
     public function close(): void
