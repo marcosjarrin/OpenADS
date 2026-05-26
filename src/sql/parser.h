@@ -348,4 +348,29 @@ struct ExecuteProcedureStmt {
 };
 util::Result<ExecuteProcedureStmt> parse_execute_procedure(const std::string& sql);
 
+// CREATE DATABASE "path" [PASSWORD '...' DESCRIPTION '...' ENCRYPT True/False]
+struct CreateDatabaseStmt {
+    std::string path;
+    std::string password;
+    std::string description;
+    bool        encrypt = false;
+};
+
+// GRANT right [("col")] ON object TO principal
+// REVOKE right [("col")] ON object FROM principal
+struct GrantStmt {
+    bool        is_revoke = false;
+    std::string right;      // ALL, SELECT, INSERT, UPDATE, DELETE, EXECUTE, …
+    std::string column;     // optional column name for column-level grants
+    std::string object;     // table / view / procedure alias
+    std::string principal;  // user, group, or ALL
+};
+
+bool sql_is_create_database(const std::string& sql);
+bool sql_is_grant(const std::string& sql);
+bool sql_is_revoke(const std::string& sql);
+util::Result<CreateDatabaseStmt> parse_create_database(const std::string& sql);
+util::Result<GrantStmt> parse_grant(const std::string& sql);
+util::Result<GrantStmt> parse_revoke(const std::string& sql);
+
 } // namespace openads::sql

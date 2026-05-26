@@ -1730,4 +1730,129 @@ util::Result<InsertStmt> parse_insert(const std::string& sql) {
     return stmt;
 }
 
+bool sql_is_create_database(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("CREATE") && c.match_keyword("DATABASE");
+}
+
+bool sql_is_grant(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("GRANT");
+}
+
+bool sql_is_revoke(const std::string& sql) {
+    Cursor c(sql);
+    return c.match_keyword("REVOKE");
+}
+
+util::Result<CreateDatabaseStmt> parse_create_database(const std::string& sql) {
+    Cursor c(sql);
+    if (!c.match_keyword("CREATE"))
+        return util::Error{7200, 0, "expected CREATE", sql};
+    if (!c.match_keyword("DATABASE"))
+        return util::Error{7200, 0, "expected DATABASE", sql};
+    CreateDatabaseStmt stmt;
+    // Path may be double-quoted (ADS convention) or single-quoted or bare
+    if (c.peek_char('"')) {
+        c.consume_char();
+        while (!c.eof()) {
+            char ch = c.consume_char();
+            if (ch == '"') break;
+            stmt.path.push_back(ch);
+        }
+    } else if (c.peek_char('\'')) {
+        auto s = c.read_string_literal();
+        if (!s) return s.error();
+        stmt.path = s.value();
+    } else {
+        stmt.path = c.read_identifier_or_filename();
+    }
+    if (stmt.path.empty())
+        return util::Error{7200, 0, "expected database path", sql};
+    for (;;) {
+        if (c.match_keyword("PASSWORD")) {
+            auto s = c.read_string_literal();
+            if (s) stmt.password = s.value();
+        } else if (c.match_keyword("DESCRIPTION")) {
+            auto s = c.read_string_literal();
+            if (s) stmt.description = s.value();
+        } else if (c.match_keyword("ENCRYPT")) {
+            std::string val = c.read_identifier();
+            for (auto& ch : val) ch = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(ch)));
+            stmt.encrypt = (val == "true" || val == "1" || val == "yes");
+        } else {
+            break;
+        }
+    }
+    return stmt;
+}
+
+static util::Result<GrantStmt>
+parse_grant_impl(const std::string& sql, bool is_revoke) {
+    Cursor c(sql);
+    if (is_revoke) {
+        if (!c.match_keyword("REVOKE"))
+            return util::Error{7200, 0, "expected REVOKE", sql};
+    } else {
+        if (!c.match_keyword("GRANT"))
+            return util::Error{7200, 0, "expected GRANT", sql};
+    }
+    GrantStmt stmt;
+    stmt.is_revoke = is_revoke;
+    stmt.right = c.read_identifier();
+    for (auto& ch : stmt.right)
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (stmt.right.empty())
+        return util::Error{7200, 0, "expected right type after GRANT/REVOKE", sql};
+    // Optional ("col") column-level specifier
+    if (c.match_char('(')) {
+        if (c.peek_char('"')) {
+            c.consume_char();
+            while (!c.eof()) {
+                char ch = c.consume_char();
+                if (ch == '"') break;
+                stmt.column.push_back(ch);
+            }
+        } else if (c.peek_char('\'')) {
+            auto s = c.read_string_literal();
+            if (s) stmt.column = s.value();
+        } else {
+            stmt.column = c.read_identifier();
+        }
+        if (!c.match_char(')'))
+            return util::Error{7200, 0, "expected ')' after column name", sql};
+    }
+    if (!c.match_keyword("ON"))
+        return util::Error{7200, 0, "expected ON", sql};
+    stmt.object = c.read_identifier();
+    if (stmt.object.empty())
+        return util::Error{7200, 0, "expected object name after ON", sql};
+    if (!is_revoke) {
+        if (!c.match_keyword("TO"))
+            return util::Error{7200, 0, "expected TO after object name", sql};
+    } else {
+        if (!c.match_keyword("FROM"))
+            return util::Error{7200, 0, "expected FROM after object name", sql};
+    }
+    // Principal: bare identifier or [NAME] for group/ALL
+    if (c.match_char('[')) {
+        stmt.principal = c.read_identifier();
+        c.match_char(']');
+    } else {
+        stmt.principal = c.read_identifier();
+    }
+    if (stmt.principal.empty())
+        return util::Error{7200, 0, "expected user or group name", sql};
+    return stmt;
+}
+
+util::Result<GrantStmt> parse_grant(const std::string& sql) {
+    return parse_grant_impl(sql, false);
+}
+
+util::Result<GrantStmt> parse_revoke(const std::string& sql) {
+    return parse_grant_impl(sql, true);
+}
+
 } // namespace openads::sql

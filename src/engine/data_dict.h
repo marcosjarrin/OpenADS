@@ -80,6 +80,14 @@ public:
     const std::unordered_map<std::string, std::unordered_set<std::string>>&
         memberships() const noexcept { return memberships_; }
 
+    // ---- GROUP (M-DD-SQL) ------------------------------------------------
+    util::Result<void> create_group(const std::string& group);
+    util::Result<void> delete_group(const std::string& group);
+    bool has_group(const std::string& group) const noexcept {
+        return groups_.find(group) != groups_.end();
+    }
+    const std::unordered_set<std::string>& groups() const noexcept { return groups_; }
+
     // ---- LINK (M10.1) ----------------------------------------------------
     struct LinkEntry {
         std::string alias;
@@ -245,6 +253,7 @@ private:
     std::unordered_map<std::string, std::string> tables_;
     std::vector<IndexEntry>                      indexes_;
     std::unordered_set<std::string>              users_;
+    std::unordered_set<std::string>              groups_;
     // user → set<group>
     std::unordered_map<std::string,
                        std::unordered_set<std::string>> memberships_;

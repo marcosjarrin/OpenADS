@@ -152,6 +152,23 @@ Check off completed work and commit the file update so it stays current.
       AE_FUNCTION_NOT_AVAILABLE. (2026-05-26)
 
 
+- [x] **DD-related SQL statements** — complete:
+      `CREATE DATABASE "path" [PASSWORD ... DESCRIPTION ... ENCRYPT ...]`;
+      `GRANT right [("col")] ON object TO principal`;
+      `REVOKE right [("col")] ON object FROM principal`;
+      17 built-in `sp_*` stored procedures via `EXECUTE PROCEDURE`:
+      `sp_CreateUser/DropUser`, `sp_CreateGroup/DropGroup`,
+      `sp_AddUserToGroup/RemoveUserFromGroup`,
+      `sp_ModifyUserProperty/ModifyGroupProperty`,
+      `sp_AddTableToDatabase/AddIndexFileToDatabase`,
+      `sp_ModifyTableProperty/ModifyFieldProperty`,
+      `sp_CreateReferentialIntegrity/DropReferentialIntegrity`,
+      `sp_CreateLink/DropLink`, `sp_ModifyDatabase`.
+      `system.iota` (1-row scalar table) and `system.columns`
+      (per-field metadata) added to virtual-table set.
+      `DataDict` gains explicit `GROUP` storage + `create_group`/`delete_group`.
+      10 tests in `tests/unit/abi_sql_dd_sql_test.cpp`. (2026-05-26)
+
 - [ ] **ADS proprietary ADT encryption** — out of scope for now.
       We use our own AES encryption (M11.2). ADS-original per-table
       encryption format not reversed; tables with that flag will open

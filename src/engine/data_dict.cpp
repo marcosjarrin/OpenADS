@@ -251,6 +251,10 @@ util::Result<void> DataDict::load_() {
             std::string name = trim(line.substr(5));
             if (!name.empty()) users_.insert(name);
 
+        } else if (starts_with(line, "GROUP ")) {
+            std::string name = trim(line.substr(6));
+            if (!name.empty()) groups_.insert(name);
+
         } else if (starts_with(line, "MEMBER ")) {
             std::string body = line.substr(7);
             auto eq = body.find('=');
@@ -857,6 +861,23 @@ util::Result<void> DataDict::save_add_binary_() {
     return file.sync();
 }
 
+util::Result<void> DataDict::create_group(const std::string& group) {
+    if (group.empty())
+        return util::Error{5000, 0, "DD group name empty", ""};
+    groups_.insert(group);
+    return save();
+}
+
+util::Result<void> DataDict::delete_group(const std::string& group) {
+    groups_.erase(group);
+    for (auto it = memberships_.begin(); it != memberships_.end(); ) {
+        it->second.erase(group);
+        if (it->second.empty()) it = memberships_.erase(it);
+        else ++it;
+    }
+    return save();
+}
+
 // ---------------------------------------------------------------------------
 // save (text format)
 // ---------------------------------------------------------------------------
@@ -890,6 +911,11 @@ util::Result<void> DataDict::save() {
         std::vector<std::string> us(users_.begin(), users_.end());
         std::sort(us.begin(), us.end());
         for (auto& u : us) out += "USER " + u + "\n";
+    }
+    {
+        std::vector<std::string> gs(groups_.begin(), groups_.end());
+        std::sort(gs.begin(), gs.end());
+        for (auto& g : gs) out += "GROUP " + g + "\n";
     }
     for (auto& u : sorted_keys(memberships_)) {
         std::vector<std::string> gs(memberships_.at(u).begin(),

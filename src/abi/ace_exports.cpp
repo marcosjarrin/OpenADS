@@ -6791,7 +6791,206 @@ static std::string build_system_dbf(Connection* c, std::string sys_name) {
             rows.push_back({kv.first, kv.second});
         return build(cols, rows);
     }
+    if (sys_name == "iota") {
+        const std::vector<Col> cols = {{"IOTA", 'C', 1, 0}};
+        return build(cols, {{std::vector<std::string>{" "}}});
+    }
+    if (sys_name == "columns") {
+        const std::vector<Col> cols = {
+            {"TABLE_NAME", 'C', 200, 0},
+            {"COL_NAME",   'C', 200, 0},
+            {"COL_NUM",    'N',   5, 0},
+            {"COL_TYPE",   'C',  10, 0},
+            {"COL_LEN",    'N',   5, 0},
+            {"COL_DEC",    'N',   3, 0},
+        };
+        std::vector<std::vector<std::string>> rows;
+        for (const auto& kv : dd->tables()) {
+            std::string rel = kv.second;
+            auto th = c->open_table(rel, openads::engine::TableType::Cdx,
+                                    openads::engine::OpenMode::Read);
+            if (!th) continue;
+            openads::engine::Table* tbl = c->lookup_table(th.value());
+            if (tbl) {
+                std::uint16_t nf = tbl->field_count();
+                for (std::uint16_t i = 0; i < nf; ++i) {
+                    const auto& fd = tbl->field_descriptor(i);
+                    rows.push_back({
+                        kv.first,
+                        fd.name,
+                        std::to_string(i + 1),
+                        std::string(1, fd.raw_type),
+                        std::to_string(fd.length),
+                        std::to_string(fd.decimals),
+                    });
+                }
+            }
+            c->close_table(th.value());
+        }
+        return build(cols, rows);
+    }
     return "";
+}
+
+// Dispatch for ADS built-in sp_* stored procedures. Returns true and sets *prc
+// if the name was recognized; caller falls through to the DLL path otherwise.
+static bool dispatch_sp_builtin(
+        Connection* c,
+        const std::string& uname,
+        const std::vector<openads::sql::ExecuteProcedureArg>& args,
+        UNSIGNED32* prc) {
+    auto* dd = c->has_dd() ? c->dd() : nullptr;
+    auto arg = [&](std::size_t i) -> const std::string& {
+        static const std::string empty;
+        return (i < args.size()) ? args[i].text : empty;
+    };
+    auto ri_int = [&](std::size_t i) -> std::int32_t {
+        return (i < args.size() && args[i].is_numeric)
+            ? static_cast<std::int32_t>(args[i].number) : 0;
+    };
+
+    if (uname == "SP_CREATEUSER") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->create_user(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        if (!arg(1).empty()) dd->set_user_property(arg(0), "prop_1101", arg(1));
+        if (!arg(2).empty()) dd->set_user_property(arg(0), "prop_1",    arg(2));
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_DROPUSER") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->delete_user(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_CREATEGROUP") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->create_group(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        if (!arg(1).empty()) dd->set_user_property(arg(0), "prop_1", arg(1));
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_DROPGROUP") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->delete_group(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_ADDUSERTOGROUP") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->add_user_to_group(arg(0), arg(1)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_REMOVEUSERFROMGROUP") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->remove_user_from_group(arg(0), arg(1)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_MODIFYUSERPROPERTY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        std::string upr = arg(1);
+        for (auto& ch : upr) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        std::string key;
+        if      (upr == "PASSWORD")   key = "prop_1101";
+        else if (upr == "COMMENT")    key = "prop_1";
+        else if (upr == "BAD_LOGINS") { *prc = ok(); return true; }  // read-only
+        else                           key = "prop_" + arg(1);
+        if (auto r = dd->set_user_property(arg(0), key, arg(2)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_MODIFYGROUPPROPERTY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        std::string upr = arg(1);
+        for (auto& ch : upr) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        std::string key = (upr == "COMMENT") ? "prop_1" : ("prop_" + arg(1));
+        if (auto r = dd->set_user_property(arg(0), key, arg(2)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_ADDTABLETODATABASE") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->add_table(arg(0), arg(1)); !r) { *prc = fail(r.error()); return true; }
+        // arg(4) may contain semicolon-separated index file paths
+        std::string idxlist = arg(4);
+        if (!idxlist.empty()) {
+            std::string cur;
+            idxlist.push_back(';');
+            for (char ch : idxlist) {
+                if (ch == ';') {
+                    if (!cur.empty()) { dd->add_index_file(arg(0), cur, ""); cur.clear(); }
+                } else cur.push_back(ch);
+            }
+        }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_ADDINDEXFILETODATABASE") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->add_index_file(arg(0), arg(1), arg(2)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_MODIFYTABLEPROPERTY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        dd->set_db_property("TABLEPROP." + arg(0) + "." + arg(1), arg(2));
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_MODIFYFIELDPROPERTY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        std::string upr = arg(2);
+        for (auto& ch : upr) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        std::string key;
+        if      (upr == "REQUIRED")        key = "required";
+        else if (upr == "DEFAULT")         key = "default";
+        else if (upr == "VALIDATION_RULE") key = "rule";
+        else if (upr == "VALIDATION_MSG")  key = "msg";
+        else if (upr == "COMMENT")         key = "comment";
+        else                                key = arg(2);
+        if (auto r = dd->set_field_property(arg(0), arg(1), key, arg(3)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_CREATEREFERENTIALINTEGRITY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        openads::engine::DataDict::RiEntry e;
+        e.name       = arg(0);
+        e.parent     = arg(1);
+        e.child      = arg(2);
+        e.tag        = arg(3);
+        e.update_opt = std::to_string(ri_int(4));
+        e.delete_opt = std::to_string(ri_int(5));
+        e.fail_table = arg(6);
+        if (auto r = dd->create_ri(e); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_DROPREFERENTIALINTEGRITY") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->remove_ri(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_CREATELINK") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        // sp_CreateLink(Name, Dictionary, Global, StaticPath, AuthenticateActiveUser, UserName, Password)
+        if (auto r = dd->create_link(arg(0), arg(1), arg(5), arg(6)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_DROPLINK") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        if (auto r = dd->drop_link(arg(0)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    if (uname == "SP_MODIFYDATABASE") {
+        if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
+        std::string upr = arg(0);
+        for (auto& ch : upr) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        std::string key;
+        if      (upr == "ADMIN_PASSWORD")     key = "prop_1101";
+        else if (upr == "COMMENT")            key = "prop_1";
+        else if (upr == "DEFAULT_TABLE_PATH") key = "prop_3";
+        else if (upr == "LOG_IN_REQUIRED")    key = "prop_5";
+        else if (upr == "ENCRYPT_NEW_TABLE")  key = "prop_10";
+        else if (upr == "MAX_FAILED_ATTEMPTS")key = "prop_11";
+        else                                   key = arg(0);
+        if (auto r = dd->set_db_property(key, arg(1)); !r) { *prc = fail(r.error()); return true; }
+        *prc = ok(); return true;
+    }
+    return false;
 }
 
 UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
@@ -7134,6 +7333,67 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
+    // `CREATE DATABASE "path" [PASSWORD ... DESCRIPTION ... ENCRYPT ...]`
+    if (openads::sql::sql_is_create_database(sql)) {
+        auto cd = openads::sql::parse_create_database(sql);
+        if (!cd) return fail(cd.error());
+        namespace fs = std::filesystem;
+        std::string path = cd.value().path;
+        if (fs::path(path).is_relative())
+            path = (fs::path(c->data_dir()) / path).string();
+        auto r = openads::engine::DataDict::create(path);
+        if (!r) return fail(r.error());
+        if (!cd.value().password.empty())
+            r.value().set_db_property("prop_1101", cd.value().password);
+        if (!cd.value().description.empty())
+            r.value().set_db_property("prop_1", cd.value().description);
+        *phCursor = 0;
+        return ok();
+    }
+
+    // `GRANT right [("col")] ON object TO principal`
+    if (openads::sql::sql_is_grant(sql)) {
+        auto gs = openads::sql::parse_grant(sql);
+        if (!gs) return fail(gs.error());
+        if (c->has_dd()) {
+            auto* dd = c->dd();
+            const auto& g = gs.value();
+            std::string r = g.right;
+            int level = 4;
+            if      (r == "SELECT")                   level = 1;
+            else if (r == "INSERT" || r == "UPDATE")  level = 2;
+            else if (r == "DELETE")                   level = 3;
+            // Take max of current and requested (grants accumulate)
+            int cur = dd->has_table_acl(g.object)
+                ? dd->get_effective_permission(g.principal, g.object) : 0;
+            dd->set_table_permission(g.object, g.principal, std::max(cur, level));
+        }
+        *phCursor = 0;
+        return ok();
+    }
+
+    // `REVOKE right [("col")] ON object FROM principal`
+    if (openads::sql::sql_is_revoke(sql)) {
+        auto gs = openads::sql::parse_revoke(sql);
+        if (!gs) return fail(gs.error());
+        if (c->has_dd()) {
+            auto* dd = c->dd();
+            const auto& g = gs.value();
+            int level = 0;
+            if (g.right != "ALL") {
+                std::string r = g.right;
+                int rl = 4;
+                if      (r == "SELECT")                  rl = 1;
+                else if (r == "INSERT" || r == "UPDATE") rl = 2;
+                else if (r == "DELETE")                  rl = 3;
+                level = (rl > 0) ? rl - 1 : 0;
+            }
+            dd->set_table_permission(g.object, g.principal, level);
+        }
+        *phCursor = 0;
+        return ok();
+    }
+
     // M11.4 — `CREATE PROCEDURE <name> AS '<dll_path>::<symbol>'`.
     // Loads the DLL, resolves the symbol, registers the proc on the
     // connection. Returns no cursor.
@@ -7150,15 +7410,25 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ok();
     }
 
-    // M11.4 — `EXECUTE PROCEDURE <name>(<arg>, ...)`. Packs args by
-    // 0x1F separators, calls the proc's C entry point, materialises
-    // the proc's result string in a 1-row temp DBF (column RESULT
-    // C(255)) and returns it as the cursor.
+    // M11.4 — `EXECUTE PROCEDURE <name>(<arg>, ...)`. Built-in sp_* names
+    // are dispatched directly to DataDict operations; others call the
+    // DLL entry point registered via CREATE PROCEDURE.
     if (openads::sql::sql_is_execute_procedure(sql)) {
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         auto ep = openads::sql::parse_execute_procedure(sql);
         if (!ep) return fail(ep.error());
+        // Check for sp_* built-in first.
+        std::string uname = ep.value().name;
+        for (auto& ch : uname) ch = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(ch)));
+        if (uname.size() > 3 && uname[0]=='S' && uname[1]=='P' && uname[2]=='_') {
+            UNSIGNED32 brc = ok();
+            if (dispatch_sp_builtin(c, uname, ep.value().args, &brc)) {
+                *phCursor = 0;
+                return brc;
+            }
+        }
         std::string packed;
         for (std::size_t i = 0; i < ep.value().args.size(); ++i) {
             if (i != 0) packed.push_back('\x1f');
