@@ -332,6 +332,85 @@ util::Result<void> DataDict::load_() {
             if (tbl.empty() || ug.empty() || lvs.empty()) continue;
             try { table_perms_[tbl][ug] = std::stoi(lvs); }
             catch (...) {}
+
+        } else if (starts_with(line, "FIELDPROP ")) {
+            // FIELDPROP <table>;<field>;<key>=<value>
+            std::string body = line.substr(10);
+            auto sc1 = body.find(';');
+            if (sc1 == std::string::npos) continue;
+            std::string tbl  = trim(body.substr(0, sc1));
+            std::string rest = body.substr(sc1 + 1);
+            auto sc2 = rest.find(';');
+            if (sc2 == std::string::npos) continue;
+            std::string fld  = trim(rest.substr(0, sc2));
+            std::string kv   = rest.substr(sc2 + 1);
+            auto eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            field_props_[tbl][fld][trim(kv.substr(0, eq))] = trim(kv.substr(eq + 1));
+
+        } else if (starts_with(line, "TRIGGER ")) {
+            // TRIGGER <name>=<table>;<event_mask>;<priority>;<enabled>;<container>;<procedure>;<comment>
+            std::string body = line.substr(8);
+            auto eq = body.find('=');
+            if (eq == std::string::npos) continue;
+            std::string name = trim(body.substr(0, eq));
+            std::string rest = body.substr(eq + 1);
+            std::vector<std::string> parts;
+            std::string cur;
+            for (char c : rest) {
+                if (c == ';') { parts.push_back(cur); cur.clear(); }
+                else cur.push_back(c);
+            }
+            parts.push_back(cur);
+            while (parts.size() < 7) parts.emplace_back();
+            TriggerEntry e;
+            e.name        = name;
+            e.table_alias = parts[0];
+            try { e.event_mask = static_cast<std::uint32_t>(std::stoul(parts[1])); } catch (...) {}
+            try { e.priority   = static_cast<std::uint32_t>(std::stoul(parts[2])); } catch (...) {}
+            e.enabled   = (parts[3] != "0");
+            e.container = parts[4];
+            e.procedure = parts[5];
+            e.comment   = parts[6];
+            if (!name.empty()) triggers_[name] = std::move(e);
+
+        } else if (starts_with(line, "PROC ")) {
+            // PROC <name>=<container>;<procedure>;<input>;<output>;<comment>
+            std::string body = line.substr(5);
+            auto eq = body.find('=');
+            if (eq == std::string::npos) continue;
+            std::string name = trim(body.substr(0, eq));
+            std::string rest = body.substr(eq + 1);
+            std::vector<std::string> parts;
+            std::string cur;
+            for (char c : rest) {
+                if (c == ';') { parts.push_back(cur); cur.clear(); }
+                else cur.push_back(c);
+            }
+            parts.push_back(cur);
+            while (parts.size() < 5) parts.emplace_back();
+            ProcEntry e;
+            e.name          = name;
+            e.container     = parts[0];
+            e.procedure     = parts[1];
+            e.input_params  = parts[2];
+            e.output_params = parts[3];
+            e.comment       = parts[4];
+            if (!name.empty()) procs_[name] = std::move(e);
+
+        } else if (starts_with(line, "VIEW ")) {
+            // VIEW <name>=<comment>;<sql>
+            std::string body = line.substr(5);
+            auto eq = body.find('=');
+            if (eq == std::string::npos) continue;
+            std::string name = trim(body.substr(0, eq));
+            std::string rest = body.substr(eq + 1);
+            auto sc = rest.find(';');
+            ViewEntry e;
+            e.name    = name;
+            e.comment = (sc != std::string::npos) ? rest.substr(0, sc) : "";
+            e.sql     = (sc != std::string::npos) ? rest.substr(sc + 1) : rest;
+            if (!name.empty()) views_[name] = std::move(e);
         }
     }
     return {};
@@ -619,6 +698,81 @@ int DataDict::get_effective_permission(const std::string& username,
 }
 
 // ---------------------------------------------------------------------------
+// Field properties
+// ---------------------------------------------------------------------------
+
+util::Result<void>
+DataDict::set_field_property(const std::string& table,
+                              const std::string& field,
+                              const std::string& key,
+                              const std::string& value) {
+    if (table.empty() || field.empty() || key.empty())
+        return util::Error{5000, 0, "DD field-property table/field/key empty", ""};
+    field_props_[table][field][key] = value;
+    return save();
+}
+
+std::string
+DataDict::get_field_property(const std::string& table,
+                              const std::string& field,
+                              const std::string& key) const {
+    auto t = field_props_.find(table);
+    if (t == field_props_.end()) return {};
+    auto f = t->second.find(field);
+    if (f == t->second.end()) return {};
+    auto k = f->second.find(key);
+    return k == f->second.end() ? std::string{} : k->second;
+}
+
+// ---------------------------------------------------------------------------
+// Triggers
+// ---------------------------------------------------------------------------
+
+util::Result<void> DataDict::create_trigger(const TriggerEntry& e) {
+    if (e.name.empty() || e.table_alias.empty())
+        return util::Error{5000, 0, "DD trigger name/table empty", ""};
+    triggers_[e.name] = e;
+    return save();
+}
+
+util::Result<void> DataDict::drop_trigger(const std::string& name) {
+    triggers_.erase(name);
+    return save();
+}
+
+// ---------------------------------------------------------------------------
+// Stored procedures
+// ---------------------------------------------------------------------------
+
+util::Result<void> DataDict::create_proc(const ProcEntry& e) {
+    if (e.name.empty())
+        return util::Error{5000, 0, "DD proc name empty", ""};
+    procs_[e.name] = e;
+    return save();
+}
+
+util::Result<void> DataDict::drop_proc(const std::string& name) {
+    procs_.erase(name);
+    return save();
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+util::Result<void> DataDict::create_view(const ViewEntry& e) {
+    if (e.name.empty())
+        return util::Error{5000, 0, "DD view name empty", ""};
+    views_[e.name] = e;
+    return save();
+}
+
+util::Result<void> DataDict::drop_view(const std::string& name) {
+    views_.erase(name);
+    return save();
+}
+
+// ---------------------------------------------------------------------------
 // Binary format helpers
 // ---------------------------------------------------------------------------
 
@@ -778,6 +932,37 @@ util::Result<void> DataDict::save() {
             out += "TABLEPERM " + t + ";" + ug + "=" +
                    std::to_string(table_perms_.at(t).at(ug)) + "\n";
         }
+    }
+    for (auto& tbl : sorted_keys(field_props_)) {
+        std::vector<std::string> flds;
+        for (const auto& [f, _] : field_props_.at(tbl)) flds.push_back(f);
+        std::sort(flds.begin(), flds.end());
+        for (auto& fld : flds) {
+            std::vector<std::string> ks;
+            for (const auto& [k, _] : field_props_.at(tbl).at(fld)) ks.push_back(k);
+            std::sort(ks.begin(), ks.end());
+            for (auto& k : ks) {
+                out += "FIELDPROP " + tbl + ";" + fld + ";" + k + "=" +
+                       field_props_.at(tbl).at(fld).at(k) + "\n";
+            }
+        }
+    }
+    for (auto& n : sorted_keys(triggers_)) {
+        const auto& e = triggers_.at(n);
+        out += "TRIGGER " + n + "=" + e.table_alias + ";" +
+               std::to_string(e.event_mask) + ";" +
+               std::to_string(e.priority) + ";" +
+               (e.enabled ? "1" : "0") + ";" +
+               e.container + ";" + e.procedure + ";" + e.comment + "\n";
+    }
+    for (auto& n : sorted_keys(procs_)) {
+        const auto& e = procs_.at(n);
+        out += "PROC " + n + "=" + e.container + ";" + e.procedure + ";" +
+               e.input_params + ";" + e.output_params + ";" + e.comment + "\n";
+    }
+    for (auto& n : sorted_keys(views_)) {
+        const auto& e = views_.at(n);
+        out += "VIEW " + n + "=" + e.comment + ";" + e.sql + "\n";
     }
 
     auto wrote = file.write_at(0, out.data(), out.size());

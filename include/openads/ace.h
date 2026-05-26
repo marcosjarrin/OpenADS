@@ -604,6 +604,55 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_TABLE_PERMISSION_DELETE       3
 #define ADS_DD_TABLE_PERMISSION_FULL         4
 
+// Field-object property codes (301-309).
+#define ADS_DD_FIELD_NAME                    301
+#define ADS_DD_FIELD_TYPE                    302
+#define ADS_DD_FIELD_LENGTH                  303
+#define ADS_DD_FIELD_DECIMAL                 304
+#define ADS_DD_FIELD_REQUIRED                305
+#define ADS_DD_FIELD_DEFAULT                 306
+#define ADS_DD_FIELD_VALIDATION_RULE         307
+#define ADS_DD_FIELD_VALIDATION_MSG          308
+#define ADS_DD_FIELD_COMMENT                 309
+
+// Index-object property codes (401-408).
+#define ADS_DD_INDEX_FILE_NAME               401
+#define ADS_DD_INDEX_EXPR                    402
+#define ADS_DD_INDEX_UNIQUE                  403
+#define ADS_DD_INDEX_DESCENDING              404
+#define ADS_DD_INDEX_CONDITION               405
+#define ADS_DD_INDEX_KEY_LENGTH              406
+#define ADS_DD_INDEX_TYPE                    407
+#define ADS_DD_INDEX_FILE_TYPE               408
+
+// Trigger event-mask bits (used in AdsDDCreateTrigger ulType).
+#define ADS_BEFORE_INSERT                    0x0001
+#define ADS_AFTER_INSERT                     0x0002
+#define ADS_BEFORE_UPDATE                    0x0004
+#define ADS_AFTER_UPDATE                     0x0008
+#define ADS_BEFORE_DELETE                    0x0010
+#define ADS_AFTER_DELETE                     0x0020
+
+// Trigger-object property codes (501-508).
+#define ADS_DD_TRIGGER_TABLE                 501
+#define ADS_DD_TRIGGER_EVENT                 502
+#define ADS_DD_TRIGGER_CONTAINER             503
+#define ADS_DD_TRIGGER_PROC_NAME             504
+#define ADS_DD_TRIGGER_ENABLED               505
+#define ADS_DD_TRIGGER_PRIORITY              506
+#define ADS_DD_TRIGGER_COMMENT               507
+
+// Stored-procedure property codes (601-605).
+#define ADS_DD_PROC_INPUT                    601
+#define ADS_DD_PROC_OUTPUT                   602
+#define ADS_DD_PROC_CONTAINER                603
+#define ADS_DD_PROC_PROC_NAME                604
+#define ADS_DD_PROC_COMMENT                  605
+
+// View property codes (701-702).
+#define ADS_DD_VIEW_STMT                     701
+#define ADS_DD_VIEW_COMMENT                  702
+
 // Note: SAP's ace.h uses the ADS_MGMT_* names for management-info
 // struct typedefs (declared further below), not for numeric
 // selectors. The earlier integer #defines here would collide with
@@ -1140,6 +1189,89 @@ UNSIGNED32 ENTRYPOINT AdsDDGetUserTableRights(ADSHANDLE hConnect,
                                              UNSIGNED8* pucTable,
                                              UNSIGNED8* pucUser,
                                              UNSIGNED32* pulLevel);
+
+UNSIGNED32 ENTRYPOINT AdsDDGetFieldProperty (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucField,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetFieldProperty (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucField,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+
+UNSIGNED32 ENTRYPOINT AdsDDGetIndexProperty (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucIndex,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetIndexProperty (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucIndex,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+
+UNSIGNED32 ENTRYPOINT AdsDDCreateTrigger    (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED32 ulType,
+                                             UNSIGNED32 ulOptions,
+                                             UNSIGNED8* pucContainer,
+                                             UNSIGNED8* pucProcedure,
+                                             UNSIGNED32 ulPriority);
+UNSIGNED32 ENTRYPOINT AdsDDDropTrigger      (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsDDGetTriggerProperty(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetTriggerProperty(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+
+UNSIGNED32 ENTRYPOINT AdsDDCreateProcedure  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED8* pucContainer,
+                                             UNSIGNED8* pucProcedure,
+                                             UNSIGNED8* pucInput,
+                                             UNSIGNED8* pucOutput);
+UNSIGNED32 ENTRYPOINT AdsDDDropProcedure    (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsDDGetProcProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetProcProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
+
+UNSIGNED32 ENTRYPOINT AdsDDCreateView       (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED8* pucComments,
+                                             UNSIGNED8* pucSQL);
+UNSIGNED32 ENTRYPOINT AdsDDDropView         (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName);
+UNSIGNED32 ENTRYPOINT AdsDDGetViewProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16* pusLen);
+UNSIGNED32 ENTRYPOINT AdsDDSetViewProperty  (ADSHANDLE hConnect,
+                                             UNSIGNED8* pucName,
+                                             UNSIGNED16 usProp,
+                                             void*      pvBuf,
+                                             UNSIGNED16 usLen);
 
 // --------------------------------------------------------------------
 // OpenADS-only extension: in-process Studio web console.

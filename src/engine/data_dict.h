@@ -112,6 +112,74 @@ public:
         ri() const noexcept { return ri_; }
 
     // ---- DB / user properties (M10.1) ----------------------------------
+    // ---- Field properties (M-DD-FIELD) ----------------------------------
+    // Stored props only (required, default, rule, msg, comment).
+    // Structural props (name/type/length/decimals) are read live from
+    // the table file in AdsDDGetFieldProperty.
+    util::Result<void> set_field_property(const std::string& table,
+                                           const std::string& field,
+                                           const std::string& key,
+                                           const std::string& value);
+    std::string get_field_property(const std::string& table,
+                                    const std::string& field,
+                                    const std::string& key) const;
+
+    // ---- Triggers (M-DD-TRIGGER) ----------------------------------------
+    struct TriggerEntry {
+        std::string   name;
+        std::string   table_alias;
+        std::uint32_t event_mask = 0;  // ADS_BEFORE/AFTER_INSERT/UPDATE/DELETE bits
+        std::string   container;
+        std::string   procedure;
+        std::uint32_t priority = 0;
+        bool          enabled  = true;
+        std::string   comment;
+    };
+    util::Result<void> create_trigger(const TriggerEntry& e);
+    util::Result<void> drop_trigger  (const std::string& name);
+    bool has_trigger(const std::string& name) const noexcept {
+        return triggers_.find(name) != triggers_.end();
+    }
+    const std::unordered_map<std::string, TriggerEntry>&
+        triggers() const noexcept { return triggers_; }
+    std::unordered_map<std::string, TriggerEntry>&
+        triggers()       noexcept { return triggers_; }
+
+    // ---- Stored procedures (M-DD-PROC) ----------------------------------
+    struct ProcEntry {
+        std::string name;
+        std::string container;
+        std::string procedure;
+        std::string input_params;
+        std::string output_params;
+        std::string comment;
+    };
+    util::Result<void> create_proc(const ProcEntry& e);
+    util::Result<void> drop_proc  (const std::string& name);
+    bool has_proc(const std::string& name) const noexcept {
+        return procs_.find(name) != procs_.end();
+    }
+    const std::unordered_map<std::string, ProcEntry>&
+        procs() const noexcept { return procs_; }
+    std::unordered_map<std::string, ProcEntry>&
+        procs()       noexcept { return procs_; }
+
+    // ---- Views (M-DD-VIEW) ----------------------------------------------
+    struct ViewEntry {
+        std::string name;
+        std::string sql;
+        std::string comment;
+    };
+    util::Result<void> create_view(const ViewEntry& e);
+    util::Result<void> drop_view  (const std::string& name);
+    bool has_view(const std::string& name) const noexcept {
+        return views_.find(name) != views_.end();
+    }
+    const std::unordered_map<std::string, ViewEntry>&
+        views() const noexcept { return views_; }
+    std::unordered_map<std::string, ViewEntry>&
+        views()       noexcept { return views_; }
+
     // ---- Table permissions (M-ACL) ----------------------------------------
     // level: 0=none, 1=read, 2=write, 3=delete, 4=full.
     // user_or_group may be a user name or a group name.
@@ -186,6 +254,14 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, int>>
                                                  table_perms_;
+    // table_alias → field_name → key → value (stored field props)
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string,
+                                          std::unordered_map<std::string, std::string>>>
+                                                 field_props_;
+    std::unordered_map<std::string, TriggerEntry> triggers_;
+    std::unordered_map<std::string, ProcEntry>    procs_;
+    std::unordered_map<std::string, ViewEntry>    views_;
 
     // Binary format state (populated only when binary_format_ == true).
     bool binary_format_ = false;

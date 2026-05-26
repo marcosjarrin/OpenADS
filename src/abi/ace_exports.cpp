@@ -4509,6 +4509,478 @@ UNSIGNED32 AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
     return ok();
 }
 
+// ---------------------------------------------------------------------------
+// AdsDDGetFieldProperty / AdsDDSetFieldProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDGetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                  UNSIGNED8* pucField, UNSIGNED16 usProp,
+                                  void* pBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    Connection* c = conn_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+
+    auto* dd = (c != nullptr && c->has_dd()) ? c->dd() : nullptr;
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+
+    auto alias  = openads::abi::to_internal(pucTable, 0);
+    auto field  = openads::abi::to_internal(pucField, 0);
+    if (!dd->has_alias(alias)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), alias.c_str());
+    }
+
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(
+            std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
+        if (pBuf != nullptr && cap >= 2) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0] = static_cast<std::uint8_t>(v & 0xFFu);
+            b[1] = static_cast<std::uint8_t>(v >> 8);
+        }
+        *pusLen = 2;
+        return ok();
+    };
+
+    // Structural properties: open the table briefly, read the field descriptor.
+    if (usProp == ADS_DD_FIELD_NAME   || usProp == ADS_DD_FIELD_TYPE  ||
+        usProp == ADS_DD_FIELD_LENGTH || usProp == ADS_DD_FIELD_DECIMAL) {
+
+        std::string rel = dd->resolve(alias);
+        auto th = c->open_table(rel, openads::engine::TableType::Cdx,
+                                 openads::engine::OpenMode::Read);
+        if (!th) { *pusLen = 0; return fail(th.error()); }
+
+        auto* tbl = c->lookup_table(th.value());
+        UNSIGNED32 ret = ok();
+        if (tbl != nullptr) {
+            std::int32_t fi = tbl->field_index(field);
+            if (fi < 0) {
+                ret = fail(static_cast<int>(openads::AE_NO_FILE_FOUND), field.c_str());
+            } else {
+                const auto& fd = tbl->field_descriptor(static_cast<std::uint16_t>(fi));
+                if (usProp == ADS_DD_FIELD_NAME) {
+                    ret = put_str(fd.name);
+                } else if (usProp == ADS_DD_FIELD_TYPE) {
+                    ret = put_u16(map_field_type(fd.type));
+                } else if (usProp == ADS_DD_FIELD_LENGTH) {
+                    ret = put_u16(static_cast<std::uint16_t>(fd.length));
+                } else if (usProp == ADS_DD_FIELD_DECIMAL) {
+                    ret = put_u16(static_cast<std::uint16_t>(fd.decimals));
+                }
+            }
+        }
+        c->close_table(th.value());
+        return ret;
+    }
+
+    // Stored properties: read from field_props_.
+    std::string key;
+    switch (usProp) {
+        case ADS_DD_FIELD_REQUIRED:        key = "required"; break;
+        case ADS_DD_FIELD_DEFAULT:         key = "default"; break;
+        case ADS_DD_FIELD_VALIDATION_RULE: key = "rule"; break;
+        case ADS_DD_FIELD_VALIDATION_MSG:  key = "msg"; break;
+        case ADS_DD_FIELD_COMMENT:         key = "comment"; break;
+        default:
+            *pusLen = 0;
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    return put_str(dd->get_field_property(alias, field, key));
+}
+
+UNSIGNED32 AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                  UNSIGNED8* pucField, UNSIGNED16 usProp,
+                                  void* pBuf, UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto alias = openads::abi::to_internal(pucTable, 0);
+    auto field = openads::abi::to_internal(pucField, 0);
+    if (!dd->has_alias(alias))
+        return fail(static_cast<int>(openads::AE_TABLE_NOT_FOUND), alias.c_str());
+
+    // Structural props are read-only.
+    if (usProp >= ADS_DD_FIELD_NAME && usProp <= ADS_DD_FIELD_DECIMAL)
+        return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "read-only field prop");
+
+    std::string key;
+    switch (usProp) {
+        case ADS_DD_FIELD_REQUIRED:        key = "required"; break;
+        case ADS_DD_FIELD_DEFAULT:         key = "default"; break;
+        case ADS_DD_FIELD_VALIDATION_RULE: key = "rule"; break;
+        case ADS_DD_FIELD_VALIDATION_MSG:  key = "msg"; break;
+        case ADS_DD_FIELD_COMMENT:         key = "comment"; break;
+        default:
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    auto r = dd->set_field_property(alias, field, key, val);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
+// AdsDDGetIndexProperty / AdsDDSetIndexProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDGetIndexProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                  UNSIGNED8* pucIndex, UNSIGNED16 usProp,
+                                  void* pBuf, UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    Connection* c = conn_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    auto put_u16 = [&](std::uint16_t v) -> UNSIGNED32 {
+        if (pBuf != nullptr && cap >= 2) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0] = static_cast<std::uint8_t>(v & 0xFFu);
+            b[1] = static_cast<std::uint8_t>(v >> 8);
+        }
+        *pusLen = 2; return ok();
+    };
+
+    // Look in index_bindings() for a binding with this tag name that
+    // belongs to a table matching pucTable (alias or open table).
+    auto idx_name = openads::abi::to_internal(pucIndex, 0);
+    auto tbl_name = pucTable ? openads::abi::to_internal(pucTable, 0) : std::string{};
+
+    ADSHANDLE idx_h = 0;
+    openads::drivers::IIndex* found_idx = nullptr;
+    std::string found_path;
+
+    for (auto& [h, b] : index_bindings()) {
+        if (b.tag_name != idx_name) continue;
+        // If a table name is given, check that the binding's table is that table.
+        if (!tbl_name.empty() && c != nullptr) {
+            if (!c->owns_table_ptr(b.table)) continue;
+        }
+        idx_h     = h;
+        found_path = b.path;
+        found_idx  = iindex_for_handle(h);
+        break;
+    }
+
+    if (idx_h == 0) {
+        *pusLen = 0;
+        return fail(openads::AE_NO_FILE_FOUND, idx_name.c_str());
+    }
+    if (found_idx == nullptr) { *pusLen = 0; return ok(); }
+
+    switch (usProp) {
+        case ADS_DD_INDEX_FILE_NAME:  return put_str(found_path);
+        case ADS_DD_INDEX_EXPR:       return put_str(found_idx->expression());
+        case ADS_DD_INDEX_UNIQUE:     return put_u16(found_idx->unique()     ? 1 : 0);
+        case ADS_DD_INDEX_DESCENDING: return put_u16(found_idx->descending() ? 1 : 0);
+        case ADS_DD_INDEX_CONDITION:  return put_str({});  // not exposed by IIndex
+        case ADS_DD_INDEX_KEY_LENGTH: return put_u16(found_idx->key_length());
+        case ADS_DD_INDEX_TYPE:       return put_u16(0);   // CDX=0 (not exposed by IIndex)
+        default:
+            *pusLen = 0;
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetIndexProperty(ADSHANDLE /*hConn*/, UNSIGNED8* /*pucTable*/,
+                                  UNSIGNED8* /*pucIndex*/, UNSIGNED16 /*usProp*/,
+                                  void* /*pBuf*/, UNSIGNED16 /*usLen*/) {
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "AdsDDSetIndexProperty");
+}
+
+// ---------------------------------------------------------------------------
+// AdsDDCreateTrigger / AdsDDDropTrigger / AdsDDGet/SetTriggerProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
+                               UNSIGNED8* pucTable, UNSIGNED32 ulType,
+                               UNSIGNED32 /*ulOptions*/, UNSIGNED8* pucContainer,
+                               UNSIGNED8* pucProcedure, UNSIGNED32 ulPriority) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::TriggerEntry e;
+    e.name        = openads::abi::to_internal(pucName, 0);
+    e.table_alias = openads::abi::to_internal(pucTable, 0);
+    e.event_mask  = ulType;
+    e.container   = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
+    e.procedure   = pucProcedure ? openads::abi::to_internal(pucProcedure, 0) : "";
+    e.priority    = ulPriority;
+    e.enabled     = true;
+    if (e.name.empty() || e.table_alias.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "trigger name/table empty");
+    auto r = dd->create_trigger(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDropTrigger(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_trigger(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto r = dd->drop_trigger(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                    UNSIGNED16 usProp, void* pBuf,
+                                    UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_trigger(name)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    }
+    const auto& e = dd->triggers().at(name);
+
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    auto put_u32 = [&](std::uint32_t v) -> UNSIGNED32 {
+        if (pBuf != nullptr && cap >= 4) {
+            auto* b = static_cast<std::uint8_t*>(pBuf);
+            b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF;
+        }
+        *pusLen = 4; return ok();
+    };
+
+    switch (usProp) {
+        case ADS_DD_TRIGGER_TABLE:     return put_str(e.table_alias);
+        case ADS_DD_TRIGGER_EVENT:     return put_u32(e.event_mask);
+        case ADS_DD_TRIGGER_CONTAINER: return put_str(e.container);
+        case ADS_DD_TRIGGER_PROC_NAME: return put_str(e.procedure);
+        case ADS_DD_TRIGGER_ENABLED:   return put_u32(e.enabled ? 1u : 0u);
+        case ADS_DD_TRIGGER_PRIORITY:  return put_u32(e.priority);
+        case ADS_DD_TRIGGER_COMMENT:   return put_str(e.comment);
+        default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                    UNSIGNED16 usProp, void* pBuf,
+                                    UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_trigger(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto& e = dd->triggers().at(name);
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    switch (usProp) {
+        case ADS_DD_TRIGGER_TABLE:     e.table_alias = val; break;
+        case ADS_DD_TRIGGER_CONTAINER: e.container   = val; break;
+        case ADS_DD_TRIGGER_PROC_NAME: e.procedure   = val; break;
+        case ADS_DD_TRIGGER_COMMENT:   e.comment     = val; break;
+        case ADS_DD_TRIGGER_ENABLED:
+            if (pBuf && usLen >= 4) {
+                auto* b = static_cast<const std::uint8_t*>(pBuf);
+                std::uint32_t v = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+                e.enabled = (v != 0);
+            }
+            break;
+        case ADS_DD_TRIGGER_PRIORITY:
+            if (pBuf && usLen >= 4) {
+                auto* b = static_cast<const std::uint8_t*>(pBuf);
+                e.priority = b[0]|(b[1]<<8)|(b[2]<<16)|(b[3]<<24);
+            }
+            break;
+        default:
+            return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    auto r = dd->save();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
+// AdsDDCreateProcedure / AdsDDDropProcedure / AdsDDGet/SetProcProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                 UNSIGNED8* pucContainer,
+                                 UNSIGNED8* pucProcedure,
+                                 UNSIGNED8* pucInput,
+                                 UNSIGNED8* pucOutput) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::ProcEntry e;
+    e.name          = openads::abi::to_internal(pucName, 0);
+    e.container     = pucContainer ? openads::abi::to_internal(pucContainer, 0) : "";
+    e.procedure     = pucProcedure ? openads::abi::to_internal(pucProcedure, 0) : "";
+    e.input_params  = pucInput     ? openads::abi::to_internal(pucInput,     0) : "";
+    e.output_params = pucOutput    ? openads::abi::to_internal(pucOutput,    0) : "";
+    if (e.name.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "proc name empty");
+    auto r = dd->create_proc(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDropProcedure(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_proc(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto r = dd->drop_proc(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_proc(name)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    }
+    const auto& e = dd->procs().at(name);
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    switch (usProp) {
+        case ADS_DD_PROC_INPUT:     return put_str(e.input_params);
+        case ADS_DD_PROC_OUTPUT:    return put_str(e.output_params);
+        case ADS_DD_PROC_CONTAINER: return put_str(e.container);
+        case ADS_DD_PROC_PROC_NAME: return put_str(e.procedure);
+        case ADS_DD_PROC_COMMENT:   return put_str(e.comment);
+        default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_proc(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto& e = dd->procs().at(name);
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    switch (usProp) {
+        case ADS_DD_PROC_INPUT:     e.input_params  = val; break;
+        case ADS_DD_PROC_OUTPUT:    e.output_params = val; break;
+        case ADS_DD_PROC_CONTAINER: e.container     = val; break;
+        case ADS_DD_PROC_PROC_NAME: e.procedure     = val; break;
+        case ADS_DD_PROC_COMMENT:   e.comment       = val; break;
+        default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    auto r = dd->save();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+// ---------------------------------------------------------------------------
+// AdsDDCreateView / AdsDDDropView / AdsDDGet/SetViewProperty
+// ---------------------------------------------------------------------------
+
+UNSIGNED32 AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
+                            UNSIGNED8* pucComments, UNSIGNED8* pucSQL) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    openads::engine::DataDict::ViewEntry e;
+    e.name    = openads::abi::to_internal(pucName, 0);
+    e.comment = pucComments ? openads::abi::to_internal(pucComments, 0) : "";
+    e.sql     = pucSQL      ? openads::abi::to_internal(pucSQL,      0) : "";
+    if (e.name.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "view name empty");
+    auto r = dd->create_view(e);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDDropView(ADSHANDLE hConn, UNSIGNED8* pucName) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_view(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto r = dd->drop_view(name);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16* pusLen) {
+    if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto* dd = dd_from_handle(hConn);
+    UNSIGNED16 cap = *pusLen;
+    if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
+    if (dd == nullptr) { *pusLen = 0; return ok(); }
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_view(name)) {
+        *pusLen = 0;
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    }
+    const auto& e = dd->views().at(name);
+    auto put_str = [&](const std::string& s) -> UNSIGNED32 {
+        UNSIGNED16 n = static_cast<UNSIGNED16>(std::min<std::size_t>(s.size(), cap));
+        if (pBuf != nullptr && n > 0) std::memcpy(pBuf, s.data(), n);
+        *pusLen = static_cast<UNSIGNED16>(s.size());
+        return ok();
+    };
+    switch (usProp) {
+        case ADS_DD_VIEW_STMT:    return put_str(e.sql);
+        case ADS_DD_VIEW_COMMENT: return put_str(e.comment);
+        default: *pusLen = 0; return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+}
+
+UNSIGNED32 AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
+                                 UNSIGNED16 usProp, void* pBuf,
+                                 UNSIGNED16 usLen) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto name = openads::abi::to_internal(pucName, 0);
+    if (!dd->has_view(name))
+        return fail(static_cast<int>(openads::AE_NO_FILE_FOUND), name.c_str());
+    auto& e = dd->views().at(name);
+    std::string val = pBuf && usLen > 0
+        ? std::string(static_cast<const char*>(pBuf), usLen) : std::string{};
+    switch (usProp) {
+        case ADS_DD_VIEW_STMT:    e.sql     = val; break;
+        case ADS_DD_VIEW_COMMENT: e.comment = val; break;
+        default: return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "");
+    }
+    auto r = dd->save();
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
                              UNSIGNED8*  pucFileName,
                              UNSIGNED8*  pucTag,

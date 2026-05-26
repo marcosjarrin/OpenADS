@@ -100,12 +100,52 @@ Check off completed work and commit the file update so it stays current.
       programmatically. 7 tests in `tests/unit/abi_dd_perms_test.cpp`.
       (2026-05-26)
 
-- [ ] **DD triggers and stored procedures**.
-      The ADS DD supports `TRIGGER` and `STORED_PROCEDURE` record types
-      (fired before/after INSERT, UPDATE, DELETE). These have no
-      representation in our `DataDict` model or write path. The AEP
-      mechanism (M11.4, `AdsExecuteProcedure`) is a separate DLL-extension
-      surface and does not substitute for DD-level triggers.
+- [x] **`AdsDDGetFieldProperty` / `AdsDDSetFieldProperty`** — per-field
+      metadata read/write. Structural props (name 301, type 302,
+      length 303, decimals 304) read live from the table file via a
+      brief open; stored props (required 305, default 306, rule 307,
+      msg 308, comment 309) stored in `DataDict::field_props_` and
+      persisted as `FIELDPROP` rows in the text format.
+      6 tests in `tests/unit/abi_dd_field_prop_test.cpp`. (2026-05-26)
+
+- [x] **DD triggers** — `AdsDDCreateTrigger` / `AdsDDDropTrigger` /
+      `AdsDDGetTriggerProperty` / `AdsDDSetTriggerProperty`.
+      Model: `TriggerEntry { name, table_alias, event_mask, container,
+      procedure, priority, enabled, comment }` in `DataDict::triggers_`.
+      Persisted as `TRIGGER` rows in the text format. Event mask uses
+      ADS_BEFORE/AFTER_INSERT/UPDATE/DELETE bits. Execution is a no-op
+      stub (trigger definition is stored and queryable; user code not
+      called). 5 tests in `tests/unit/abi_dd_trigger_test.cpp`. (2026-05-26)
+
+- [x] **DD stored procedures** — `AdsDDCreateProcedure` /
+      `AdsDDDropProcedure` / `AdsDDGetProcProperty` /
+      `AdsDDSetProcProperty`. Model: `ProcEntry { name, container,
+      procedure, input_params, output_params, comment }` in
+      `DataDict::procs_`. Persisted as `PROC` rows. Execution is a
+      no-op stub. 4 tests in `tests/unit/abi_dd_proc_view_test.cpp`.
+      (2026-05-26)
+
+- [x] **DD views** — `AdsDDCreateView` / `AdsDDDropView` /
+      `AdsDDGetViewProperty` / `AdsDDSetViewProperty`.
+      Model: `ViewEntry { name, sql, comment }` in `DataDict::views_`.
+      Persisted as `VIEW` rows. `AdsOpenTable` expansion of view alias
+      → `AdsExecuteSQLDirect` deferred (see system.* SQL item below).
+      5 tests in `tests/unit/abi_dd_proc_view_test.cpp`. (2026-05-26)
+
+- [ ] **`system.*` SQL virtual tables** — `SELECT * FROM system.tables`
+      and the other 15 system table aliases. The SQL engine's FROM
+      clause resolver needs a special path for the `system.` prefix
+      that builds an in-memory cursor from `DataDict` state rather
+      than opening a real file. Also covers: `AdsOpenTable` with a
+      view alias expands to `AdsExecuteSQLDirect(view.sql)`.
+
+- [x] **`AdsDDGetIndexProperty` / `AdsDDSetIndexProperty`** — per-index
+      metadata read from open index bindings. Properties: file name
+      (401), expression (402), unique (403), descending (404),
+      condition (405, returns ""), key length (406), type (407,
+      returns 0). `AdsDDSetIndexProperty` returns
+      AE_FUNCTION_NOT_AVAILABLE. (2026-05-26)
+
 
 - [ ] **ADS proprietary ADT encryption** — out of scope for now.
       We use our own AES encryption (M11.2). ADS-original per-table
