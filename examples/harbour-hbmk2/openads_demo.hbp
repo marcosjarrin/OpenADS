@@ -1,0 +1,39 @@
+# OpenADS — Harbour hbmk2 build script (console app, x64).
+#
+# Usage:
+#   set OPENADS_LIB=C:\path\to\OpenADS\build\default\src\Release
+#   hbmk2 openads_demo.hbp
+#
+# Then make sure OpenADS' ace64.dll sits next to the produced .exe
+# (or first on PATH) — NOT a SAP-shipped ace64.dll.
+#
+# Drop the ${OPENADS_LIB} expansion and pass -Lthe-directory on the
+# hbmk2 command line if your shell does not export env vars to
+# child processes.
+
+openads_demo.prg
+
+# Compiler driver — match your Harbour install. Pick one:
+#   msvc64  (Visual Studio x64)        — the default in this example
+#   bcc64   (Embarcadero bcc64)
+#   mingw64 (MinGW-w64)
+-comp=msvc64
+
+-w3
+-es2
+
+# Harbour's ADS RDD (contrib/rddads). Must be built for the same
+# toolchain as -comp above — i.e. msvc64 contrib for -comp=msvc64.
+-lrddads
+
+# OpenADS' ace64 import library — drop-in replacement for the
+# libace64.a / ace64.lib that SAP shipped with Advantage.
+# OPENADS_LIB must point at the directory holding ace64.lib (Windows
+# MSVC) / libace64.a (MinGW / bcc64) / libace.so (Linux).
+-L${OPENADS_LIB}
+-lace64
+
+# DBF RDDs the .prg may REQUEST.
+-lrddcdx
+-lrddntx
+-lrddfpt

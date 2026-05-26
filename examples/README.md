@@ -7,6 +7,7 @@ these are **not** meant to run headless in CI — they're "swap your
 
 | Subdir | Stack | Notes |
 |--------|-------|-------|
+| `harbour-hbmk2/` | Harbour console + `hbmk2` (`.hbp`) | Turnkey `.hbp` template — drop in a `.prg`, set `OPENADS_LIB`, run `hbmk2`. x64 + x86 variants, Windows + POSIX wrappers. |
 | `fivewin/` | FiveWin (FWH) + Harbour | Commercial GUI lib — not vendored; install your own FWH. |
 | `xsharp-winforms/` | X# + WinForms | X# runtime not vendored; install from xsharp.eu. |
 

@@ -100,6 +100,7 @@ Release timeline:
 
 | Tag       | Date       | Highlights |
 |-----------|------------|-----------|
+| **v1.0.0-rc29** | 2026-05-26 | **Turnkey `hbmk2` (`.hbp`) example for Harbour apps — `examples/harbour-hbmk2/`.** Asked on the FiveTech forum: "alguna alma caritativa que proporcione un archivo de compilación `.hbp` para crear un programa con OpenADS — todos mis intentos han fracasado". The repo now ships a complete `hbmk2` project (x64 + x86 variants, Windows `build.cmd` + POSIX `build.sh` wrappers, `openads_demo.prg` console app that exercises `AdsConnect` → `DbCreate` → `INDEX ON UPPER(NAME)` → `dbSeek`) — drop in your `.prg`, set `OPENADS_LIB`, run `hbmk2`. The `.hbp` is short by design: only the two link entries that change for OpenADS (`-lrddads` + `-L${OPENADS_LIB} -lace64`). README and `docs/{en,es,pt}/getting-started.md` carry walkthroughs, including the typical "unresolved `AdsConnect60`" / "loaded the wrong `ace64.dll`" pitfalls. |
 | **v1.0.0-rc28** | 2026-05-22 | **ADT / ADM support (M4 ADT) — read + write SAP Advantage native tables.** OpenADS can now open `.adt` files produced by the original Advantage Client Engine and write records back; `.adm` memo stores auto-attach when the table carries `Memo` or `Binary` fields. Full 13-type field vocabulary: CHAR, CICHAR (case-insensitive, maps to `ADS_CISTRING` = 25), LOGICAL, DATE (4-byte Julian Day Number), DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP, AUTOINC, MONEY. ADM uses 256-byte fixed blocks with no per-block header; the 9-byte in-record reference (`block_no LE` + `data_len LE` + `0x00`) is resolved transparently by the engine. Record prefix: `0x04` = active / `0x05` = deleted, normalised to DBF convention on read and restored on write; null-bitmap bytes (1–4) are zeroed on `AppendBlank` rather than space-filled. `AdsCreateTable` with `ADS_ADT` still creates a DBF (ADT creation deferred); ADI index files are not yet implemented. Verified against `f:\pmsys\data\landlords.adt` (13 fields, 7 records, CICHAR key, ADM memo round-trip "SEC 8 preferred") via `tests/unit/abi_adt_smoke_test.cpp` (skipped on machines without the fixture). Suite 398 / 398. |
 | **v1.0.0-rc27** | 2026-05-17 | **`AdsGetField` pads CHARACTER fields to the declared width.** Reported by Pritpal Bedi — a Harbour `mini_xbrowse /ads` truncated every text column (`Charlie`→`Charl`, `Barcelona`→`Barcel`) where native DBFCDX showed them full. `AdsGetField` returned CHAR values rtrim'd (`make_string` strips trailing spaces); DBF CHAR is fixed-width space-padded, so xbrowse auto-sized columns to the trimmed value and clipped the rest. `AdsGetField` now re-pads CHARACTER values to the declared field width on both the local and remote read paths; the engine's internal decode stays trimmed so SQL / index keys / AOF are untouched (verified `fieldlenprobe.prg` matches the DBFCDX baseline, `idxprobe.prg` index walk still `SORTED=YES`, suite 397/397). Also: `tools/harbour_patch/rddads-compat.patch` applies again (a dropped blank context line had made `git apply` reject the `rddads.h` hunk); PHP binding gains `Cursor::fetchAssoc/fetchNum` + `Table::seek`; the release workflow adds a macOS Intel (x64) build leg. |
 | **v1.0.0-rc26** | 2026-05-16 | **PHP binding — `bindings/php`.** Asked by Reinaldo Crespo (the old proprietary Advantage PHP extension died around PHP 5.2 and was never modernised), OpenADS now ships `openads/openads-php` — a pure-PHP Composer package, no compiled C, that loads `ace64.dll` / `ace32.dll` / `libace*.so` through `ext-ffi` and wraps it in a modern OOP API (`Connection`, `Statement`, `Cursor`, `Table`, `Record`; PHP 8.1+). One code path covers local data-dir and `tcp://` / `tls://` remote — `AdsConnect60` dispatches on the URI. `Statement::query()` takes `?` / `:name` parameters; `ParameterBinder` substitutes them client-side with per-type quoting (ACE has no host-variable binding) as the anti-injection boundary. Pinned by 31 PHPUnit tests (21 unit + 10 integration vs a live engine) and a CI leg that builds ACE and runs the suite. Also fixes the SQL parser's `read_string_literal`, which decoded no escape — the ANSI doubled-quote escape (`'O''Brien'`) raised error 7200, breaking any SQL client inserting a string with an apostrophe; `''` now decodes to a single `'`. |
@@ -170,6 +171,54 @@ Drop the resulting `ace64.dll` (under
 `build/default/src/Release/`) onto a Harbour app's `PATH` ahead of
 any SAP-shipped copy and the standard `contrib/rddads` calls land
 on OpenADS without recompiling Harbour.
+
+### Build your own Harbour app against OpenADS (`hbmk2` / `.hbp`)
+
+Asked on the FiveTech forum: "alguna alma caritativa que
+proporcione un archivo de compilación `.hbp` para crear un
+programa con OpenADS — todos mis intentos han fracasado".
+[`examples/harbour-hbmk2/`](examples/harbour-hbmk2/) is a
+turnkey [`hbmk2`](https://harbour.github.io/doc/hbmk2.html)
+project: drop your `.prg` next to `openads_demo.hbp`, point
+`OPENADS_LIB` at OpenADS' build output, run `hbmk2`. The produced
+`.exe` drives DBF / CDX through Harbour's stock `contrib/rddads`
+RDD — but every `Ads*` call lands on OpenADS' `ace64.dll`
+instead of any SAP-shipped one.
+
+```cmd
+:: From a Visual Studio x64 Developer Command Prompt:
+cd examples\harbour-hbmk2
+set OPENADS_LIB=C:\OpenADS\build\default\src\Release
+set PATH=C:\harbour\bin\win\msvc64;%OPENADS_LIB%;%PATH%
+hbmk2 openads_demo.hbp
+copy /y "%OPENADS_LIB%\ace64.dll" .
+openads_demo.exe
+```
+
+The shipped `.hbp` is short by design — only the two link entries
+that change for OpenADS:
+
+```hbmk
+openads_demo.prg
+-comp=msvc64
+-lrddads                    # Harbour's ADS RDD (contrib/rddads)
+-L${OPENADS_LIB}
+-lace64                     # OpenADS' import lib (instead of SAP's)
+-lrddcdx
+-lrddntx
+-lrddfpt
+```
+
+A 32-bit variant (`openads_demo_x86.hbp` → `-lace32`) and POSIX
+wrappers (`build.sh`) sit alongside the Windows `build.cmd`. The
+README in that directory walks through the typical "unresolved
+external symbol `AdsConnect60`" / "rddads.lib not found" /
+"loaded the wrong `ace64.dll`" pitfalls.
+
+For FiveWin (FWH) GUI apps `hbmk2` is not enough — see
+[`examples/fivewin/`](examples/fivewin/) for `build_msvc64.cmd`
+that mirrors FWH's stock build script with the two extra link
+entries (`rddads.lib` + OpenADS' `ace64.lib`).
 
 ### Studio web console (in-process, LocalServer mode)
 

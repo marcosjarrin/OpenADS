@@ -52,6 +52,57 @@ Coloque `ace64.dll` (ou `libace.so`) no `PATH` da aplicação
 Harbour antes de qualquer cópia da SAP. As chamadas existentes
 de `contrib/rddads` agora caem no OpenADS.
 
+## Compile sua própria app Harbour contra OpenADS (`hbmk2` / `.hbp`)
+
+O repo traz um template `hbmk2` pronto em
+[`examples/harbour-hbmk2/`](https://github.com/FiveTechSoft/OpenADS/tree/main/examples/harbour-hbmk2)
+— coloque seu `.prg` ao lado de `openads_demo.hbp`, defina
+`OPENADS_LIB` apontando para o build do OpenADS, rode `hbmk2`. O
+`.exe` produzido move tabelas DBF / CDX pelo RDD padrão
+`contrib/rddads` do Harbour, mas cada chamada `Ads*` cai no
+`ace64.dll` do OpenADS em vez de qualquer cópia da SAP.
+
+```cmd
+:: A partir de um Developer Command Prompt x64 do Visual Studio:
+cd examples\harbour-hbmk2
+set OPENADS_LIB=C:\OpenADS\build\default\src\Release
+set PATH=C:\harbour\bin\win\msvc64;%OPENADS_LIB%;%PATH%
+hbmk2 openads_demo.hbp
+copy /y "%OPENADS_LIB%\ace64.dll" .
+openads_demo.exe
+```
+
+O `.hbp` é deliberadamente mínimo — apenas as duas entradas de
+link que mudam para o OpenADS:
+
+```hbmk
+openads_demo.prg
+-comp=msvc64
+-lrddads                    # RDD ADS do Harbour (contrib/rddads)
+-L${OPENADS_LIB}
+-lace64                     # Import lib do OpenADS (em vez da da SAP)
+-lrddcdx
+-lrddntx
+-lrddfpt
+```
+
+Há uma variante 32-bit (`openads_demo_x86.hbp` → `-lace32`) e
+um `build.sh` para Linux / macOS. Para apps GUI FiveWin (FWH)
+`hbmk2` não basta — veja
+[`examples/fivewin/`](https://github.com/FiveTechSoft/OpenADS/tree/main/examples/fivewin)
+para `build_msvc64.cmd`, que replica o build padrão FWH com
+`rddads.lib` + `ace64.lib` do OpenADS adicionados.
+
+Erros típicos "meu `.hbp` não compila":
+
+| Sintoma | Causa provável |
+|---|---|
+| `unresolved external symbol AdsConnect60` (ou qualquer `Ads*`) | `OPENADS_LIB` não definido, ou toolchain errado — `ace64.lib` é MSVC; para bcc64 / MinGW use a import lib correspondente. |
+| `lib 'rddads' not found` | `contrib/rddads` não compilado para o `-comp=…` escolhido. Recompile o contrib do Harbour para esse toolchain. |
+| Runtime `ace64.dll not found` | DLL não está junto do exe nem no `PATH`. |
+| Strings truncadas em um TBrowse / xBrowse | Corrigido em v1.0.0-rc27 — `AdsGetField` agora preenche CHAR até a largura declarada. |
+| `AdsVersion()` reporta algo como `12.0` / `11.10` | Você carregou o `ace64.dll` da SAP. `where ace64.dll` e reordene o `PATH`. |
+
 ## Smoke test (servidor TCP + Studio)
 
 ```sh

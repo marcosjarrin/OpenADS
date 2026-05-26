@@ -5,6 +5,49 @@ All notable changes to OpenADS are recorded here. The project follows
 0.x.y releases may break the C ABI between minor versions to track the
 real ACE SDK.
 
+## 1.0.0-rc29 — 2026-05-26
+
+- **Turnkey `hbmk2` (`.hbp`) example for Harbour apps —
+  `examples/harbour-hbmk2/`.** Reported on the FiveTech forum:
+  *"alguna alma caritativa que proporcione un archivo de
+  compilación `.hbp` para crear un programa con OpenADS — todos
+  mis intentos han fracasado"*. The repo now ships a complete
+  `hbmk2` project: `openads_demo.hbp` (x64), `openads_demo_x86.hbp`
+  (32-bit), `openads_demo.prg` (console app exercising
+  `AdsConnect` → `DbCreate` → `INDEX ON UPPER(NAME)` → `dbSeek`),
+  Windows `build.cmd` and POSIX `build.sh` wrappers. Drop in your
+  `.prg`, point `OPENADS_LIB` at OpenADS' build output, run
+  `hbmk2`. The `.hbp` is intentionally minimal — only the two
+  link entries that change for OpenADS (`-lrddads` plus
+  `-L${OPENADS_LIB} -lace64`).
+- **Docs walkthrough — en / es / pt.** New "Build your own
+  Harbour app against OpenADS (`hbmk2` / `.hbp`)" section in
+  `docs/{en,es,pt}/getting-started.md` and the matching README,
+  including a troubleshooting table for the typical *"unresolved
+  external symbol `AdsConnect60`"* / *"`rddads.lib` not found"* /
+  *"loaded the wrong `ace64.dll`"* pitfalls so a first-time user
+  can self-diagnose without filing an issue.
+
+## 1.0.0-rc28 — 2026-05-22
+
+- **ADT / ADM support (M4 ADT).** OpenADS now opens `.adt` tables
+  produced by SAP Advantage and writes records back; `.adm` memo
+  stores auto-attach when the table carries Memo / Binary fields.
+  Full 13-type field vocabulary (CHAR, CICHAR, LOGICAL, DATE,
+  DOUBLE, INTEGER, SHORTINT, MEMO, BINARY, TIME, TIMESTAMP,
+  AUTOINC, MONEY). ADM uses 256-byte fixed blocks; the 9-byte
+  in-record reference is resolved transparently by the engine.
+  `AdsCreateTable(ADS_ADT)` still produces a DBF (ADT creation
+  deferred); ADI index files not yet implemented; SAP proprietary
+  ADT encryption not yet supported. Verified against
+  `f:\pmsys\data\landlords.adt` via `tests/unit/abi_adt_smoke_test.cpp`
+  (skipped on machines without the fixture).
+- **CI** — macOS leg switched to a single universal (arm64 +
+  x86_64) binary instead of separate Intel / Apple-Silicon legs.
+- **Harbour patch** — restored the blank context line in the
+  `rddads.h` hunk of `tools/harbour_patch/rddads-compat.patch`
+  so `git apply` succeeds on a pristine Harbour tree.
+
 ## 1.0.0-rc27 — 2026-05-17
 
 - **`AdsGetField` pads CHARACTER fields to the declared width.**

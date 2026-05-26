@@ -51,6 +51,57 @@ Place `ace64.dll` (or `libace.so`) on a Harbour application's
 `PATH` ahead of any SAP-shipped copy. Existing `contrib/rddads`
 calls now hit OpenADS.
 
+## Build your own Harbour app against OpenADS (`hbmk2` / `.hbp`)
+
+The repo ships a turnkey `hbmk2` template at
+[`examples/harbour-hbmk2/`](https://github.com/FiveTechSoft/OpenADS/tree/main/examples/harbour-hbmk2)
+— drop your `.prg` next to `openads_demo.hbp`, point
+`OPENADS_LIB` at OpenADS' build output, run `hbmk2`. The
+produced `.exe` drives DBF / CDX through Harbour's stock
+`contrib/rddads` RDD but every `Ads*` call lands on OpenADS'
+`ace64.dll` instead of any SAP-shipped one.
+
+```cmd
+:: From a Visual Studio x64 Developer Command Prompt:
+cd examples\harbour-hbmk2
+set OPENADS_LIB=C:\OpenADS\build\default\src\Release
+set PATH=C:\harbour\bin\win\msvc64;%OPENADS_LIB%;%PATH%
+hbmk2 openads_demo.hbp
+copy /y "%OPENADS_LIB%\ace64.dll" .
+openads_demo.exe
+```
+
+The `.hbp` is intentionally minimal — only the two link entries
+that change for OpenADS:
+
+```hbmk
+openads_demo.prg
+-comp=msvc64
+-lrddads                    # Harbour's ADS RDD (contrib/rddads)
+-L${OPENADS_LIB}
+-lace64                     # OpenADS' import lib (instead of SAP's)
+-lrddcdx
+-lrddntx
+-lrddfpt
+```
+
+A 32-bit variant (`openads_demo_x86.hbp` → `-lace32`) sits
+alongside, plus a POSIX `build.sh`. For FiveWin (FWH) GUI apps
+`hbmk2` is not enough — see
+[`examples/fivewin/`](https://github.com/FiveTechSoft/OpenADS/tree/main/examples/fivewin)
+for `build_msvc64.cmd` that mirrors FWH's stock build script
+with `rddads.lib` + OpenADS' `ace64.lib` added in.
+
+Typical "my hbmk2 attempt failed" symptoms:
+
+| Symptom | Likely cause |
+|---|---|
+| `unresolved external symbol AdsConnect60` (or any `Ads*`) | `OPENADS_LIB` not set, or wrong toolchain — `ace64.lib` is MSVC; for bcc64 / MinGW use the matching import lib. |
+| `lib 'rddads' not found` | `contrib/rddads` not built for the `-comp=…` you chose. Rebuild Harbour's contrib for that toolchain. |
+| Runtime `ace64.dll not found` | DLL not next to the exe and not on `PATH`. |
+| Strings show truncated in a TBrowse / xBrowse | Fixed in v1.0.0-rc27 — `AdsGetField` now pads CHAR to declared width. |
+| `AdsVersion()` looks like `12.0` / `11.10` | You loaded SAP's `ace64.dll`. `where ace64.dll` and reorder `PATH`. |
+
 ## Smoke test (TCP server + Studio)
 
 ```sh

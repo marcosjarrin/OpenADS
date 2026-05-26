@@ -1,0 +1,24 @@
+# OpenADS — Harbour hbmk2 build script (console app, x86).
+#
+# Mirrors openads_demo.hbp but for the 32-bit DLL (ace32.dll).
+# Usage:
+#   set OPENADS_LIB=C:\path\to\OpenADS\build\msvc-x86\src\Release
+#   hbmk2 openads_demo_x86.hbp
+
+openads_demo.prg
+
+-comp=msvc          # MSVC x86. Or: bcc / mingw — match Harbour install.
+
+-w3
+-es2
+
+# Harbour's ADS RDD, built for the matching x86 toolchain.
+-lrddads
+
+# OpenADS' 32-bit import library.
+-L${OPENADS_LIB}
+-lace32
+
+-lrddcdx
+-lrddntx
+-lrddfpt
