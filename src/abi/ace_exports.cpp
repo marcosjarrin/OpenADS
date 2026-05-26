@@ -6070,7 +6070,7 @@ UNSIGNED32 AdsDecryptRecord(ADSHANDLE /*hTable*/) {
                 "AdsDecryptRecord pending ADS encryption-mode RE");
 }
 
-// --- M5 transaction surface (in-memory; WAL persistence pending) -----------
+// --- M5 transaction surface -------------------------------------------------
 
 UNSIGNED32 AdsBeginTransaction(ADSHANDLE hConnect) {
     auto& s = state();

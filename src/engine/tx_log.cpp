@@ -144,6 +144,20 @@ TxLog::append_update_async(std::uint64_t tx_id,
     return append_record_(TxRecordType::Update, tx_id, payload);
 }
 
+util::Result<std::uint64_t>
+TxLog::append_append_async(std::uint64_t tx_id,
+                           const std::string& table_path,
+                           std::uint32_t recno) {
+    std::size_t plen = 2 + table_path.size() + 4;
+    std::vector<std::uint8_t> payload(plen);
+    std::uint8_t* p = payload.data();
+    write_u16_le(p + 0, static_cast<std::uint16_t>(table_path.size()));
+    if (!table_path.empty())
+        std::memcpy(p + 2, table_path.data(), table_path.size());
+    write_u32_le(p + 2 + table_path.size(), recno);
+    return append_record_(TxRecordType::Append, tx_id, payload);
+}
+
 util::Result<std::uint64_t> TxLog::append_commit_async(std::uint64_t tx_id) {
     return append_record_(TxRecordType::Commit, tx_id, {});
 }
@@ -165,6 +179,15 @@ TxLog::append_update(std::uint64_t tx_id,
                      const std::vector<std::uint8_t>& before,
                      const std::vector<std::uint8_t>& after) {
     auto r = append_update_async(tx_id, table_path, recno, before, after);
+    if (!r) return r.error();
+    return {};
+}
+
+util::Result<void>
+TxLog::append_append(std::uint64_t tx_id,
+                     const std::string& table_path,
+                     std::uint32_t recno) {
+    auto r = append_append_async(tx_id, table_path, recno);
     if (!r) return r.error();
     return {};
 }
@@ -246,6 +269,11 @@ util::Result<std::vector<TxRecord>> TxLog::read_all() {
             off += 2 + bl;
             std::uint16_t al = read_u16_le(p + off);
             r.update.after.assign(p + off + 2, p + off + 2 + al);
+        } else if (r.type == TxRecordType::Append && plen >= 6) {
+            const std::uint8_t* p = buf.data() + pos + WAL_HEADER_LEN;
+            std::uint16_t pl = read_u16_le(p + 0);
+            r.update.table_path.assign(reinterpret_cast<const char*>(p + 2), pl);
+            r.update.recno = read_u32_le(p + 2 + pl);
         }
         out.push_back(std::move(r));
         pos += rec_size;

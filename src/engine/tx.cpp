@@ -24,6 +24,10 @@ void Tx::note_append(TableId table, Recno recno) {
     RecordKey k{table, recno};
     appended_[k] = true;
     ops_.push_back(OrderedOp{table, recno, true, {}});
+    if (log_ != nullptr) {
+        const auto& path = path_for(table);
+        (void)log_->append_append(tx_id_, path, recno);
+    }
 }
 
 void Tx::create_savepoint(const std::string& name) {

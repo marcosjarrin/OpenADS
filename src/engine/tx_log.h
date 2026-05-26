@@ -31,6 +31,7 @@ enum class TxRecordType : std::uint8_t {
     Update  = 2,
     Commit  = 3,
     Abort   = 4,
+    Append  = 5,   // record appended; payload = table_path + recno (no before/after)
 };
 
 struct TxUpdatePayload {
@@ -91,6 +92,9 @@ public:
                                      std::uint32_t recno,
                                      const std::vector<std::uint8_t>& before,
                                      const std::vector<std::uint8_t>& after);
+    util::Result<std::uint64_t> append_append_async(std::uint64_t tx_id,
+                                     const std::string& table_path,
+                                     std::uint32_t recno);
     util::Result<std::uint64_t> append_commit_async(std::uint64_t tx_id);
     util::Result<std::uint64_t> append_abort_async (std::uint64_t tx_id);
 
@@ -101,6 +105,9 @@ public:
                                      std::uint32_t recno,
                                      const std::vector<std::uint8_t>& before,
                                      const std::vector<std::uint8_t>& after);
+    util::Result<void> append_append(std::uint64_t tx_id,
+                                     const std::string& table_path,
+                                     std::uint32_t recno);
     util::Result<void> append_commit(std::uint64_t tx_id);
     util::Result<void> append_abort (std::uint64_t tx_id);
 

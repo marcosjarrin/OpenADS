@@ -338,7 +338,7 @@ util::Result<void> Connection::recover_orphan_tx_() {
         return raw;
     };
 
-    // Build list of orphan UPDATE records in reverse log order.
+    // Undo orphan UPDATE records in reverse log order (restore before-images).
     std::vector<const engine::TxRecord*> orphan_updates;
     for (auto it = recs.rbegin(); it != recs.rend(); ++it) {
         if (it->type == engine::TxRecordType::Update &&
@@ -362,6 +362,28 @@ util::Result<void> Connection::recover_orphan_tx_() {
                 up->update.before.data(),
                 up->update.before.size());
             lsn_map_.put(up->update.table_path, up->update.recno, up->lsn);
+        }
+    }
+
+    // Undo orphan APPEND records by marking the appended rows deleted.
+    // We de-duplicate by (table, recno) so that if the record was also
+    // updated within the same orphan tx, the UPDATE undo above already
+    // handled the data bytes — we only need to set the delete flag here.
+    std::unordered_set<std::string> seen_appends; // "path:recno"
+    for (const auto& r : recs) {
+        if (r.type == engine::TxRecordType::Append &&
+            ended.find(r.tx_id) == ended.end()) {
+            std::string key = r.update.table_path + ":" +
+                              std::to_string(r.update.recno);
+            if (!seen_appends.insert(key).second) continue;
+            engine::Table* t = open_for(r.update.table_path);
+            if (!t || !t->driver()) continue;
+            auto rec = t->driver()->read_record_raw(r.update.recno);
+            if (!rec) continue;
+            auto buf = std::move(rec).value();
+            openads::drivers::set_record_deleted(buf.data(), buf.size(), true);
+            (void)t->driver()->write_record_raw(
+                r.update.recno, buf.data(), buf.size());
         }
     }
     // Append ABORT for each orphan tx so the log is well-formed.

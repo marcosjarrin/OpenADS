@@ -253,12 +253,14 @@ Check off completed work and commit the file update so it stays current.
 
 ### Open
 
-- [ ] **WAL crash recovery**.
-      The engine has `TxLog` / `LsnMap` infrastructure and the WAL
-      file is written, but the M5 comment in `ace_exports.cpp` says
-      "in-memory; WAL persistence pending." A clean crash-recovery path
-      (replay uncommitted WAL on next open, discard partial writes) has
-      not been tested end-to-end.
+- [x] **WAL crash recovery** — end-to-end crash recovery implemented and
+      tested. `Connection::open` → `recover_orphan_tx_()` reads the WAL,
+      identifies transactions with no COMMIT/ABORT (orphans), writes
+      before-images back for UPDATE records, and marks appended rows
+      deleted for APPEND records. `LsnMap` sidecar makes recovery
+      crash-safe across interrupted passes. WAL APPEND record type added
+      so orphan appends are tracked persistently. 3 tests in
+      `tests/unit/abi_m5x_recovery_test.cpp`. (2026-05-26)
 
 ---
 
