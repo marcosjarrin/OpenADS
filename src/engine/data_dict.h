@@ -47,6 +47,8 @@ public:
     bool has_alias(const std::string& alias) const noexcept {
         return tables_.find(alias) != tables_.end();
     }
+    const std::unordered_map<std::string, std::string>&
+        tables() const noexcept { return tables_; }
 
     // ---- INDEX (M10.1) ---------------------------------------------------
     struct IndexEntry {

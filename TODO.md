@@ -58,14 +58,23 @@ Check off completed work and commit the file update so it stays current.
       `encode_adt_key` handles CICHAR/CHAR (returns raw field bytes).
       2 new unit tests in `abi_adi_smoke_test.cpp`. (2026-05-24)
 
-- [ ] **RI enforcement at write time**.
-      `AdsDDCreateRefIntegrity` stores rules in `DataDict::ri_` but nothing
-      enforces them. `append_record`, `mark_deleted`, and `set_field` in
-      `table.cpp` proceed without consulting RI rules. Needs a
-      `Connection::check_ri_on_write(table, op)` helper that loads the
-      relevant `RiEntry` records from the DD and returns an error (or
-      triggers the fail-table / cascade / restrict action) before the
-      write commits.
+- [x] **RI enforcement at write time**.
+      INSERT (AdsWriteRecord after AdsAppendRecord): validates FK exists in
+      parent table via linear scan; blank FK skips the check (NULL semantics).
+      DELETE (AdsDeleteRecord): enforces `delete_opt` —
+      RESTRICT (2) rejects if children exist; CASCADE (1) marks child rows
+      deleted; SETNULL (3) / SETDEFAULT (4) blank the child FK field.
+      `pending_appends()` set tracks in-flight appends; `in_ri_check()` flag
+      prevents recursive enforcement on cascade actions. UPDATE enforcement
+      deferred (see below). 8 tests in `tests/unit/abi_dd_ri_test.cpp`.
+      (2026-05-25)
+
+- [ ] **RI enforcement on UPDATE (parent key change)**.
+      The current implementation enforces RI for INSERT and DELETE only.
+      Enforcing UPDATE (when a parent's PK field changes) requires knowing
+      the old key value before the write, which means snapshotting the PK
+      at navigation time. For now, parent key updates are not checked;
+      RESTRICT/CASCADE/SETNULL/SETDEFAULT for `update_opt` are unimplemented.
 
 - [ ] **DD authentication for local connections**.
       `AdsConnect60` for local paths ignores `pucUser`/`pucPwd` (line 416

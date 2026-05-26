@@ -567,6 +567,12 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_MAX_FAILED_ATTEMPTS           21
 #define ADS_DD_USER_DEFINED_PROP             22
 
+// Referential integrity action options (usUpdate / usDelete).
+#define ADS_DD_RI_CASCADE                 1
+#define ADS_DD_RI_RESTRICT                2
+#define ADS_DD_RI_SETNULL                 3
+#define ADS_DD_RI_SETDEFAULT              4
+
 // User-object property codes (1101-1103).
 #define ADS_DD_USER_PASSWORD              1101
 #define ADS_DD_USER_GROUP_MEMBERSHIP      1102

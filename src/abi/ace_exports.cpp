@@ -312,6 +312,199 @@ std::string pad_char_field(std::string s, std::size_t width) {
     return s;
 }
 
+// ---------------------------------------------------------------------------
+// Referential Integrity enforcement
+// ---------------------------------------------------------------------------
+
+// Tables where AdsAppendRecord was called but AdsWriteRecord hasn't fired.
+std::unordered_set<Table*>& pending_appends() {
+    static std::unordered_set<Table*> s;
+    return s;
+}
+
+// Recursion guard: prevents RI cascade actions from triggering a second
+// round of RI checks on the child table.
+bool& in_ri_check() {
+    static thread_local bool flag = false;
+    return flag;
+}
+
+// Find the Connection that owns Table* t.
+Connection* conn_for_table(Table* t) {
+    auto& s = state();
+    Connection* found = nullptr;
+    s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
+        if (k != HandleKind::Connection || found) return;
+        auto* c = static_cast<Connection*>(p);
+        if (c->owns_table_ptr(t)) found = c;
+    });
+    return found;
+}
+
+// Find the DD alias for a table given its resolved absolute path.
+std::string ri_alias_for_path(Connection* conn, const std::string& abs_path) {
+    namespace fs = std::filesystem;
+    auto* dd = conn->dd();
+    if (!dd) return {};
+    std::error_code ec;
+    auto cb = fs::weakly_canonical(fs::path(abs_path), ec).string();
+    for (auto& [alias, rel] : dd->tables()) {
+        fs::path full = fs::path(conn->data_dir()) / rel;
+        auto ca = fs::weakly_canonical(full, ec).string();
+        if (ca.size() != cb.size()) continue;
+        bool eq = true;
+        for (std::size_t i = 0; i < ca.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(ca[i])) !=
+                std::tolower(static_cast<unsigned char>(cb[i]))) {
+                eq = false; break;
+            }
+        }
+        if (eq) return alias;
+    }
+    return {};
+}
+
+// Right-trim spaces from a DBF field value.
+std::string ri_trim(const std::string& s) {
+    auto i = s.find_last_not_of(' ');
+    return (i == std::string::npos) ? std::string{} : s.substr(0, i + 1);
+}
+
+// Read a named field from the current record buffer.
+std::string ri_read_field(Table& tbl, const std::string& name) {
+    auto idx = tbl.field_index(name);
+    if (idx < 0) return {};
+    auto v = tbl.read_field(static_cast<std::uint16_t>(idx));
+    return v ? v.value().as_string : std::string{};
+}
+
+// Scan `tbl` for any live row where field `fname` equals `key` (trimmed).
+// Returns true if at least one match is found; if `recnos` is non-null
+// it collects ALL matching record numbers.
+bool ri_scan(Table& tbl, const std::string& fname, const std::string& key,
+             std::vector<std::uint32_t>* recnos) {
+    bool any = false;
+    if (auto r = tbl.goto_top(); !r) return false;
+    while (!tbl.eof()) {
+        if (!tbl.is_deleted()) {
+            if (ri_trim(ri_read_field(tbl, fname)) == key) {
+                any = true;
+                if (recnos) recnos->push_back(tbl.recno());
+                else        return true;   // RESTRICT: one match is enough
+            }
+        }
+        (void)tbl.skip(1);
+    }
+    return any;
+}
+
+// Called from AdsWriteRecord when the record was freshly appended.
+// Validates that every FK field exists in the referenced parent table.
+openads::util::Result<void> ri_check_insert(Connection* conn, Table& child) {
+    if (in_ri_check()) return {};
+    auto* dd = conn->dd();
+    if (!dd || dd->ri().empty()) return {};
+    std::string child_alias = ri_alias_for_path(conn, child.path());
+    if (child_alias.empty()) return {};
+
+    for (auto& [rname, rule] : dd->ri()) {
+        if (rule.child != child_alias) continue;
+        // rule.tag is the parent index tag name; by convention (single-field
+        // PK/FK) the same name identifies the FK field in the child.
+        std::string fk_val = ri_trim(ri_read_field(child, rule.tag));
+        if (fk_val.empty()) continue;   // NULL / blank FK → skip
+
+        auto ph = conn->open_table(rule.parent,
+                                   openads::engine::TableType::Cdx,
+                                   openads::engine::OpenMode::Read);
+        if (!ph) {
+            return openads::util::Error{
+                openads::AE_RI_VIOLATION, 0,
+                "RI: cannot open parent table '" + rule.parent + "'", rname};
+        }
+        Table* parent = conn->lookup_table(ph.value());
+        bool found = parent && ri_scan(*parent, rule.tag, fk_val, nullptr);
+        conn->close_table(ph.value());
+        if (!found) {
+            return openads::util::Error{
+                openads::AE_RI_VIOLATION, 0,
+                "RI violation: FK value '" + fk_val +
+                    "' not found in parent '" + rule.parent + "'",
+                rname};
+        }
+    }
+    return {};
+}
+
+// Called from AdsDeleteRecord before marking the row deleted.
+// Enforces delete_opt rules for every RI rule where this table is the parent.
+openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
+    if (in_ri_check()) return {};
+    auto* dd = conn->dd();
+    if (!dd || dd->ri().empty()) return {};
+    std::string parent_alias = ri_alias_for_path(conn, parent.path());
+    if (parent_alias.empty()) return {};
+
+    for (auto& [rname, rule] : dd->ri()) {
+        if (rule.parent != parent_alias) continue;
+        std::string pk_val = ri_trim(ri_read_field(parent, rule.tag));
+        if (pk_val.empty()) continue;
+
+        unsigned del_opt = ADS_DD_RI_RESTRICT;
+        if (!rule.delete_opt.empty()) {
+            try { del_opt = static_cast<unsigned>(
+                    std::stoul(rule.delete_opt)); } catch (...) {}
+        }
+
+        bool need_write = (del_opt == ADS_DD_RI_CASCADE ||
+                           del_opt == ADS_DD_RI_SETNULL ||
+                           del_opt == ADS_DD_RI_SETDEFAULT);
+        auto ch = conn->open_table(rule.child,
+                                   openads::engine::TableType::Cdx,
+                                   need_write ? openads::engine::OpenMode::Shared
+                                              : openads::engine::OpenMode::Read);
+        if (!ch) continue;   // can't open child → skip rule
+        Table* child = conn->lookup_table(ch.value());
+        if (!child) { conn->close_table(ch.value()); continue; }
+
+        if (del_opt == ADS_DD_RI_RESTRICT) {
+            bool any = ri_scan(*child, rule.tag, pk_val, nullptr);
+            conn->close_table(ch.value());
+            if (any) {
+                return openads::util::Error{
+                    openads::AE_RI_VIOLATION, 0,
+                    "RI violation: child rows exist in '" + rule.child + "'",
+                    rname};
+            }
+        } else {
+            // Collect matching recnos first, then apply action.
+            std::vector<std::uint32_t> matches;
+            ri_scan(*child, rule.tag, pk_val, &matches);
+            in_ri_check() = true;
+            for (std::uint32_t rec : matches) {
+                if (auto gr = child->goto_record(rec); !gr) continue;
+                if (del_opt == ADS_DD_RI_CASCADE) {
+                    (void)child->mark_deleted();
+                } else {
+                    // SETNULL / SETDEFAULT: blank the FK field.
+                    auto fi = child->field_index(rule.tag);
+                    if (fi >= 0) {
+                        auto fi16 = static_cast<std::uint16_t>(fi);
+                        std::uint32_t flen =
+                            child->field_descriptor(fi16).length;
+                        (void)child->set_field(fi16,
+                                               std::string(flen, ' '));
+                    }
+                }
+            }
+            in_ri_check() = false;
+            if (!matches.empty()) (void)child->flush();
+            conn->close_table(ch.value());
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 // RCB 2026-05-22 17:03 — set_stmt_param is defined later in the file alongside
@@ -2071,6 +2264,7 @@ UNSIGNED32 AdsAppendRecord(ADSHANDLE hTable) {
     // lock layer no-ops in read/exclusive modes, and a lock contention
     // here doesn't invalidate the append itself.
     (void)t->try_lock_record_excl(t->recno());
+    pending_appends().insert(t);
     return ok();
 }
 
@@ -2083,6 +2277,13 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    bool is_insert = pending_appends().erase(t) > 0;
+    if (is_insert) {
+        if (Connection* conn = conn_for_table(t)) {
+            if (auto ri = ri_check_insert(conn, *t); !ri)
+                return fail(ri.error());
+        }
+    }
     auto r = t->flush();
     if (!r) return fail(r.error());
     return ok();
@@ -2098,6 +2299,11 @@ UNSIGNED32 AdsDeleteRecord(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    pending_appends().erase(t);   // abandon any in-flight append
+    if (Connection* conn = conn_for_table(t)) {
+        if (auto ri = ri_enforce_delete(conn, *t); !ri)
+            return fail(ri.error());
+    }
     auto r = t->mark_deleted();
     if (!r) return fail(r.error());
     return ok();
