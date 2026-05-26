@@ -505,6 +505,133 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
     return {};
 }
 
+// Snapshot of PK field values captured at navigation time so ri_enforce_update
+// can compare old vs new without re-reading a dirty buffer. Keyed by Table*.
+std::unordered_map<Table*, std::unordered_map<std::string, std::string>>&
+pk_snapshots() {
+    static std::unordered_map<Table*, std::unordered_map<std::string, std::string>> m;
+    return m;
+}
+
+// Called after every successful local-table navigation.
+// If the table is a parent in any RI rule, snapshot its PK fields.
+void snapshot_ri_pks(Table* t) {
+    if (!t || t->eof()) {
+        pk_snapshots().erase(t);
+        return;
+    }
+    Connection* conn = conn_for_table(t);
+    if (!conn) return;
+    auto* dd = conn->dd();
+    if (!dd || dd->ri().empty()) return;
+    std::string alias = ri_alias_for_path(conn, t->path());
+    if (alias.empty()) return;
+    bool is_parent = false;
+    for (auto& [rname, rule] : dd->ri()) {
+        if (rule.parent == alias) { is_parent = true; break; }
+    }
+    if (!is_parent) return;
+    auto& snap = pk_snapshots()[t];
+    snap.clear();
+    for (auto& [rname, rule] : dd->ri()) {
+        if (rule.parent != alias) continue;
+        snap[rule.tag] = ri_trim(ri_read_field(*t, rule.tag));
+    }
+}
+
+// Called from AdsWriteRecord for non-append writes (i.e. plain UPDATE).
+// For every RI rule where this table is the parent, compares the new PK
+// value (in the dirty buffer) against the old PK value snapshotted at
+// navigation time. If they differ, enforces update_opt on the child table.
+openads::util::Result<void> ri_enforce_update(Connection* conn, Table& parent) {
+    if (in_ri_check()) return {};
+    auto* dd = conn->dd();
+    if (!dd || dd->ri().empty()) return {};
+    std::string parent_alias = ri_alias_for_path(conn, parent.path());
+    if (parent_alias.empty()) return {};
+
+    for (auto& [rname, rule] : dd->ri()) {
+        if (rule.parent != parent_alias) continue;
+
+        unsigned upd_opt = ADS_DD_RI_RESTRICT;
+        if (!rule.update_opt.empty()) {
+            try { upd_opt = static_cast<unsigned>(
+                    std::stoul(rule.update_opt)); } catch (...) {}
+        }
+        if (upd_opt == 0) continue;
+
+        // New PK value is in the dirty buffer.
+        std::string new_pk = ri_trim(ri_read_field(parent, rule.tag));
+
+        // Old PK value was snapshotted at navigation time.
+        auto sit = pk_snapshots().find(&parent);
+        if (sit == pk_snapshots().end()) continue;
+        auto fit = sit->second.find(rule.tag);
+        if (fit == sit->second.end()) continue;
+        std::string old_pk = fit->second;
+
+        if (old_pk == new_pk) continue;   // no PK change for this rule
+        if (old_pk.empty()) continue;      // was blank (NULL) — skip
+
+        bool need_write = (upd_opt == ADS_DD_RI_CASCADE ||
+                           upd_opt == ADS_DD_RI_SETNULL ||
+                           upd_opt == ADS_DD_RI_SETDEFAULT);
+        auto ch = conn->open_table(rule.child,
+                                   openads::engine::TableType::Cdx,
+                                   need_write ? openads::engine::OpenMode::Shared
+                                              : openads::engine::OpenMode::Read);
+        if (!ch) continue;
+        Table* child = conn->lookup_table(ch.value());
+        if (!child) { conn->close_table(ch.value()); continue; }
+
+        if (upd_opt == ADS_DD_RI_RESTRICT) {
+            bool any = ri_scan(*child, rule.tag, old_pk, nullptr);
+            conn->close_table(ch.value());
+            if (any) {
+                // Restore parent's old PK to disk. set_field wrote the new
+                // value immediately (writeback_record_), so we must undo it.
+                auto rfi = parent.field_index(rule.tag);
+                if (rfi >= 0) {
+                    auto rfi16 = static_cast<std::uint16_t>(rfi);
+                    std::uint32_t rflen = parent.field_descriptor(rfi16).length;
+                    std::string padded = old_pk;
+                    padded.resize(rflen, ' ');
+                    (void)parent.set_field(rfi16, padded);
+                }
+                return openads::util::Error{
+                    openads::AE_RI_VIOLATION, 0,
+                    "RI violation: child rows reference old PK '" + old_pk +
+                        "' in '" + rule.child + "'",
+                    rname};
+            }
+        } else {
+            std::vector<std::uint32_t> matches;
+            ri_scan(*child, rule.tag, old_pk, &matches);
+            in_ri_check() = true;
+            auto fi = child->field_index(rule.tag);
+            if (fi >= 0) {
+                auto fi16 = static_cast<std::uint16_t>(fi);
+                std::uint32_t flen = child->field_descriptor(fi16).length;
+                for (std::uint32_t rec : matches) {
+                    if (auto gr = child->goto_record(rec); !gr) continue;
+                    if (upd_opt == ADS_DD_RI_CASCADE) {
+                        std::string padded = new_pk;
+                        padded.resize(flen, ' ');
+                        (void)child->set_field(fi16, padded);
+                    } else {
+                        // SETNULL / SETDEFAULT: blank the FK field.
+                        (void)child->set_field(fi16, std::string(flen, ' '));
+                    }
+                }
+            }
+            in_ri_check() = false;
+            if (!matches.empty()) (void)child->flush();
+            conn->close_table(ch.value());
+        }
+    }
+    return {};
+}
+
 // Returns effective permission level (0-4) for the authenticated user on a
 // DD table alias. Returns 4 (full) when no ACL or no DD is present.
 int table_perm_level(Connection* conn, const std::string& alias) {
@@ -1614,6 +1741,7 @@ UNSIGNED32 AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_record(ulRecord);
     if (!r) return fail(r.error());
+    snapshot_ri_pks(t);
     return ok();
 }
 
@@ -1698,6 +1826,7 @@ UNSIGNED32 AdsCloseTable(ADSHANDLE hTable) {
         (void)t->flush();
         purge_bindings_for_table(t);
         purge_pending_binaries_for_table(t);
+        pk_snapshots().erase(t);
     }
     cursor_projections().erase(hTable);
     s.registry.release(hTable);
@@ -1717,6 +1846,7 @@ UNSIGNED32 AdsGotoTop(ADSHANDLE hTable) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_top();
     if (!r) return fail(r.error());
+    snapshot_ri_pks(t);
     return ok();
 }
 
@@ -1730,6 +1860,7 @@ UNSIGNED32 AdsGotoBottom(ADSHANDLE hTable) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->goto_bottom();
     if (!r) return fail(r.error());
+    snapshot_ri_pks(t);
     return ok();
 }
 
@@ -1758,6 +1889,7 @@ UNSIGNED32 AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     auto r = t->skip(lRows);
     if (!r) return fail(r.error());
+    snapshot_ri_pks(t);
     return ok();
 }
 
@@ -2336,6 +2468,11 @@ UNSIGNED32 AdsWriteRecord(ADSHANDLE hTable) {
     if (is_insert) {
         if (Connection* conn = conn_for_table(t)) {
             if (auto ri = ri_check_insert(conn, *t); !ri)
+                return fail(ri.error());
+        }
+    } else {
+        if (Connection* conn = conn_for_table(t)) {
+            if (auto ri = ri_enforce_update(conn, *t); !ri)
                 return fail(ri.error());
         }
     }
@@ -4693,6 +4830,7 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
             if (!gt) return fail(gt.error());
             if (pbFound != nullptr) *pbFound = 1;
             t->set_last_seek_found(true);
+            snapshot_ri_pks(t);
             return ok();
         }
     }
@@ -4700,6 +4838,7 @@ UNSIGNED32 AdsSeek(ADSHANDLE hIndex,
     if (!r) return fail(r.error());
     bool found = r.value();
     if (pbFound != nullptr) *pbFound = found ? 1 : 0;
+    snapshot_ri_pks(t);
     return ok();
 }
 

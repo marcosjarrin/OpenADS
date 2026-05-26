@@ -69,12 +69,15 @@ Check off completed work and commit the file update so it stays current.
       deferred (see below). 8 tests in `tests/unit/abi_dd_ri_test.cpp`.
       (2026-05-25)
 
-- [ ] **RI enforcement on UPDATE (parent key change)**.
-      The current implementation enforces RI for INSERT and DELETE only.
-      Enforcing UPDATE (when a parent's PK field changes) requires knowing
-      the old key value before the write, which means snapshotting the PK
-      at navigation time. For now, parent key updates are not checked;
-      RESTRICT/CASCADE/SETNULL/SETDEFAULT for `update_opt` are unimplemented.
+- [x] **RI enforcement on UPDATE (parent key change)**.
+      PK snapshot captured at navigation time (AdsGotoRecord/Top/Bottom/Skip/Seek)
+      via `pk_snapshots()` map keyed by Table*. At AdsWriteRecord, the new PK
+      (from dirty buffer) is compared to the old PK (from snapshot). If they
+      differ, `update_opt` is enforced: RESTRICT rejects and restores the old
+      value on disk; CASCADE updates child FK fields; SETNULL/SETDEFAULT blanks
+      child FK fields. On-disk rollback on RESTRICT: `set_field` writes
+      immediately so ri_enforce_update re-writes the old value when rejecting.
+      4 tests in `tests/unit/abi_dd_ri_test.cpp`. (2026-05-26)
 
 - [x] **DD authentication for local connections**.
       `AdsConnect60` checks the DD's `ADS_DD_LOG_IN_REQUIRED` property

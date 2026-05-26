@@ -325,6 +325,148 @@ TEST_CASE("RI DELETE SETNULL: child FK blanked when parent deleted") {
     fs::remove_all(dir, ec);
 }
 
+// ---------------------------------------------------------------------------
+// UPDATE enforcement tests
+// ---------------------------------------------------------------------------
+
+// Helper: set the ID field of the current record and write.
+static UNSIGNED32 set_id_and_write(ADSHANDLE h, const char* id) {
+    UNSIGNED8 fld[4] = "ID";
+    UNSIGNED8 val[8] = {};
+    std::strncpy(reinterpret_cast<char*>(val), id, 4);
+    if (UNSIGNED32 rc = AdsSetString(h, fld, val, 4); rc != 0) return rc;
+    return AdsWriteRecord(h);
+}
+
+TEST_CASE("RI UPDATE RESTRICT: blocked when child rows reference old PK") {
+    auto dir = fs::temp_directory_path() / "openads_ri_upd_restrict";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    make_ri_dbf(dir, "parent.dbf", {"P001", "P002"});
+    make_ri_dbf(dir, "child.dbf",  {"P001"});   // child references P001
+    make_add(dir, "RI r1=parent;child;ID;2;2;\n");  // update=RESTRICT
+
+    ADSHANDLE hConn   = connect_dd(dir / "test.add");
+    ADSHANDLE hParent = open_alias(hConn, "parent");
+    ADSHANDLE hChild  = open_alias(hConn, "child");
+    REQUIRE(hConn   != 0);
+    REQUIRE(hParent != 0);
+    REQUIRE(hChild  != 0);
+
+    // Try to change P001 → P999 while a child row still references P001.
+    REQUIRE(AdsGotoRecord(hParent, 1) == 0);
+    UNSIGNED32 rc = set_id_and_write(hParent, "P999");
+    CHECK(rc == openads::AE_RI_VIOLATION);
+
+    // Record must be unchanged on disk.
+    REQUIRE(AdsGotoRecord(hParent, 1) == 0);
+    UNSIGNED8 buf[8] = {};
+    UNSIGNED32 cap = sizeof(buf);
+    UNSIGNED8 fld[4] = "ID";
+    REQUIRE(AdsGetField(hParent, fld, buf, &cap, 0) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(buf), 4) == "P001");
+
+    REQUIRE(AdsCloseTable(hChild)  == 0);
+    REQUIRE(AdsCloseTable(hParent) == 0);
+    REQUIRE(AdsDisconnect(hConn)   == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("RI UPDATE RESTRICT: allowed when no child references old PK") {
+    auto dir = fs::temp_directory_path() / "openads_ri_upd_restrict_ok";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    make_ri_dbf(dir, "parent.dbf", {"P001", "P002"});
+    make_ri_dbf(dir, "child.dbf",  {"P001"});   // P002 is unreferenced
+    make_add(dir, "RI r1=parent;child;ID;2;2;\n");
+
+    ADSHANDLE hConn   = connect_dd(dir / "test.add");
+    ADSHANDLE hParent = open_alias(hConn, "parent");
+    ADSHANDLE hChild  = open_alias(hConn, "child");
+    REQUIRE(hParent != 0);
+
+    // P002 has no child rows — rename is allowed.
+    REQUIRE(AdsGotoRecord(hParent, 2) == 0);
+    CHECK(set_id_and_write(hParent, "P999") == 0);
+
+    REQUIRE(AdsCloseTable(hChild)  == 0);
+    REQUIRE(AdsCloseTable(hParent) == 0);
+    REQUIRE(AdsDisconnect(hConn)   == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("RI UPDATE CASCADE: child FK updated to new parent PK") {
+    auto dir = fs::temp_directory_path() / "openads_ri_upd_cascade";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    make_ri_dbf(dir, "parent.dbf", {"P001"});
+    make_ri_dbf(dir, "child.dbf",  {"P001", "P001"});   // two child rows
+    make_add(dir, "RI r1=parent;child;ID;1;2;\n");  // update=CASCADE
+
+    ADSHANDLE hConn   = connect_dd(dir / "test.add");
+    ADSHANDLE hParent = open_alias(hConn, "parent");
+    ADSHANDLE hChild  = open_alias(hConn, "child");
+    REQUIRE(hParent != 0);
+    REQUIRE(hChild  != 0);
+
+    // Rename P001 → P999; both child rows should be updated.
+    REQUIRE(AdsGotoRecord(hParent, 1) == 0);
+    CHECK(set_id_and_write(hParent, "P999") == 0);
+
+    // Check both child FK fields were cascaded.
+    UNSIGNED8 fld[4] = "ID";
+    for (UNSIGNED32 rec = 1; rec <= 2; ++rec) {
+        REQUIRE(AdsGotoRecord(hChild, rec) == 0);
+        UNSIGNED8 buf[8] = {};
+        UNSIGNED32 cap = sizeof(buf);
+        REQUIRE(AdsGetField(hChild, fld, buf, &cap, 0) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(buf), 4) == "P999");
+    }
+
+    REQUIRE(AdsCloseTable(hChild)  == 0);
+    REQUIRE(AdsCloseTable(hParent) == 0);
+    REQUIRE(AdsDisconnect(hConn)   == 0);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("RI UPDATE SETNULL: child FK blanked when parent PK changes") {
+    auto dir = fs::temp_directory_path() / "openads_ri_upd_setnull";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    make_ri_dbf(dir, "parent.dbf", {"P001"});
+    make_ri_dbf(dir, "child.dbf",  {"P001"});
+    make_add(dir, "RI r1=parent;child;ID;3;2;\n");  // update=SETNULL
+
+    ADSHANDLE hConn   = connect_dd(dir / "test.add");
+    ADSHANDLE hParent = open_alias(hConn, "parent");
+    ADSHANDLE hChild  = open_alias(hConn, "child");
+    REQUIRE(hParent != 0);
+    REQUIRE(hChild  != 0);
+
+    REQUIRE(AdsGotoRecord(hParent, 1) == 0);
+    CHECK(set_id_and_write(hParent, "P999") == 0);
+
+    // Child FK must be blank.
+    REQUIRE(AdsGotoRecord(hChild, 1) == 0);
+    UNSIGNED8 fld[4] = "ID";
+    UNSIGNED8 buf[8] = {};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hChild, fld, buf, &cap, 0) == 0);
+    bool all_blank = true;
+    for (UNSIGNED32 i = 0; i < 4; ++i)
+        if (buf[i] != ' ') { all_blank = false; break; }
+    CHECK(all_blank);
+
+    REQUIRE(AdsCloseTable(hChild)  == 0);
+    REQUIRE(AdsCloseTable(hParent) == 0);
+    REQUIRE(AdsDisconnect(hConn)   == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("RI: no DD → no enforcement (plain connection)") {
     // Open a plain directory (no .add) — writes should proceed without
     // any RI checks, even if the file has a field named "ID".
