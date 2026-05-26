@@ -45,6 +45,7 @@ enum : std::uint32_t {
     AE_TYPE_MISMATCH            = 7041,
     AE_DIVISION_BY_ZERO         = 7042,
     AE_LOGIN_FAILED             = 7077,
+    AE_ACCESS_DENIED            = 7079,
     AE_REMOTE_ERROR             = 5172,
     AE_RI_VIOLATION             = 508   // referential integrity constraint failed
 };

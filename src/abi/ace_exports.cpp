@@ -505,6 +505,26 @@ openads::util::Result<void> ri_enforce_delete(Connection* conn, Table& parent) {
     return {};
 }
 
+// Returns effective permission level (0-4) for the authenticated user on a
+// DD table alias. Returns 4 (full) when no ACL or no DD is present.
+int table_perm_level(Connection* conn, const std::string& alias) {
+    if (!conn || !conn->has_dd()) return 4;
+    auto* dd = conn->dd();
+    if (!dd->has_table_acl(alias)) return 4;
+    return dd->get_effective_permission(conn->username(), alias);
+}
+
+// Resolve an AdsOpenTable name (alias, bare filename, or path) to a DD alias.
+std::string name_to_alias(const openads::engine::DataDict* dd,
+                           const std::string& name) {
+    if (!dd) return {};
+    if (dd->has_alias(name)) return name;
+    namespace fs = std::filesystem;
+    std::string stem = fs::path(name).stem().string();
+    if (dd->has_alias(stem)) return stem;
+    return {};
+}
+
 } // namespace
 
 // RCB 2026-05-22 17:03 — set_stmt_param is defined later in the file alongside
@@ -688,8 +708,8 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
                         UNSIGNED16 usTableType,
                         UNSIGNED16 /*usCharType*/,
                         UNSIGNED16 /*usLockType*/,
-                        UNSIGNED16 /*usCheckRights*/,
-                        UNSIGNED16 /*usMode*/,
+                        UNSIGNED16 usCheckRights,
+                        UNSIGNED16 usMode,
                         ADSHANDLE* phTable) {
     if (phTable == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                         "phTable is null");
@@ -727,6 +747,18 @@ UNSIGNED32 AdsOpenTable(ADSHANDLE  hConnect,
         }
     }
     auto name = openads::abi::to_internal(pucName, 0);
+    // Per-table ACL check: when usCheckRights is non-zero and the connection
+    // has an authenticated user with a DD ACL for this table, verify the
+    // user holds at least read (1) for ADS_READONLY opens, write (2) otherwise.
+    if (usCheckRights != 0 && conn->has_dd() && !conn->username().empty()) {
+        std::string alias = name_to_alias(conn->dd(), name);
+        if (!alias.empty()) {
+            int required = (usMode == ADS_READONLY) ? 1 : 2;
+            int eff = table_perm_level(conn, alias);
+            if (eff < required)
+                return fail(openads::AE_ACCESS_DENIED, alias.c_str());
+        }
+    }
     auto th = conn->open_table(name, map_type(usTableType));
     if (!th) return fail(th.error());
     Table* tbl = conn->lookup_table(th.value());
@@ -4281,8 +4313,14 @@ UNSIGNED32 AdsDDGetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
         case ADS_DD_TABLE_AUTO_CREATE:         // 203
         case ADS_DD_TABLE_IS_RI_PARENT:        // 210
         case ADS_DD_TABLE_MEMO_BLOCK_SIZE:     // 215
-        case ADS_DD_TABLE_PERMISSION_LEVEL:    // 216
             return put_u16(0);
+
+        case ADS_DD_TABLE_PERMISSION_LEVEL: {  // 216
+            int lvl = (c && !c->username().empty())
+                ? dd->get_effective_permission(c->username(), alias)
+                : 4;
+            return put_u16(static_cast<std::uint16_t>(lvl));
+        }
 
         case ADS_DD_TABLE_VALIDATION_EXPR:     // 200
         case ADS_DD_TABLE_VALIDATION_MSG:      // 201
@@ -4307,6 +4345,31 @@ UNSIGNED32 AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable,
                     alias.c_str());
     return fail(static_cast<int>(openads::AE_FUNCTION_NOT_AVAILABLE),
                 "AdsDDSetTableProperty");
+}
+
+UNSIGNED32 AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                   UNSIGNED8* pucUser, UNSIGNED32 ulLevel) {
+    auto* dd = dd_from_handle(hConn);
+    if (dd == nullptr) return ok();
+    auto tbl  = openads::abi::to_internal(pucTable, 0);
+    auto user = pucUser ? openads::abi::to_internal(pucUser, 0) : std::string{};
+    if (tbl.empty() || user.empty())
+        return fail(openads::AE_INTERNAL_ERROR, "table or user is empty");
+    auto r = dd->set_table_permission(tbl, user, static_cast<int>(ulLevel));
+    if (!r) return fail(r.error());
+    return ok();
+}
+
+UNSIGNED32 AdsDDGetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTable,
+                                   UNSIGNED8* pucUser, UNSIGNED32* pulLevel) {
+    if (pulLevel == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+    Connection* c = conn_from_handle(hConn);
+    if (c == nullptr || !c->has_dd()) { *pulLevel = 4; return ok(); }
+    auto tbl  = openads::abi::to_internal(pucTable, 0);
+    auto user = pucUser ? openads::abi::to_internal(pucUser, 0) : std::string{};
+    *pulLevel = static_cast<UNSIGNED32>(
+        c->dd()->get_effective_permission(user, tbl));
+    return ok();
 }
 
 UNSIGNED32 AdsCreateFTSIndex(ADSHANDLE   hTable,
@@ -5891,6 +5954,30 @@ UNSIGNED32 AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     auto sql = openads::abi::to_internal(pucSQL, 0);
+
+    // Per-table ACL check for SQL statements when check_rights is set.
+    if (it->second->check_rights != 0 && c->has_dd() && !c->username().empty()) {
+        std::string tbl_name;
+        int required = 0;
+        if (openads::sql::sql_is_insert(sql)) {
+            if (auto p = openads::sql::parse_insert(sql))
+                { tbl_name = p.value().table; required = 2; }
+        } else if (openads::sql::sql_is_update(sql)) {
+            if (auto p = openads::sql::parse_update(sql))
+                { tbl_name = p.value().table; required = 2; }
+        } else if (openads::sql::sql_is_delete(sql)) {
+            if (auto p = openads::sql::parse_delete(sql))
+                { tbl_name = p.value().table; required = 3; }
+        } else {
+            if (auto p = openads::sql::parse_select(sql))
+                { tbl_name = p.value().table; required = 1; }
+        }
+        if (!tbl_name.empty() && required > 0) {
+            int eff = table_perm_level(c, tbl_name);
+            if (eff < required)
+                return fail(openads::AE_ACCESS_DENIED, tbl_name.c_str());
+        }
+    }
 
     // M10.5/M10.7/M10.9: dispatch on the leading keyword. INSERT /
     // UPDATE / DELETE / CREATE TABLE / CREATE INDEX write through

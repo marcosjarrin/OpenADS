@@ -597,6 +597,13 @@ UNSIGNED32 AdsExecuteSQLDirect   (ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #define ADS_DD_TABLE_MEMO_BLOCK_SIZE         215
 #define ADS_DD_TABLE_PERMISSION_LEVEL        216
 
+// Permission levels for AdsDDGet/SetUserTableRights.
+#define ADS_DD_TABLE_PERMISSION_NONE         0
+#define ADS_DD_TABLE_PERMISSION_READ         1
+#define ADS_DD_TABLE_PERMISSION_WRITE        2
+#define ADS_DD_TABLE_PERMISSION_DELETE       3
+#define ADS_DD_TABLE_PERMISSION_FULL         4
+
 // Note: SAP's ace.h uses the ADS_MGMT_* names for management-info
 // struct typedefs (declared further below), not for numeric
 // selectors. The earlier integer #defines here would collide with
@@ -1124,6 +1131,15 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty  (ADSHANDLE hConnect,
                                              UNSIGNED16 usProp,
                                              void* pvBuf,
                                              UNSIGNED16 usLen);
+
+UNSIGNED32 ENTRYPOINT AdsDDSetUserTableRights(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED32 ulLevel);
+UNSIGNED32 ENTRYPOINT AdsDDGetUserTableRights(ADSHANDLE hConnect,
+                                             UNSIGNED8* pucTable,
+                                             UNSIGNED8* pucUser,
+                                             UNSIGNED32* pulLevel);
 
 // --------------------------------------------------------------------
 // OpenADS-only extension: in-process Studio web console.

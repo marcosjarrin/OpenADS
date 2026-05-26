@@ -112,6 +112,23 @@ public:
         ri() const noexcept { return ri_; }
 
     // ---- DB / user properties (M10.1) ----------------------------------
+    // ---- Table permissions (M-ACL) ----------------------------------------
+    // level: 0=none, 1=read, 2=write, 3=delete, 4=full.
+    // user_or_group may be a user name or a group name.
+    util::Result<void> set_table_permission(const std::string& table,
+                                             const std::string& user_or_group,
+                                             int level);
+    // Effective level for username on table: max of direct user perm and
+    // any group memberships. Returns 4 (full) if no ACL is defined for table.
+    int get_effective_permission(const std::string& username,
+                                  const std::string& table) const;
+    bool has_table_acl(const std::string& table) const noexcept {
+        return table_perms_.find(table) != table_perms_.end();
+    }
+    const std::unordered_map<std::string, std::unordered_map<std::string, int>>&
+        table_perms() const noexcept { return table_perms_; }
+
+    // ---- DB / user properties (M10.1) ----------------------------------
     util::Result<void> set_db_property(const std::string& key,
                                        const std::string& value);
     std::string get_db_property(const std::string& key) const;
@@ -165,6 +182,10 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::string>>
                                                  user_props_;
+    // table → user_or_group → level (0=none … 4=full)
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, int>>
+                                                 table_perms_;
 
     // Binary format state (populated only when binary_format_ == true).
     bool binary_format_ = false;

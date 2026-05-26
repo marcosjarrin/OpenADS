@@ -317,6 +317,21 @@ util::Result<void> DataDict::load_() {
             if (eq == std::string::npos) continue;
             user_props_[user][trim(rest.substr(0, eq))] =
                 trim(rest.substr(eq + 1));
+
+        } else if (starts_with(line, "TABLEPERM ")) {
+            // TABLEPERM <table>;<user_or_group>=<level>
+            std::string body = line.substr(10);
+            auto sc = body.find(';');
+            if (sc == std::string::npos) continue;
+            std::string tbl  = trim(body.substr(0, sc));
+            std::string rest = body.substr(sc + 1);
+            auto eq = rest.find('=');
+            if (eq == std::string::npos) continue;
+            std::string ug  = trim(rest.substr(0, eq));
+            std::string lvs = trim(rest.substr(eq + 1));
+            if (tbl.empty() || ug.empty() || lvs.empty()) continue;
+            try { table_perms_[tbl][ug] = std::stoi(lvs); }
+            catch (...) {}
         }
     }
     return {};
@@ -573,6 +588,36 @@ DataDict::get_user_property(const std::string& user,
     return k == u->second.end() ? std::string{} : k->second;
 }
 
+util::Result<void>
+DataDict::set_table_permission(const std::string& table,
+                                const std::string& user_or_group,
+                                int level) {
+    if (table.empty() || user_or_group.empty())
+        return util::Error{5000, 0, "TABLEPERM table/user empty", ""};
+    table_perms_[table][user_or_group] = level;
+    return save();
+}
+
+int DataDict::get_effective_permission(const std::string& username,
+                                        const std::string& table) const {
+    auto t = table_perms_.find(table);
+    if (t == table_perms_.end()) return 4;   // no ACL → full access
+
+    int eff = 0;
+    auto u = t->second.find(username);
+    if (u != t->second.end()) eff = u->second;
+
+    auto mg = memberships_.find(username);
+    if (mg != memberships_.end()) {
+        for (const auto& g : mg->second) {
+            auto gi = t->second.find(g);
+            if (gi != t->second.end() && gi->second > eff)
+                eff = gi->second;
+        }
+    }
+    return eff;
+}
+
 // ---------------------------------------------------------------------------
 // Binary format helpers
 // ---------------------------------------------------------------------------
@@ -723,6 +768,15 @@ util::Result<void> DataDict::save() {
         for (auto& k : ks) {
             out += "USERPROP " + u + ";" + k + "=" +
                    user_props_.at(u).at(k) + "\n";
+        }
+    }
+    for (auto& t : sorted_keys(table_perms_)) {
+        std::vector<std::string> ugs;
+        for (const auto& [ug, _] : table_perms_.at(t)) ugs.push_back(ug);
+        std::sort(ugs.begin(), ugs.end());
+        for (auto& ug : ugs) {
+            out += "TABLEPERM " + t + ";" + ug + "=" +
+                   std::to_string(table_perms_.at(t).at(ug)) + "\n";
         }
     }
 

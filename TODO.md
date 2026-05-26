@@ -84,13 +84,18 @@ Check off completed work and commit the file update so it stays current.
       stored on `Connection::username_` for future permission checks.
       6 tests in `tests/unit/abi_dd_auth_test.cpp`. (2026-05-25)
 
-- [ ] **Per-table access control / permission checking**.
-      `ADS_DD_TABLE_PERMISSION_LEVEL` (property 216) always returns 0;
-      `check_rights` on `SqlStatement` is stored but never consulted.
-      The DD needs to store per-user / per-group permission bits for
-      each table (read / write / delete / full) and `AdsOpenTable` /
-      `AdsExecuteSQLDirect` need to verify the authenticated user holds
-      the required permission before proceeding.
+- [x] **Per-table access control / permission checking**.
+      DD stores `TABLEPERM <table>;<user_or_group>=<level>` entries
+      (0=none, 1=read, 2=write, 3=delete, 4=full). Effective level is
+      max of direct user perm and any group memberships; tables with no
+      ACL default to full access. `AdsOpenTable` with `usCheckRights≠0`
+      enforces the level (1 for `ADS_READONLY`, 2 otherwise). SQL
+      `AdsExecuteSQLDirect` with `check_rights≠0` enforces per-operation
+      (SELECT→1, INSERT/UPDATE→2, DELETE→3). `AdsDDGetTableProperty` for
+      property 216 returns effective level. New `AdsDDSetUserTableRights` /
+      `AdsDDGetUserTableRights` manage per-user/group permissions
+      programmatically. 7 tests in `tests/unit/abi_dd_perms_test.cpp`.
+      (2026-05-26)
 
 - [ ] **DD triggers and stored procedures**.
       The ADS DD supports `TRIGGER` and `STORED_PROCEDURE` record types
