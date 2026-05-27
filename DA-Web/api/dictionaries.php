@@ -31,14 +31,18 @@ if ($method === 'POST') {
     $action = $body['action'] ?? '';
 
     if ($action === 'add') {
-        $name     = trim($body['name'] ?? '');
-        $path     = trim($body['path'] ?? '');
-        $username = trim($body['username'] ?? '');
+        $name      = trim($body['name']      ?? '');
+        $path      = trim($body['path']      ?? '');
+        $username  = trim($body['username']  ?? '');
+        $connType  = trim($body['connType']  ?? 'local');
+        $entryType = trim($body['entryType'] ?? 'dd');
         if ($name === '' || $path === '') {
             http_response_code(400);
             echo json_encode(['error' => 'name and path are required']);
             exit;
         }
+        if (!in_array($connType,  ['local', 'remote'], true)) $connType  = 'local';
+        if (!in_array($entryType, ['dd', 'free'],       true)) $entryType = 'dd';
         $dicts = loadDicts($configFile);
         foreach ($dicts as $d) {
             if ($d['name'] === $name) {
@@ -47,7 +51,8 @@ if ($method === 'POST') {
                 exit;
             }
         }
-        $dicts[] = ['name' => $name, 'path' => $path, 'username' => $username];
+        $dicts[] = ['name' => $name, 'path' => $path, 'username' => $username,
+                    'connType' => $connType, 'entryType' => $entryType];
         saveDicts($configFile, $dicts);
         echo json_encode(['ok' => true]);
         exit;

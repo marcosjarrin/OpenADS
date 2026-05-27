@@ -449,6 +449,31 @@ html, body {
 #ctx-menu .ctx-item:hover { background: #313244; }
 #ctx-menu .ctx-separator { border-top: 1px solid #45475a; margin: 4px 0; }
 
+/* ── Toggle group (Local / Remote) ───────────────────────────────────────── */
+.toggle-group {
+  display: inline-flex;
+}
+
+.toggle-btn {
+  padding: 5px 16px;
+  border: 1px solid #45475a;
+  background: #1e1e2e;
+  color: #7f849c;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.toggle-btn:first-child { border-radius: 4px 0 0 4px; }
+.toggle-btn:last-child  { border-radius: 0 4px 4px 0; border-left: none; }
+.toggle-btn.active { background: #89b4fa; color: #1e1e2e; border-color: #89b4fa; }
+.toggle-btn:hover:not(.active) { background: #313244; color: #cdd6f4; }
+
+/* ── Shared modal helpers ─────────────────────────────────────────────────── */
+.modal-err { color: #f38ba8; font-size: 12px; min-height: 16px; margin-bottom: 6px; }
+.req { color: #f38ba8; }
+.opt { color: #7f849c; font-size: 11px; }
+
 /* ── Tabulator dark theme overrides ──────────────────────────────────────── */
 .tabulator {
   background: #1e1e2e !important;

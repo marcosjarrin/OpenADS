@@ -55,13 +55,37 @@
 
   function handleMenuAction(action, el) {
     switch (action) {
-      case 'add-dd':    openAddDDModal();  break;
-      case 'connect':   openConnectModal(el.dataset.dd); break;
-      case 'disconnect':disconnectDD(el.dataset.dd); break;
-      case 'open-sql':  openSqlTab();     break;
-      case 'refresh-tree': refreshTree(); break;
-      case 'about':     openAboutModal(); break;
+      case 'create-dd':    openCreateDDModal();            break;
+      case 'open-dd':      openOpenDDModal();              break;
+      case 'free-tables':  openFreeTablesModal();          break;
+      case 'connect':      openConnectModal(el.dataset.dd); break;
+      case 'disconnect':   disconnectDD(el.dataset.dd);   break;
+      case 'open-sql':     openSqlTab();                  break;
+      case 'refresh-tree': refreshTree();                  break;
+      case 'about':        openAboutModal();               break;
     }
+  }
+
+  // ── Toggle-group wiring (called once after DOMContentLoaded) ──────────────
+  function initToggleGroups() {
+    document.querySelectorAll('.toggle-group').forEach(group => {
+      group.querySelectorAll('.toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          group.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+      });
+    });
+  }
+
+  function toggleGroupValue(groupId) {
+    return document.querySelector(`#${groupId} .toggle-btn.active`)?.dataset.value ?? 'local';
+  }
+
+  function resetToggleGroup(groupId) {
+    const group = document.getElementById(groupId);
+    if (!group) return;
+    group.querySelectorAll('.toggle-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
   }
 
   // ── Split.js ───────────────────────────────────────────────────────────────
@@ -385,22 +409,64 @@
     }, 50);
   }
 
-  // ── Add DD modal ───────────────────────────────────────────────────────────
-  function openAddDDModal() {
-    const overlay = document.getElementById('modal-add-dd');
-    overlay.classList.add('open');
-    document.getElementById('add-dd-name').focus();
+  // ── Helpers: open/close modals ────────────────────────────────────────────
+  function openModal(id)  { document.getElementById(id)?.classList.add('open'); }
+  function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
+  function clearModalErr(id) { const el = document.getElementById(id); if (el) el.textContent = ''; }
+
+  // ── Modal: New DD (create) ─────────────────────────────────────────────────
+  function openCreateDDModal() {
+    clearModalErr('cdd-err');
+    resetToggleGroup('cdd-conn-type');
+    openModal('modal-create-dd');
+    setTimeout(() => document.getElementById('cdd-name')?.focus(), 50);
   }
 
-  document.getElementById('add-dd-cancel').addEventListener('click', () => {
-    document.getElementById('modal-add-dd').classList.remove('open');
+  document.getElementById('cdd-cancel').addEventListener('click', () => closeModal('modal-create-dd'));
+
+  document.getElementById('cdd-save').addEventListener('click', async () => {
+    const name     = document.getElementById('cdd-name').value.trim();
+    const path     = document.getElementById('cdd-path').value.trim();
+    const password = document.getElementById('cdd-password').value;
+    const connType = toggleGroupValue('cdd-conn-type');
+    const errEl    = document.getElementById('cdd-err');
+    errEl.textContent = '';
+
+    if (!name || !path) { errEl.textContent = 'Name and path are required'; return; }
+
+    try {
+      await apiFetch('api/create_dd.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, path, password, connType }),
+      });
+      closeModal('modal-create-dd');
+      document.getElementById('cdd-name').value = '';
+      document.getElementById('cdd-path').value = '';
+      document.getElementById('cdd-password').value = '';
+      refreshTree();
+      setStatus(`Created dictionary '${name}'`);
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
   });
 
-  document.getElementById('add-dd-save').addEventListener('click', async () => {
-    const name     = document.getElementById('add-dd-name').value.trim();
-    const path     = document.getElementById('add-dd-path').value.trim();
-    const username = document.getElementById('add-dd-user').value.trim();
-    const errEl    = document.getElementById('add-dd-err');
+  // ── Modal: Open DD (add existing) ─────────────────────────────────────────
+  function openOpenDDModal() {
+    clearModalErr('odd-err');
+    resetToggleGroup('odd-conn-type');
+    openModal('modal-open-dd');
+    setTimeout(() => document.getElementById('odd-name')?.focus(), 50);
+  }
+
+  document.getElementById('odd-cancel').addEventListener('click', () => closeModal('modal-open-dd'));
+
+  document.getElementById('odd-save').addEventListener('click', async () => {
+    const name     = document.getElementById('odd-name').value.trim();
+    const path     = document.getElementById('odd-path').value.trim();
+    const username = document.getElementById('odd-user').value.trim();
+    const connType = toggleGroupValue('odd-conn-type');
+    const errEl    = document.getElementById('odd-err');
     errEl.textContent = '';
 
     if (!name || !path) { errEl.textContent = 'Name and path are required'; return; }
@@ -409,14 +475,49 @@
       await apiFetch('api/dictionaries.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'add', name, path, username }),
+        body: JSON.stringify({ action: 'add', name, path, username, connType, entryType: 'dd' }),
       });
-      document.getElementById('modal-add-dd').classList.remove('open');
-      document.getElementById('add-dd-name').value = '';
-      document.getElementById('add-dd-path').value = '';
-      document.getElementById('add-dd-user').value = '';
+      closeModal('modal-open-dd');
+      document.getElementById('odd-name').value = '';
+      document.getElementById('odd-path').value = '';
+      document.getElementById('odd-user').value = '';
       refreshTree();
       setStatus(`Added dictionary '${name}'`);
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
+
+  // ── Modal: Free Tables directory ───────────────────────────────────────────
+  function openFreeTablesModal() {
+    clearModalErr('ft-err');
+    resetToggleGroup('ft-conn-type');
+    openModal('modal-free-tables');
+    setTimeout(() => document.getElementById('ft-name')?.focus(), 50);
+  }
+
+  document.getElementById('ft-cancel').addEventListener('click', () => closeModal('modal-free-tables'));
+
+  document.getElementById('ft-save').addEventListener('click', async () => {
+    const name     = document.getElementById('ft-name').value.trim();
+    const path     = document.getElementById('ft-path').value.trim();
+    const connType = toggleGroupValue('ft-conn-type');
+    const errEl    = document.getElementById('ft-err');
+    errEl.textContent = '';
+
+    if (!name || !path) { errEl.textContent = 'Name and path are required'; return; }
+
+    try {
+      await apiFetch('api/dictionaries.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', name, path, username: '', connType, entryType: 'free' }),
+      });
+      closeModal('modal-free-tables');
+      document.getElementById('ft-name').value = '';
+      document.getElementById('ft-path').value = '';
+      refreshTree();
+      setStatus(`Added free tables directory '${name}'`);
     } catch (err) {
       errEl.textContent = err.message;
     }
@@ -518,7 +619,10 @@
     const connMenu = document.getElementById('connection-submenu');
     if (!connMenu) return;
 
-    connMenu.innerHTML = `<div class="drop-item" data-action="add-dd">Add Data Dictionary…</div>
+    connMenu.innerHTML = `
+      <div class="drop-item" data-action="create-dd">New DD…</div>
+      <div class="drop-item" data-action="open-dd">Open DD…</div>
+      <div class="drop-item" data-action="free-tables">Free Tables…</div>
       <div class="drop-separator"></div>`;
 
     dicts.forEach(d => {
@@ -625,6 +729,7 @@
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', async () => {
+    initToggleGroups();
     initTree();
     await buildConnectionMenu();
     setStatus('Ready');

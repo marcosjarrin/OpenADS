@@ -46,7 +46,9 @@
     <div class="menu-item" data-menu="connection">
       Connection
       <div class="menu-dropdown" id="connection-submenu">
-        <div class="drop-item" data-action="add-dd">Add Data Dictionary…</div>
+        <div class="drop-item" data-action="create-dd">New DD…</div>
+        <div class="drop-item" data-action="open-dd">Open DD…</div>
+        <div class="drop-item" data-action="free-tables">Free Tables…</div>
         <div class="drop-separator"></div>
         <div class="drop-item disabled">Loading…</div>
       </div>
@@ -123,31 +125,106 @@
 <!-- ── Context menu ──────────────────────────────────────────────────────── -->
 <div id="ctx-menu"></div>
 
-<!-- ── Modal: Add Data Dictionary ───────────────────────────────────────── -->
-<div class="modal-overlay" id="modal-add-dd" role="dialog" aria-modal="true" aria-labelledby="add-dd-title">
+<!-- ── Modal: New DD (create) ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-create-dd" role="dialog" aria-modal="true">
   <div class="modal">
     <div class="modal-header">
-      <span id="add-dd-title">Add Data Dictionary</span>
-      <span class="modal-close" onclick="document.getElementById('modal-add-dd').classList.remove('open')">&times;</span>
+      <span>New Data Dictionary</span>
+      <span class="modal-close" onclick="document.getElementById('modal-create-dd').classList.remove('open')">&times;</span>
     </div>
     <div class="modal-body">
-      <div id="add-dd-err" style="color:#f38ba8;font-size:12px;min-height:16px;margin-bottom:6px;"></div>
+      <div id="cdd-err" class="modal-err"></div>
       <div class="form-group">
-        <label for="add-dd-name">Name <span style="color:#f38ba8">*</span></label>
-        <input type="text" id="add-dd-name" placeholder="e.g. Northwind" autocomplete="off">
+        <label for="cdd-name">Name <span class="req">*</span></label>
+        <input type="text" id="cdd-name" placeholder="e.g. Northwind" autocomplete="off">
       </div>
       <div class="form-group">
-        <label for="add-dd-path">Path to .add / connection string <span style="color:#f38ba8">*</span></label>
-        <input type="text" id="add-dd-path" placeholder="C:\Data\mydict.add" autocomplete="off">
+        <label for="cdd-path">Path for new .add file <span class="req">*</span></label>
+        <input type="text" id="cdd-path" placeholder="C:\Data\Northwind.add" autocomplete="off">
       </div>
       <div class="form-group">
-        <label for="add-dd-user">Default username</label>
-        <input type="text" id="add-dd-user" placeholder="AdsSysAdmin" autocomplete="off">
+        <label for="cdd-password">Admin password <span class="opt">(optional)</span></label>
+        <input type="password" id="cdd-password" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>Connection type</label>
+        <div class="toggle-group" id="cdd-conn-type">
+          <button type="button" class="toggle-btn active" data-value="local">Local</button>
+          <button type="button" class="toggle-btn" data-value="remote">Remote</button>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn" id="add-dd-cancel">Cancel</button>
-      <button class="btn btn-primary" id="add-dd-save">Add</button>
+      <button class="btn" id="cdd-cancel">Cancel</button>
+      <button class="btn btn-primary" id="cdd-save">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Open DD (add existing) ─────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-open-dd" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Open Data Dictionary</span>
+      <span class="modal-close" onclick="document.getElementById('modal-open-dd').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="odd-err" class="modal-err"></div>
+      <div class="form-group">
+        <label for="odd-name">Name <span class="req">*</span></label>
+        <input type="text" id="odd-name" placeholder="e.g. Northwind" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="odd-path">Path to .add file <span class="req">*</span></label>
+        <input type="text" id="odd-path" placeholder="C:\Data\Northwind.add" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="odd-user">Default username</label>
+        <input type="text" id="odd-user" placeholder="AdsSysAdmin" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Connection type</label>
+        <div class="toggle-group" id="odd-conn-type">
+          <button type="button" class="toggle-btn active" data-value="local">Local</button>
+          <button type="button" class="toggle-btn" data-value="remote">Remote</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="odd-cancel">Cancel</button>
+      <button class="btn btn-primary" id="odd-save">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal: Free Tables directory ──────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-free-tables" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Add Free Tables Directory</span>
+      <span class="modal-close" onclick="document.getElementById('modal-free-tables').classList.remove('open')">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="ft-err" class="modal-err"></div>
+      <div class="form-group">
+        <label for="ft-name">Name <span class="req">*</span></label>
+        <input type="text" id="ft-name" placeholder="e.g. Legacy Tables" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="ft-path">Directory path <span class="req">*</span></label>
+        <input type="text" id="ft-path" placeholder="C:\Data\tables\" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Connection type</label>
+        <div class="toggle-group" id="ft-conn-type">
+          <button type="button" class="toggle-btn active" data-value="local">Local</button>
+          <button type="button" class="toggle-btn" data-value="remote">Remote</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="ft-cancel">Cancel</button>
+      <button class="btn btn-primary" id="ft-save">Add</button>
     </div>
   </div>
 </div>

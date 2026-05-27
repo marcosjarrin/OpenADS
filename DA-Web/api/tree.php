@@ -37,15 +37,22 @@ if ($action === 'roots') {
     $open  = array_keys($_SESSION['connections'] ?? []);
     $nodes = [];
     foreach ($dicts as $d) {
-        $connected = in_array($d['name'], $open, true);
+        $connected  = in_array($d['name'], $open, true);
+        $entryType  = $d['entryType'] ?? 'dd';
+        $isFree     = ($entryType === 'free');
+        $icon = $isFree
+            ? ($connected ? 'jstree-icon-free-open' : 'jstree-icon-free-closed')
+            : ($connected ? 'jstree-icon-dd-open'   : 'jstree-icon-dd-closed');
         $nodes[] = [
             'id'       => 'dd_' . $d['name'],
-            'text'     => $d['name'],
-            'icon'     => $connected ? 'jstree-icon-dd-open' : 'jstree-icon-dd-closed',
+            'text'     => $d['name'] . ($isFree ? ' 📂' : ''),
+            'icon'     => $icon,
             'children' => $connected,
             'state'    => ['opened' => false],
             'li_attr'  => ['data-dd' => $d['name'], 'data-type' => 'dd'],
-            'a_attr'   => ['data-dd' => $d['name'], 'data-type' => 'dd',
+            'a_attr'   => ['data-dd'        => $d['name'],
+                           'data-type'      => 'dd',
+                           'data-entry'     => $entryType,
                            'data-connected' => $connected ? 'true' : 'false'],
         ];
     }
@@ -56,6 +63,43 @@ if ($action === 'roots') {
 // ─── dd_children ─────────────────────────────────────────────────────────────
 if ($action === 'dd_children') {
     if ($ddName === '') { echo json_encode([]); exit; }
+
+    // Free-tables directories expand directly to a flat table list
+    $dicts = loadDicts($configFile);
+    foreach ($dicts as $d) {
+        if ($d['name'] === $ddName && ($d['entryType'] ?? 'dd') === 'free') {
+            // Reuse category_children logic for 'tables' category
+            $_GET['cat'] = 'tables';
+            $cat = 'tables';
+            break;
+        }
+    }
+    // If this was a free-tables entry, fall through to category_children handler
+    if (isset($cat) && $cat === 'tables') {
+        $conn = getConn($ddName);
+        if ($conn === null) { echo json_encode([]); exit; }
+        $nodes = [];
+        try {
+            $stmt = $conn->query("SELECT Name FROM system.tables ORDER BY Name");
+            while ($row = $stmt->fetchAssoc()) {
+                $t = $row['Name'];
+                $nodes[] = [
+                    'id'      => "tbl_{$ddName}_{$t}",
+                    'text'    => $t,
+                    'icon'    => 'jstree-icon-table',
+                    'children'=> true,
+                    'a_attr'  => ['data-dd' => $ddName, 'data-type' => 'table', 'data-table' => $t],
+                ];
+            }
+        } catch (AdsException $e) {
+            // empty
+        } finally {
+            $conn->close();
+        }
+        echo json_encode($nodes);
+        exit;
+    }
+
     $categories = [
         ['id' => "cat_{$ddName}_tables",     'text' => 'Tables',            'icon' => 'jstree-icon-tables'],
         ['id' => "cat_{$ddName}_views",      'text' => 'Views',             'icon' => 'jstree-icon-views'],
