@@ -1,1 +1,9 @@
-[]
+[
+    {
+        "name": "PmSys Test Data",
+        "path": "f:\\OpenADS\\tests\\fixtures\\adi\\pmsys.add",
+        "username": "",
+        "connType": "local",
+        "entryType": "dd"
+    }
+]

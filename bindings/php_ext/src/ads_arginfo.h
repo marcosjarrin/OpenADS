@@ -526,6 +526,18 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dictionary_modify_link, 0, 1
 ZEND_END_ARG_INFO()
 
 /* -----------------------------------------------------------------------
+ * Standalone functions
+ * --------------------------------------------------------------------- */
+
+/* ads_dd_create(string $path, bool $encrypt = false, string $password = ''): void
+ * OpenADS: AdsDDCreate(path, encrypt, password, &hConn) — 4 args, handle closed internally */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_dd_create, 0, 1, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, path,     IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, encrypt,  _IS_BOOL,  0, "false")
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, password, IS_STRING, 0, "\"\"")
+ZEND_END_ARG_INFO()
+
+/* -----------------------------------------------------------------------
  * AdsPreparedStatement
  * --------------------------------------------------------------------- */
 

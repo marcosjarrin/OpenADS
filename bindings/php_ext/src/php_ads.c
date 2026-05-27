@@ -3,6 +3,10 @@
 #endif
 
 #include "php_ads.h"
+#include "ads_arginfo.h"
+
+/* Forward declaration for the standalone function implemented in ads_misc.c */
+PHP_FUNCTION(ads_dd_create);
 
 /* Required for ZTS builds: defines the per-module _tsrm_ls_cache variable */
 #if defined(ZTS) && defined(COMPILE_DL_OPENADS)
@@ -305,6 +309,7 @@ PHP_MINIT_FUNCTION(ads)
  * Module entry
  * --------------------------------------------------------------------- */
 static const zend_function_entry ads_functions[] = {
+    PHP_FE(ads_dd_create, arginfo_ads_dd_create)
     PHP_FE_END
 };
 

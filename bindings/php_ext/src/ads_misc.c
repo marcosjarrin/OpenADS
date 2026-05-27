@@ -1098,6 +1098,42 @@ static const zend_function_entry ads_dictionary_methods[] = {
 };
 
 /* =====================================================================
+ * Standalone function: ads_dd_create
+ * OpenADS: AdsDDCreate(path, encrypt, password) — 3 args, no handle
+ * ads_dd_create(string $path, bool $encrypt = false, string $password = ''): void
+ * ===================================================================== */
+PHP_FUNCTION(ads_dd_create)
+{
+    char      *path     = NULL;
+    size_t     pathLen  = 0;
+    zend_bool  encrypt  = 0;
+    char      *extra    = NULL;
+    size_t     extraLen = 0;
+
+    ZEND_PARSE_PARAMETERS_START(1, 3)
+        Z_PARAM_STRING(path, pathLen)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(encrypt)
+        Z_PARAM_STRING(extra, extraLen)
+    ZEND_PARSE_PARAMETERS_END();
+
+    ADSHANDLE  hConn = 0;
+    UNSIGNED32 ulRet = AdsDDCreate(
+        (UNSIGNED8 *)path,
+        (UNSIGNED16)(encrypt ? 1 : 0),
+        (UNSIGNED8 *)(extra && extraLen > 0 ? extra : (char *)""),
+        &hConn
+    );
+    if (ulRet != AE_SUCCESS) {
+        ads_throw_ace_exception(ulRet, "ads_dd_create");
+        RETURN_THROWS();
+    }
+    if (hConn != 0) {
+        AdsDisconnect(hConn);
+    }
+}
+
+/* =====================================================================
  * Combined registration
  * ===================================================================== */
 void ads_misc_register_classes(void)
