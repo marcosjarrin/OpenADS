@@ -7,10 +7,9 @@
 header('Content-Type: application/json');
 session_start();
 
-$ext = 'ads';
-if (!extension_loaded($ext)) {
+if (!extension_loaded('openads')) {
     http_response_code(500);
-    echo json_encode(['error' => "php_openads extension not loaded"]);
+    echo json_encode(['error' => "php_openads extension not loaded (check extension=php_openads in php.ini)"]);
     exit;
 }
 
