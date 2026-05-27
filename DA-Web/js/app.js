@@ -35,6 +35,12 @@
   // ── Menu bar ───────────────────────────────────────────────────────────────
   document.querySelectorAll('#menubar .menu-item').forEach(item => {
     item.addEventListener('click', e => {
+      // If the click came from a drop-item, close the menu and let it bubble
+      // to the document-level action dispatcher — do NOT stopPropagation.
+      if (e.target.closest('.drop-item')) {
+        document.querySelectorAll('#menubar .menu-item').forEach(i => i.classList.remove('active'));
+        return;
+      }
       const wasActive = item.classList.contains('active');
       document.querySelectorAll('#menubar .menu-item').forEach(i => i.classList.remove('active'));
       if (!wasActive) item.classList.add('active');
@@ -46,7 +52,7 @@
     document.querySelectorAll('#menubar .menu-item').forEach(i => i.classList.remove('active'));
   });
 
-  // Menu action dispatcher
+  // Menu action dispatcher — fires for drop-item clicks that bubbled to document
   document.addEventListener('click', e => {
     const item = e.target.closest('.drop-item[data-action]');
     if (!item) return;
