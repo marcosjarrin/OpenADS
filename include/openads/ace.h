@@ -309,20 +309,181 @@ UNSIGNED32 AdsFindNextTable      (ADSHANDLE   hConnect,
                                   UNSIGNED16* pusFileNameLen);
 UNSIGNED32 AdsFindClose          (ADSHANDLE hConnect, ADSHANDLE hFind);
 
-UNSIGNED32 AdsDDCreate           (UNSIGNED8* pucDictionary,
-                                  UNSIGNED16 bEncrypt,
-                                  UNSIGNED8* pucAdminPassword,
-                                  ADSHANDLE* phConnect);
-UNSIGNED32 AdsDDAddTable         (ADSHANDLE hConnect,
-                                  UNSIGNED8* pucAlias,
-                                  UNSIGNED8* pucTablePath,
-                                  UNSIGNED16 usFileType,
-                                  UNSIGNED16 usCharType,
-                                  UNSIGNED8* pucIndexPath,
-                                  UNSIGNED8* pucComment);
-UNSIGNED32 AdsDDRemoveTable      (ADSHANDLE hConnect,
-                                  UNSIGNED8* pucAlias,
-                                  UNSIGNED16 usDeleteFiles);
+UNSIGNED32 AdsDDCreate               (UNSIGNED8*  pucDictionary,
+                                      UNSIGNED16  bEncrypt,
+                                      UNSIGNED8*  pucAdminPassword,
+                                      ADSHANDLE*  phConnect);
+UNSIGNED32 AdsDDAddTable             (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucAlias,
+                                      UNSIGNED8*  pucTablePath,
+                                      UNSIGNED16  usFileType,
+                                      UNSIGNED16  usCharType,
+                                      UNSIGNED8*  pucIndexPath,
+                                      UNSIGNED8*  pucComment);
+UNSIGNED32 AdsDDRemoveTable          (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucAlias,
+                                      UNSIGNED16  usDeleteFiles);
+UNSIGNED32 AdsDDSetDatabaseProperty  (ADSHANDLE   hConnect,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDGetDatabaseProperty  (ADSHANDLE   hConnect,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDGetTableProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetTableProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDGetFieldProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucFieldName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetFieldProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucFieldName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDAddIndexFile         (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucIndexFile,
+                                      UNSIGNED8*  pucComment);
+UNSIGNED32 AdsDDRemoveIndexFile      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucIndexFile,
+                                      UNSIGNED16  usDeleteFile);
+UNSIGNED32 AdsDDGetIndexProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucTagName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetIndexProperty     (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucTagName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDCreateUser           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucGroup,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED8*  pucPassword,
+                                      UNSIGNED8*  pucDescription);
+UNSIGNED32 AdsDDDeleteUser           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucUser);
+UNSIGNED32 AdsDDGetUserProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetUserProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDAddUserToGroup       (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucGroup,
+                                      UNSIGNED8*  pucUser);
+UNSIGNED32 AdsDDRemoveUserFromGroup  (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucGroup,
+                                      UNSIGNED8*  pucUser);
+UNSIGNED32 AdsDDGetUserTableRights   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED32* pulRights);
+UNSIGNED32 AdsDDSetUserTableRights   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucTableName,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED32  ulRights);
+UNSIGNED32 AdsDDCreateView           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucComment,
+                                      UNSIGNED8*  pucSQL);
+UNSIGNED32 AdsDDDropView             (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDGetViewProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetViewProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDCreateProcedure      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucContainer,
+                                      UNSIGNED8*  pucProcedure,
+                                      UNSIGNED8*  pucInputParams,
+                                      UNSIGNED8*  pucOutputParams);
+UNSIGNED32 AdsDDDropProcedure        (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDGetProcProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetProcProperty      (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDCreateTrigger        (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucTable,
+                                      UNSIGNED32  ulType,
+                                      UNSIGNED32  ulOptions,
+                                      UNSIGNED8*  pucContainer,
+                                      UNSIGNED8*  pucProcedure,
+                                      UNSIGNED32  ulPriority);
+UNSIGNED32 AdsDDDropTrigger          (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDGetTriggerProperty   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16* pusPropertyLen);
+UNSIGNED32 AdsDDSetTriggerProperty   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED16  usPropertyID,
+                                      void*       pvProperty,
+                                      UNSIGNED16  usPropertyLen);
+UNSIGNED32 AdsDDCreateRefIntegrity   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName,
+                                      UNSIGNED8*  pucFailTable,
+                                      UNSIGNED8*  pucParent,
+                                      UNSIGNED8*  pucParentTag,
+                                      UNSIGNED8*  pucChild,
+                                      UNSIGNED8*  pucChildTag,
+                                      UNSIGNED16  usUpdateOption,
+                                      UNSIGNED16  usDeleteOption);
+UNSIGNED32 AdsDDRemoveRefIntegrity   (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucName);
+UNSIGNED32 AdsDDCreateLink           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucAlias,
+                                      UNSIGNED8*  pucPath,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED8*  pucPassword,
+                                      UNSIGNED16  usOptions);
+UNSIGNED32 AdsDDDropLink             (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucAlias,
+                                      UNSIGNED16  usOptions);
+UNSIGNED32 AdsDDModifyLink           (ADSHANDLE   hConnect,
+                                      UNSIGNED8*  pucAlias,
+                                      UNSIGNED8*  pucPath,
+                                      UNSIGNED8*  pucUser,
+                                      UNSIGNED8*  pucPassword,
+                                      UNSIGNED16  usOptions);
 
 UNSIGNED32 AdsCreateSQLStatement (ADSHANDLE hConnect, ADSHANDLE* phStatement);
 UNSIGNED32 AdsCloseSQLStatement  (ADSHANDLE hStatement);

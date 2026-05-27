@@ -156,6 +156,12 @@ void ads_throw_ace_exception(UNSIGNED32 ulErrCode, const char *context);
         RETURN_THROWS(); \
     } } while(0)
 
+#define ADS_CHECK_DICT(obj) \
+    do { if ((obj)->hDict == 0) { \
+        zend_throw_exception(ads_exception_ce, "AdsDictionary is closed", 0); \
+        RETURN_THROWS(); \
+    } } while(0)
+
 #define ADS_CHECK_PREP_CLOSED(obj) \
     do { if ((obj)->closed || (obj)->hStmt == 0) { \
         zend_throw_exception(ads_exception_ce, "AdsPreparedStatement is already closed", 0); \
