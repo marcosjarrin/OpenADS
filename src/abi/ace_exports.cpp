@@ -6517,6 +6517,30 @@ UNSIGNED32 AdsPrepareSQL(ADSHANDLE hStatement, UNSIGNED8* pucSQL) {
     return ok();
 }
 
+UNSIGNED32 AdsGetNumParams(ADSHANDLE hStatement, UNSIGNED16* pusNumParams) {
+    if (!pusNumParams) return fail(openads::AE_INTERNAL_ERROR, "");
+    auto& m = stmt_map();
+    auto it = m.find(hStatement);
+    if (it == m.end()) return fail(openads::AE_INTERNAL_ERROR, "unknown stmt");
+    const std::string& sql = it->second->sql;
+    std::unordered_set<std::string> names;
+    for (std::size_t i = 0; i < sql.size(); ) {
+        if (sql[i] == ':' && i + 1 < sql.size() &&
+            (std::isalpha((unsigned char)sql[i + 1]) || sql[i + 1] == '_')) {
+            std::size_t j = i + 1;
+            while (j < sql.size() &&
+                   (std::isalnum((unsigned char)sql[j]) || sql[j] == '_'))
+                ++j;
+            names.insert(sql.substr(i + 1, j - (i + 1)));
+            i = j;
+        } else {
+            ++i;
+        }
+    }
+    *pusNumParams = static_cast<UNSIGNED16>(names.size());
+    return ok();
+}
+
 UNSIGNED32 AdsExecuteSQL(ADSHANDLE hStatement, ADSHANDLE* phCursor) {
     auto& m = stmt_map();
     auto it = m.find(hStatement);

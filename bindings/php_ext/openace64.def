@@ -92,6 +92,7 @@ EXPORTS
     AdsCreateSQLStatement
     AdsCloseSQLStatement
     AdsPrepareSQL
+    AdsGetNumParams
     AdsExecuteSQL
     AdsExecuteSQLDirect
     AdsAddCustomKey

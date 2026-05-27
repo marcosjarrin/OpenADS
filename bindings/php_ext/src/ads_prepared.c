@@ -60,8 +60,6 @@ PHP_METHOD(AdsPreparedStatement, close)
 
 /* -----------------------------------------------------------------------
  * AdsPreparedStatement::paramCount() : int
- *
- * AdsGetNumParams is not implemented in OpenADS — always returns 0.
  * --------------------------------------------------------------------- */
 PHP_METHOD(AdsPreparedStatement, paramCount)
 {
@@ -70,7 +68,10 @@ PHP_METHOD(AdsPreparedStatement, paramCount)
     ads_prepared_obj *obj = Z_ADS_PREP_P(ZEND_THIS);
     ADS_CHECK_PREP_CLOSED(obj);
 
-    RETURN_LONG(0);
+    UNSIGNED16 usCount = 0;
+    UNSIGNED32 rc = AdsGetNumParams(obj->hStmt, &usCount);
+    ADS_CHECK_RC(rc, "AdsGetNumParams");
+    RETURN_LONG((zend_long)usCount);
 }
 
 /* -----------------------------------------------------------------------
