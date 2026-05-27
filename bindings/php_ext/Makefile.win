@@ -1,0 +1,137 @@
+# NMakefile for php_openads extension
+# Targets: ZTS x64 (matching C:\php\php8ts.dll)
+#
+# Usage (from a VS2022 x64 Developer Command Prompt or after running build.bat):
+#   nmake /f Makefile.win           -- build
+#   nmake /f Makefile.win clean     -- clean
+#   nmake /f Makefile.win install   -- copy DLL to C:\php\ext\
+
+# -------------------------------------------------------------------------
+# Paths
+# -------------------------------------------------------------------------
+PHP_DEVPACK  = F:\php_advantage\php-devpack\php-8.0.1-devel-vs16-x64
+PHP_INCLUDES = $(PHP_DEVPACK)\include
+PHP_LIB      = C:\php\dev\php8ts.lib
+
+ACE_INCLUDE  = F:\OpenADS\include
+ACE_LIB      = F:\OpenADS\bindings\php_ext\openace64.lib
+
+SRC_DIR      = F:\OpenADS\bindings\php_ext\src
+OBJ_DIR      = F:\OpenADS\bindings\php_ext\obj
+OUT_DIR      = F:\OpenADS\bindings\php_ext\bin
+OUT_DLL      = $(OUT_DIR)\php_openads.dll
+OUT_LIB      = $(OUT_DIR)\php_openads.lib
+
+INSTALL_DIR  = C:\php\ext
+PHP_DIR      = C:\php
+
+ACE_DLL_SRC  = F:\OpenADS\build\msvc-x64\src\Release\ace64.dll
+ACE_DLL_INST = $(PHP_DIR)\openace64.dll
+
+# -------------------------------------------------------------------------
+# Compiler / linker
+# -------------------------------------------------------------------------
+CC   = cl.exe
+LINK = link.exe
+
+CFLAGS = \
+    /nologo \
+    /c \
+    /W3 \
+    /MD \
+    /O2 \
+    /Zi \
+    /EHsc \
+    /D "WIN32" \
+    /D "_WINDOWS" \
+    /D "_USRDLL" \
+    /D "ZEND_WIN32" \
+    /D "PHP_WIN32" \
+    /D "ZEND_WIN32_FORCE_INLINE" \
+    /D "x64" \
+    /D "ZTS=1" \
+    /D "COMPILE_DL_OPENADS" \
+    /D "ZEND_ENABLE_STATIC_TSRMLS_CACHE=1" \
+    /D "NDEBUG" \
+    /D "ZEND_DEBUG=0" \
+    /I "$(SRC_DIR)" \
+    /I "$(PHP_INCLUDES)" \
+    /I "$(PHP_INCLUDES)\main" \
+    /I "$(PHP_INCLUDES)\Zend" \
+    /I "$(PHP_INCLUDES)\TSRM" \
+    /I "$(PHP_INCLUDES)\win32" \
+    /I "$(PHP_INCLUDES)\ext" \
+    /I "$(ACE_INCLUDE)" \
+    /Fo"$(OBJ_DIR)\\"
+
+LFLAGS = \
+    /nologo \
+    /DLL \
+    /OUT:$(OUT_DLL) \
+    /IMPLIB:$(OUT_LIB) \
+    /MACHINE:X64 \
+    /DEBUG
+
+LIBS = \
+    $(PHP_LIB) \
+    $(ACE_LIB) \
+    kernel32.lib \
+    user32.lib \
+    ws2_32.lib
+
+# -------------------------------------------------------------------------
+# Sources and objects
+# -------------------------------------------------------------------------
+OBJS = \
+    $(OBJ_DIR)\php_ads.obj \
+    $(OBJ_DIR)\ads_connection.obj \
+    $(OBJ_DIR)\ads_statement.obj \
+    $(OBJ_DIR)\ads_table.obj \
+    $(OBJ_DIR)\ads_misc.obj \
+    $(OBJ_DIR)\ads_prepared.obj
+
+# -------------------------------------------------------------------------
+# Rules
+# -------------------------------------------------------------------------
+all: dirs $(OUT_DLL)
+    @echo Build complete: $(OUT_DLL)
+
+dirs:
+    @if not exist "$(OBJ_DIR)" mkdir "$(OBJ_DIR)"
+    @if not exist "$(OUT_DIR)" mkdir "$(OUT_DIR)"
+
+$(OUT_DLL): $(OBJS)
+    $(LINK) $(LFLAGS) $(OBJS) $(LIBS)
+
+$(OBJ_DIR)\php_ads.obj: $(SRC_DIR)\php_ads.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\php_ads.c
+
+$(OBJ_DIR)\ads_connection.obj: $(SRC_DIR)\ads_connection.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\ads_connection.c
+
+$(OBJ_DIR)\ads_statement.obj: $(SRC_DIR)\ads_statement.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\ads_statement.c
+
+$(OBJ_DIR)\ads_table.obj: $(SRC_DIR)\ads_table.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\ads_table.c
+
+$(OBJ_DIR)\ads_misc.obj: $(SRC_DIR)\ads_misc.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\ads_misc.c
+
+$(OBJ_DIR)\ads_prepared.obj: $(SRC_DIR)\ads_prepared.c $(SRC_DIR)\php_ads.h
+    $(CC) $(CFLAGS) $(SRC_DIR)\ads_prepared.c
+
+clean:
+    @if exist "$(OBJ_DIR)\*.obj" del /Q "$(OBJ_DIR)\*.obj"
+    @if exist "$(OBJ_DIR)\*.pdb" del /Q "$(OBJ_DIR)\*.pdb"
+    @if exist "$(OUT_DIR)\*.dll" del /Q "$(OUT_DIR)\*.dll"
+    @if exist "$(OUT_DIR)\*.lib" del /Q "$(OUT_DIR)\*.lib"
+    @if exist "$(OUT_DIR)\*.pdb" del /Q "$(OUT_DIR)\*.pdb"
+    @echo Clean done.
+
+install: $(OUT_DLL)
+    @if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
+    copy /Y "$(OUT_DLL)" "$(INSTALL_DIR)\php_openads.dll"
+    copy /Y "$(ACE_DLL_SRC)" "$(ACE_DLL_INST)"
+    @echo Installed php_openads.dll to $(INSTALL_DIR)
+    @echo Installed openace64.dll to $(PHP_DIR)

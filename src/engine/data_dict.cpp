@@ -13,16 +13,17 @@ namespace openads::engine {
 namespace {
 
 static inline uint32_t le32(const std::string& b, std::size_t off) {
-    return static_cast<uint32_t>(static_cast<uint8_t>(b[off]))
-         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+1])) << 8)
-         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+2])) << 16)
-         | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+3])) << 24);
+    return static_cast<uint32_t>(
+        static_cast<uint32_t>(static_cast<uint8_t>(b[off]))
+      | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+1])) << 8)
+      | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+2])) << 16)
+      | (static_cast<uint32_t>(static_cast<uint8_t>(b[off+3])) << 24));
 }
 
 static inline uint16_t le16(const std::string& b, std::size_t off) {
     return static_cast<uint16_t>(
-        static_cast<unsigned>(static_cast<uint8_t>(b[off]))
-      | (static_cast<unsigned>(static_cast<uint8_t>(b[off+1])) << 8));
+        static_cast<uint16_t>(static_cast<uint8_t>(b[off]))
+      | static_cast<uint16_t>(static_cast<uint16_t>(static_cast<uint8_t>(b[off+1])) << 8));
 }
 
 static void put_le32(std::string& b, std::size_t off, uint32_t v) {

@@ -87,6 +87,17 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
                 type = engine::TableType::Adt;
             }
         }
+    } else {
+        // Override type from extension when the caller used the default
+        // (Cdx) but the file is explicitly named with a different type's
+        // extension (e.g. "SELECT * FROM tbl.adt" should use the ADT driver).
+        std::string ext = full.extension().string();
+        for (auto& ch : ext) ch = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+        if (ext == ".adt" && type == engine::TableType::Cdx)
+            type = engine::TableType::Adt;
+        else if (ext == ".ntx" && type == engine::TableType::Cdx)
+            type = engine::TableType::Ntx;
     }
     auto resolved = platform::resolve_case_insensitive(full.string());
 
