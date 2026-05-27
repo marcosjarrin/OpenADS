@@ -1,0 +1,76 @@
+<?php
+/**
+ * api/dictionaries.php — CRUD for stored data dictionary definitions
+ * GET             → list all
+ * POST action=add → add a DD
+ * POST action=remove → remove a DD by name
+ */
+header('Content-Type: application/json');
+
+$configFile = __DIR__ . '/../config/dictionaries.json';
+
+function loadDicts(string $file): array {
+    if (!file_exists($file)) return [];
+    $raw = file_get_contents($file);
+    return json_decode($raw, true) ?? [];
+}
+
+function saveDicts(string $file, array $dicts): void {
+    file_put_contents($file, json_encode(array_values($dicts), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+
+$method = $_SERVER['REQUEST_METHOD'];
+
+if ($method === 'GET') {
+    echo json_encode(loadDicts($configFile));
+    exit;
+}
+
+if ($method === 'POST') {
+    $body = json_decode(file_get_contents('php://input'), true) ?? [];
+    $action = $body['action'] ?? '';
+
+    if ($action === 'add') {
+        $name     = trim($body['name'] ?? '');
+        $path     = trim($body['path'] ?? '');
+        $username = trim($body['username'] ?? '');
+        if ($name === '' || $path === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'name and path are required']);
+            exit;
+        }
+        $dicts = loadDicts($configFile);
+        foreach ($dicts as $d) {
+            if ($d['name'] === $name) {
+                http_response_code(409);
+                echo json_encode(['error' => "Dictionary '$name' already exists"]);
+                exit;
+            }
+        }
+        $dicts[] = ['name' => $name, 'path' => $path, 'username' => $username];
+        saveDicts($configFile, $dicts);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if ($action === 'remove') {
+        $name = trim($body['name'] ?? '');
+        if ($name === '') {
+            http_response_code(400);
+            echo json_encode(['error' => 'name is required']);
+            exit;
+        }
+        $dicts = loadDicts($configFile);
+        $filtered = array_filter($dicts, fn($d) => $d['name'] !== $name);
+        saveDicts($configFile, $filtered);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    http_response_code(400);
+    echo json_encode(['error' => 'unknown action']);
+    exit;
+}
+
+http_response_code(405);
+echo json_encode(['error' => 'method not allowed']);
