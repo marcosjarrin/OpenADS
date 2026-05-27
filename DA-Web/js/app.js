@@ -8,6 +8,7 @@
     tabs: [],          // { id, title, type, dd, table }
     activeTabId: null,
     nextTabId: 1,
+    selectedDD: null,  // DD of the currently highlighted tree node
   };
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -114,6 +115,9 @@
       const dd   = a['data-dd']     || '';
       const tbl  = a['data-table']  || '';
 
+      // Track which DD is currently highlighted so SQL editor can pre-select it
+      if (dd) state.selectedDD = dd;
+
       if (type === 'dd') {
         const connected = a['data-connected'] === 'true';
         if (!connected) openConnectModal(dd);
@@ -156,10 +160,14 @@
   }
 
   function openSqlTab(dd = null) {
+    const targetDD = dd || state.selectedDD;
     const id = 'tab-' + (state.nextTabId++);
-    state.tabs.push({ id, title: 'SQL', type: 'sql', dd });
+    const title = targetDD ? `SQL – ${targetDD}` : 'SQL';
+    state.tabs.push({ id, title, type: 'sql', dd: targetDD });
     renderTabs();
     activateTab(id);
+    // Focus the textarea after the panel is in the DOM
+    setTimeout(() => document.getElementById('sql-text-' + id)?.focus(), 80);
   }
 
   function renderTabs() {
@@ -262,73 +270,116 @@
     return `
       <div class="sql-panel">
         <div id="sql-editor-wrap">
-          <textarea id="sql-text-${tabId}" placeholder="SELECT * FROM MyTable" spellcheck="false"></textarea>
+          <textarea id="sql-text-${tabId}"
+            placeholder="-- Type SQL here&#10;-- SELECT * FROM MyTable&#10;-- Select text then press Ctrl+Enter to run just that portion"
+            spellcheck="false"></textarea>
         </div>
         <div id="sql-toolbar">
           <select id="sql-dd-${tabId}" style="background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;padding:3px 8px;border-radius:4px;font-size:12px;">
             <option value="">— database —</option>
             ${ddOptions}
           </select>
-          <button class="btn btn-primary" id="sql-run-${tabId}">▶ Execute</button>
-          <button class="btn" id="sql-clear-${tabId}">Clear</button>
+          <button class="btn btn-primary" id="sql-run-${tabId}" title="Execute (F5 / F9)">&#9654; Execute</button>
+          <button class="btn" id="sql-clear-${tabId}" title="Clear editor">Clear</button>
+          <span style="font-size:11px;color:#45475a;margin-left:10px;white-space:nowrap;">
+            F5 / F9 &mdash; run all &nbsp;&nbsp; Ctrl+Enter &mdash; run selection
+          </span>
           <span id="sql-msg-${tabId}" style="font-size:11px;color:#a6adc8;margin-left:8px;"></span>
         </div>
-        <div id="sql-results-${tabId}" class="sql-results" style="flex:1;overflow:auto;padding:8px;"></div>
+        <div id="sql-results-${tabId}" style="flex:1;overflow:auto;padding:8px;"></div>
       </div>`;
   }
 
+  // Shared execute logic — accepts the exact SQL string to send
+  async function doExecuteSql(tabId, sql) {
+    const dd      = (document.getElementById('sql-dd-' + tabId)?.value ?? '').trim();
+    const msgEl   = document.getElementById('sql-msg-' + tabId);
+    const runBtn  = document.getElementById('sql-run-' + tabId);
+    const results = document.getElementById('sql-results-' + tabId);
+    if (!msgEl || !results) return;
+
+    if (!sql)  { msgEl.textContent = 'Nothing to execute'; return; }
+    if (!dd)   { msgEl.textContent = 'Select a database first'; return; }
+
+    if (runBtn) runBtn.disabled = true;
+    msgEl.textContent = 'Running…';
+    results.innerHTML = '';
+
+    try {
+      const resp = await apiFetch('api/execute_sql.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dd, sql }),
+      });
+
+      if (resp.columns !== undefined) {
+        msgEl.textContent = `${resp.data.length} row(s)`;
+        results.innerHTML = `<div id="sql-tab-${tabId}"></div>`;
+        new Tabulator('#sql-tab-' + tabId, {  /* global Tabulator */
+          data: resp.data,
+          columns: resp.columns,
+          layout: 'fitDataFill',
+          pagination: 'local',
+          paginationSize: 50,
+          paginationSizeSelector: [25, 50, 100, 200],
+          movableColumns: true,
+          placeholder: '(no rows)',
+        });
+      } else {
+        msgEl.textContent = '';
+        results.innerHTML = `<div class="alert alert-success">${escHtml(resp.message)}</div>`;
+      }
+    } catch (err) {
+      msgEl.textContent = '';
+      results.innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`;
+    } finally {
+      if (runBtn) runBtn.disabled = false;
+    }
+  }
+
+  // Returns selected text in the textarea, or all text if nothing is selected
+  function getActiveOrAllSql(tabId) {
+    const ta = document.getElementById('sql-text-' + tabId);
+    if (!ta) return '';
+    const selected = ta.value.substring(ta.selectionStart, ta.selectionEnd).trim();
+    return selected || ta.value.trim();
+  }
+
   function bindSqlPanel(tabId, tab) {
-    // bind after DOM insertion
     setTimeout(() => {
       const runBtn   = document.getElementById('sql-run-' + tabId);
       const clearBtn = document.getElementById('sql-clear-' + tabId);
+      const textarea = document.getElementById('sql-text-' + tabId);
+      const results  = document.getElementById('sql-results-' + tabId);
       const msgEl    = document.getElementById('sql-msg-' + tabId);
-      const resultsEl = document.getElementById('sql-results-' + tabId);
-      if (!runBtn) return;
+      if (!runBtn || !textarea) return;
 
-      clearBtn.addEventListener('click', () => {
-        document.getElementById('sql-text-' + tabId).value = '';
-        resultsEl.innerHTML = '';
-        msgEl.textContent = '';
+      // ▶ Execute button — run all text
+      runBtn.addEventListener('click', () => {
+        doExecuteSql(tabId, textarea.value.trim());
       });
 
-      runBtn.addEventListener('click', async () => {
-        const sql  = (document.getElementById('sql-text-' + tabId)?.value ?? '').trim();
-        const dd   = (document.getElementById('sql-dd-' + tabId)?.value ?? '').trim();
-        if (!sql)  { msgEl.textContent = 'Enter a SQL statement'; return; }
-        if (!dd)   { msgEl.textContent = 'Select a database'; return; }
+      // Clear button
+      clearBtn?.addEventListener('click', () => {
+        textarea.value = '';
+        if (results) results.innerHTML = '';
+        if (msgEl)   msgEl.textContent = '';
+        textarea.focus();
+      });
 
-        runBtn.disabled = true;
-        msgEl.textContent = 'Running…';
-        resultsEl.innerHTML = '';
-
-        try {
-          const resp = await apiFetch('api/execute_sql.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dd, sql }),
-          });
-
-          if (resp.columns !== undefined) {
-            msgEl.textContent = `${resp.data.length} row(s)`;
-            resultsEl.innerHTML = `<div id="sql-tab-${tabId}"></div>`;
-            new Tabulator('#sql-tab-' + tabId, {
-              data: resp.data,
-              columns: resp.columns,
-              layout: 'fitDataFill',
-              pagination: 'local',
-              paginationSize: 50,
-              placeholder: '(no rows)',
-            });
-          } else {
-            msgEl.textContent = '';
-            resultsEl.innerHTML = `<div class="alert alert-success">${escHtml(resp.message)}</div>`;
-          }
-        } catch (err) {
-          msgEl.textContent = '';
-          resultsEl.innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`;
-        } finally {
-          runBtn.disabled = false;
+      // Keyboard shortcuts (HeidiSQL-style)
+      textarea.addEventListener('keydown', e => {
+        // F5 or F9 — execute all
+        if (e.key === 'F5' || e.key === 'F9') {
+          e.preventDefault();
+          doExecuteSql(tabId, textarea.value.trim());
+          return;
+        }
+        // Ctrl+Enter — execute selection, or all if nothing selected
+        if (e.key === 'Enter' && e.ctrlKey) {
+          e.preventDefault();
+          doExecuteSql(tabId, getActiveOrAllSql(tabId));
+          return;
         }
       });
     }, 50);
