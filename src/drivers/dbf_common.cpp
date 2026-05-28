@@ -419,6 +419,12 @@ util::Result<DbfFieldValue> decode_field(const DbfField& field,
             v.as_double  = d;
             break;
         }
+        case DbfFieldType::RowVersion:
+        case DbfFieldType::ModTime:
+            // 8-byte binary counters: copy raw bytes verbatim, no space-trim.
+            v.as_string = std::string(reinterpret_cast<const char*>(p), field.length);
+            break;
+
         case DbfFieldType::Unknown:
             v.as_string = make_string(p, field.length);
             break;

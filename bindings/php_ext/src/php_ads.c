@@ -149,25 +149,34 @@ void ads_get_field_zval(ADSHANDLE hCursor, const char *fieldName, zval *retval)
         }
 
         case ADS_BINARY:
-        case ADS_IMAGE: {
-            /* Binary/image fields: read raw bytes via AdsGetBinary. */
+        case ADS_IMAGE:
+        case ADS_RAW: {
+            /* Binary/image fields: return a display placeholder, not raw bytes,
+             * so json_encode never chokes on non-UTF-8 byte sequences. */
             UNSIGNED32 ulBinLen = 0;
-            UNSIGNED32 ulBufSize;
-            char *buf;
-
             AdsGetBinaryLength(hCursor, (UNSIGNED8 *)fieldName, &ulBinLen);
-            if (ulBinLen == 0) {
-                ZVAL_EMPTY_STRING(retval);
-                break;
-            }
-            ulBufSize = ulBinLen;
-            buf = (char *)emalloc(ulBufSize);
+            ZVAL_STRING(retval, ulBinLen > 0 ? "BLOB" : "blob");
+            break;
+        }
+
+        case ADS_ROWVERSION: {
+            /* 8-byte row-version counter: read raw bytes, return as hex string. */
+            unsigned char rawBuf[8] = {0};
+            UNSIGNED32 ulBufSize = (UNSIGNED32)sizeof(rawBuf);
             ulRet = AdsGetBinary(hCursor, (UNSIGNED8 *)fieldName,
-                                 0, (UNSIGNED8 *)buf, &ulBufSize);
-            if (ulRet == AE_SUCCESS) {
-                ZVAL_STRINGL(retval, buf, (size_t)ulBufSize);
+                                 0, (UNSIGNED8 *)rawBuf, &ulBufSize);
+            if (ulRet == AE_SUCCESS && ulBufSize > 0) {
+                static const char hc[] = "0123456789abcdef";
+                char hexBuf[19] = "0x";
+                UNSIGNED32 j;
+                UNSIGNED32 n = ulBufSize < 8 ? ulBufSize : 8;
+                for (j = 0; j < n; j++) {
+                    hexBuf[2 + j * 2]     = hc[(rawBuf[j] >> 4) & 0xF];
+                    hexBuf[2 + j * 2 + 1] = hc[ rawBuf[j]       & 0xF];
+                }
+                hexBuf[2 + n * 2] = '\0';
+                ZVAL_STRINGL(retval, hexBuf, 2 + (size_t)n * 2);
             }
-            efree(buf);
             break;
         }
 

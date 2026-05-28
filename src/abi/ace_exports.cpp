@@ -146,7 +146,9 @@ UNSIGNED16 map_field_type(openads::drivers::DbfFieldType t) {
         case DbfFieldType::Time:         return ADS_TIME;       // 13
         case DbfFieldType::AdtDate:      return ADS_DATE;       //  3
         case DbfFieldType::AdtTimestamp: return ADS_TIMESTAMP;  // 14
-        case DbfFieldType::AdtMoney:     return ADS_MONEY;      // 18
+        case DbfFieldType::AdtMoney:     return ADS_MONEY;       // 18
+        case DbfFieldType::RowVersion:   return ADS_ROWVERSION;  // 21
+        case DbfFieldType::ModTime:      return ADS_MODTIME;     // 22
         case DbfFieldType::Unknown:      return ADS_FIELD_TYPE_UNKNOWN;
     }
     return ADS_FIELD_TYPE_UNKNOWN;

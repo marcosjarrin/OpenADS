@@ -41,8 +41,15 @@ try {
     $stmt->close();
     $conn->close();
 
-    echo json_encode(['data' => $rows]);
-} catch (AdsException $e) {
+    $out = json_encode(['data' => $rows],
+                       JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    if ($out === false) {
+        http_response_code(500);
+        echo json_encode(['error' => 'JSON encoding failed: ' . json_last_error_msg()]);
+    } else {
+        echo $out;
+    }
+} catch (Throwable $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);
 }
