@@ -187,6 +187,10 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_table_record_num, 0, 0, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+/* getIndexTags(): array  — [{tag, expression, descending}, ...] */
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_ads_table_get_index_tags, 0, 0, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
 /* -----------------------------------------------------------------------
  * AdsTransaction
  * --------------------------------------------------------------------- */

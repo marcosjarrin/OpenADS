@@ -472,6 +472,49 @@ PHP_METHOD(AdsTable, cancelUpdate)
 }
 
 /* -----------------------------------------------------------------------
+ * AdsTable::getIndexTags() : array
+ * Returns [{tag, expression, descending}, ...] for every open index tag.
+ * --------------------------------------------------------------------- */
+PHP_METHOD(AdsTable, getIndexTags)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    ads_table_obj *tbl = Z_ADS_TABLE_P(ZEND_THIS);
+    ADS_CHECK_TABLE_CLOSED(tbl);
+
+    UNSIGNED16 count = 0;
+    array_init(return_value);
+    if (AdsGetNumIndexes(tbl->hTable, &count) != AE_SUCCESS || count == 0)
+        return;
+
+    UNSIGNED8  nameBuf[256];
+    UNSIGNED8  exprBuf[1024];
+    UNSIGNED16 nameLen, exprLen, desc;
+    ADSHANDLE  hIndex;
+    UNSIGNED16 i;
+
+    for (i = 1; i <= count; i++) {
+        hIndex = 0;
+        if (AdsGetIndexHandleByOrder(tbl->hTable, i, &hIndex) != AE_SUCCESS)
+            continue;
+
+        nameBuf[0] = '\0'; nameLen = (UNSIGNED16)sizeof(nameBuf);
+        exprBuf[0] = '\0'; exprLen = (UNSIGNED16)sizeof(exprBuf);
+        desc = 0;
+
+        AdsGetIndexName(hIndex, nameBuf, &nameLen);
+        AdsGetIndexExpr(hIndex, exprBuf, &exprLen);
+        AdsIsIndexDescending(hIndex, &desc);
+
+        zval entry;
+        array_init(&entry);
+        add_assoc_string(&entry, "tag",        (char *)nameBuf);
+        add_assoc_string(&entry, "expression", (char *)exprBuf);
+        add_assoc_bool(  &entry, "descending", desc != 0);
+        add_next_index_zval(return_value, &entry);
+    }
+}
+
+/* -----------------------------------------------------------------------
  * Method table
  * --------------------------------------------------------------------- */
 static const zend_function_entry ads_table_methods[] = {
@@ -497,7 +540,8 @@ static const zend_function_entry ads_table_methods[] = {
     PHP_ME(AdsTable, appendRecord, arginfo_ads_table_append_record, ZEND_ACC_PUBLIC)
     PHP_ME(AdsTable, deleteRecord, arginfo_ads_table_delete_record, ZEND_ACC_PUBLIC)
     PHP_ME(AdsTable, writeRecord,  arginfo_ads_table_write_record,  ZEND_ACC_PUBLIC)
-    PHP_ME(AdsTable, cancelUpdate, arginfo_ads_table_cancel_update, ZEND_ACC_PUBLIC)
+    PHP_ME(AdsTable, cancelUpdate,  arginfo_ads_table_cancel_update,   ZEND_ACC_PUBLIC)
+    PHP_ME(AdsTable, getIndexTags, arginfo_ads_table_get_index_tags,  ZEND_ACC_PUBLIC)
     PHP_FE_END
 };
 
